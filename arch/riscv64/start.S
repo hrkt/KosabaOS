@@ -1,28 +1,63 @@
-# Minimal S-mode kernel: prints one line via legacy SBI console_putchar (EID 1),
-# then parks in wfi. Runs under OpenSBI on QEMU virt, loaded at 0x80200000.
-# Uses PC-relative addressing only (no GOT), so it works as a raw binary.
-    .section .text
-    .globl _start
-_start:
+# KosabaOS 最初のプログラム (riscv64)
+# ===================================
+# 起動直後、OpenSBI (ファームウェア) がこのコードを 0x80200000 に置いて
+# S モードで渡してくる。その時点ではライブラリも printf も無いので、
+# やることは 3 つだけ:
+#   1. 作業場所 (スタック) を用意する
+#   2. 文字列を 1 文字ずつ画面に出す
+#   3. 終わったら眠って止まる
+#
+# 使うレジスタ (CPU の中にある超高速の小さな変数箱) は 4 つだけ:
+#   sp : スタック (作業机) の場所
+#   s1 : 文字列の「今読んでいる位置」を指す指 (読み取りヘッド)
+#   a0 : ファームウェアへ渡す 1 文字を入れる箱 (引数)
+#   a7 : 「どの機能を呼ぶか」の番号を入れる箱 (呼び出し番号)
+
+    .section .text          # ここから先は「命令 (コード)」の領域
+    .globl _start           # _start を外から見える入口として公開
+_start:                     # カーネルの入口 (kernel.ld の ENTRY がここ)
+
+# --- 1. スタックを用意する -------------------------------------------
+# stack_top (下で確保した 4KB の末尾) のアドレスを sp に入れる。
+# スタックは下向きに伸びるので、末尾を指すのが決まり。
+# RISC-V はアドレスを 1 命令で運べないため、上半分 (auipc) と
+# 下半分 (addi) の 2 命令で運ぶ。しかも「今いる場所 (PC) から数えた
+# 相対位置」で計算するので、配置がずれても壊れない。
+# (普通の la 命令は裏で GOT を経由し、こういう裸のバイナリでは動かない)
 .Lsp: auipc sp, %pcrel_hi(stack_top)
     addi sp, sp, %pcrel_lo(.Lsp)
+
+# --- 2. 文字列の先頭を指す --------------------------------------------
+# 同じやり方で、文字列 msg のアドレスを s1 に入れる。
 .Lmsg: auipc s1, %pcrel_hi(msg)
     addi s1, s1, %pcrel_lo(.Lmsg)
-1:  lbu a0, 0(s1)
-    beqz a0, 2f
-    li a7, 1          # SBI legacy: sbi_console_putchar, char in a0
-    ecall
-    addi s1, s1, 1
-    j 1b
-2:  wfi
-    j 2b
 
-    .section .rodata
+# --- 3. 1 文字ずつ出すループ -------------------------------------------
+# 数字ラベルは使い捨ての目印。2f = 前方 (forward) の 2、1b = 後方 (backward) の 1。
+1:  lbu a0, 0(s1)           # s1 の指す場所から 1 文字読んで a0 へ
+    beqz a0, 2f             # その文字が 0 (文字列の終わり) なら終了へ
+    li a7, 1                # 呼び出し番号 1 = SBI レガシー「1 文字出して」
+    ecall                   # ファームウェア (OpenSBI) を呼ぶ。
+                            # ハードウェアを直接叩くのではなく、出力は
+                            # 下の階層にお願いしている (xv6 の syscall と同じ形)
+    addi s1, s1, 1          # 指を 1 文字進める
+    j 1b                    # ループ先頭へ戻る
+
+# --- 4. 眠って止まる ----------------------------------------------------
+# 出すものは出し切ったし、まだシェルも何も無い。止めないと CPU が
+# メモリの先を勝手に実行しに行って暴走するので、ここで「駐車」させる。
+2:  wfi                     # 割り込みが来るまで CPU を眠らせる
+    j 2b                    # 目覚めてもまた眠る (無限ループ)
+
+# --- データ -------------------------------------------------------------
+    .section .rodata        # 読み取り専用データの領域
 msg:
     .string "hello from KosabaOS (S-mode)\n"
+                            # .string は末尾に自動で 0 を付ける。
+                            # 上のループはその 0 を「もう文字がない」の合図に使う。
 
-    .section .bss
+    .section .bss           # 初期値ゼロの領域 (バイナリファイルに実体は入らない)
     .align 4
 stack:
-    .space 4096
-stack_top:
+    .space 4096             # スタック用に 4KB 確保して
+stack_top:                  # その末尾がスタックの出発点
