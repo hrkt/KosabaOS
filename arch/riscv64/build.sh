@@ -34,11 +34,11 @@ echo "build: QEMU=$QEMU"
 # -mcmodel=medany: the kernel sits at 0x80200000, outside the range
 # the default code model can address; medany uses PC-relative
 # addressing instead. -ffreestanding: no libc, no hosted assumptions.
-# User program first: it is embedded into the kernel via embed.S.
+# User program first: its ELF is embedded into the kernel via
+# embed.S and loaded by the kernel's ELF loader (elf.c) at runtime.
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o user.elf uprog.c
-"$OBJCOPY" -O binary user.elf user.bin
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c user.S embed.S proc.c switch.S
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c user.S embed.S proc.c switch.S elf.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

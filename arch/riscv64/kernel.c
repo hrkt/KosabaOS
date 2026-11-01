@@ -13,10 +13,12 @@
  * レジスタの退避と復元のおかげで何事もなく続きが動く。
  */
 
+#include <stdint.h>
 #include "uart.h"
 #include "trap.h"
 #include "vm.h"
 #include "proc.h"
+#include "elf.h"
 
 /* embed.S が用意する、埋め込みユーザープログラムの範囲 */
 extern unsigned char user_prog_start[];
@@ -25,22 +27,19 @@ extern unsigned char user_prog_end[];
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
 extern void user_launch(unsigned long entry, unsigned long user_stack_top);
 
-/* ユーザープログラムを実行する (ステップ 4)。
- * 埋め込みバイナリを所定の物理メモリへコピーしてから降りる。
+/* ユーザープログラムを実行する (ステップ 4、ELF 化はステップ 6)。
+ * 埋め込んだ ELF イメージをローダ (elf.c) で配置してから降りる。
  * プログラムが exit するか保護違反で終わると、ここへ戻ってくる。 */
 static void start_user(void)
 {
-    unsigned long size = (unsigned long)(user_prog_end - user_prog_start);
-    unsigned char *dst = (unsigned char *)USER_CODE_PA;
-    unsigned long i;
+    uint64_t entry = elf_load(user_prog_start);
 
-    for (i = 0; i < size; i++) {
-        dst[i] = user_prog_start[i];
+    if (entry == 0) {
+        uart_puts("\n[kernel] failed to load user program\n");
+        return;
     }
-    /* 書いた命令を CPU の命令キャッシュ側にも反映させる */
-    asm volatile("fence.i");
     uart_puts("\n[kernel] starting user program ('q' quits it)\n");
-    user_launch(USER_CODE_VA, USER_STACK_TOP_VA);
+    user_launch(entry, USER_STACK_TOP_VA);
     uart_puts("\n[kernel] back from user program\n");
 }
 

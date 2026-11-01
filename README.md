@@ -24,7 +24,8 @@
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
   trap.S、trap.c / trap.h、vm.c / vm.h、user.S (U モードへの出入り)、
-  uprog.c / user.ld (ユーザープログラム)、embed.S (バイナリ埋め込み)、
+  uprog.c / user.ld (ユーザープログラム)、embed.S (ELF 埋め込み)、
+  elf.c / elf.h (ELF ローダ)、
   proc.c / proc.h / switch.S (タスクとコンテキストスイッチ)、
   kernel.ld (0x80200000)、build.sh、test.sh (自動検証)、run.log、
   instructions.md (命令・レジスタ・メモリの早見表)
