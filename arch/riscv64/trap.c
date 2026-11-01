@@ -164,6 +164,11 @@ void trap_handler(void)
     }
 
     /* 例外: 原因と現場を表示して止める */
+    if (code == 12 || code == 13 || code == 15) {
+        uart_puts("trap: page fault (code=");
+        put_dec(code);
+        uart_puts(") ");
+    }
     uart_puts("trap: exception scause=");
     put_hex(scause);
     uart_puts(" sepc=");

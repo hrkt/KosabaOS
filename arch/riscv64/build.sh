@@ -34,6 +34,6 @@ echo "build: QEMU=$QEMU"
 # -mcmodel=medany: the kernel sits at 0x80200000, outside the range
 # the default code model can address; medany uses PC-relative
 # addressing instead. -ffreestanding: no libc, no hosted assumptions.
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true

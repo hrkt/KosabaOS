@@ -11,13 +11,15 @@
 - 構成: `arch/riscv64/start.S` がスタックと .bss の準備をして
   C の `kmain` (`kernel.c`) を呼ぶ。UART ドライバ (`uart.c`) 越しに
   1 行出した後は echo を続け、トラップ処理 (`trap.S` / `trap.c`) が
-  タイマ割り込みで 1 秒ごとに `tick N` を割り込ませる
+  タイマ割り込みで 1 秒ごとに `tick N` を割り込ませる。
+  ページング (`vm.c`) は Sv39 の恒等マッピングで有効になっており、
+  echo 中に `x` キーを押すとページフォルトのデモが動く
 - 実行: `./build.sh` または `./build.sh riscv64`
   （ビルドして QEMU で5秒だけ起動）
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
-  trap.S、trap.c / trap.h、kernel.ld (0x80200000)、build.sh、
-  run.log、instructions.md (命令・レジスタ・メモリの早見表)
+  trap.S、trap.c / trap.h、vm.c / vm.h、kernel.ld (0x80200000)、
+  build.sh、run.log、instructions.md (命令・レジスタ・メモリの早見表)
 - 先の計画: `doc/roadmap-multitasking.md`（メモリ保護付き
   マルチタスクへの計画案）
 
