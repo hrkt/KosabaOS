@@ -72,8 +72,8 @@ qemu-system-riscv64 -machine virt -bios default -kernel kernel.bin -m 128M -nogr
 | 普通のキー | カーネルがそのまま打ち返す (echo)。1 秒ごとに `tick N` が割り込む |
 | `u` | ユーザープログラムをユーザーモードで実行。`hello from user mode!` と出て、そのプログラム側の echo になる。実行中も tick は続く |
 | `q` (ユーザープログラム実行中) | プログラムが exit してカーネルの echo に戻る |
-| `x` | ページフォルトのデモ。マップされていない住所を触って `page fault (code=13)` と `stval` を表示し、カーネルは停止する |
-| `Ctrl-A` の後 `x` | QEMU を終了する (上の `x` キーとは別物) |
+| `x` | ページフォルトのデモ。マップされていない住所を触って `page fault (code=13)` と `stval` を表示し、カーネルは停止する (QEMU 自体は終わらないので注意) |
+| `Ctrl-A` の後 `x` | QEMU を終了する (上の `x` キーとは別物)。効かなければ別のターミナルから `killall qemu-system-riscv64` でも止められる |
 
 困ったときの切り分け:
 
