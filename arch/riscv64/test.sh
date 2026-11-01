@@ -12,6 +12,7 @@
 #               'q' で復帰、カーネル側 echo の再開)
 #   シナリオ D: 'm' でマルチタスクのデモ (協調で ABAB 交互、
 #               プリエンプティブで塊ごとに交互、全タスク完了)
+#   シナリオ E: 'l' でファイル一覧 (hello.txt と uprog.elf)
 #
 # 使い方: ./test.sh    (このディレクトリで実行)
 # 終了コード: すべて PASS なら 0、どこか FAIL なら 1
@@ -105,6 +106,14 @@ check_order "$out" "[proc] cooperative" "ABABAB" \
     "[proc] preemptive" "AAAAAAAA" "BBBBBBBB" \
     "[proc] all tasks done"
 report "D cooperative + preemptive multitasking" $?
+
+echo "== scenario E: filesystem listing =="
+{ sleep 3; printf 'l'; sleep 2; } \
+    | timeout 8 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-e.log 2>&1 || true
+out=$(strip_ticks < test-e.log)
+check_order "$out" "[fs] files:" "hello.txt" "uprog.elf"
+report "E filesystem listing" $?
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then

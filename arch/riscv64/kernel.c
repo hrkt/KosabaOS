@@ -19,20 +19,26 @@
 #include "vm.h"
 #include "proc.h"
 #include "elf.h"
-
-/* embed.S が用意する、埋め込みユーザープログラムの範囲 */
-extern unsigned char user_prog_start[];
-extern unsigned char user_prog_end[];
+#include "fs.h"
 
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
 extern void user_launch(unsigned long entry, unsigned long user_stack_top);
 
-/* ユーザープログラムを実行する (ステップ 4、ELF 化はステップ 6)。
- * 埋め込んだ ELF イメージをローダ (elf.c) で配置してから降りる。
- * プログラムが exit するか保護違反で終わると、ここへ戻ってくる。 */
+/* ユーザープログラムを実行する (ステップ 4、ELF 化とファイル
+ * システム経由の取得はステップ 6)。
+ * "uprog.elf" をファイルシステムから名前で引いて、ローダ
+ * (elf.c) で配置してから降りる。プログラムが exit するか
+ * 保護違反で終わると、ここへ戻ってくる。 */
 static void start_user(void)
 {
-    uint64_t entry = elf_load(user_prog_start);
+    struct fs_file *f = fs_find("uprog.elf");
+    uint64_t entry;
+
+    if (f == 0) {
+        uart_puts("\n[kernel] uprog.elf not found\n");
+        return;
+    }
+    entry = elf_load(f->data);
 
     if (entry == 0) {
         uart_puts("\n[kernel] failed to load user program\n");
@@ -48,6 +54,7 @@ void kmain(void)
     uart_init();
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
+    fs_init();    /* RAM ファイルシステム (ステップ 6) */
     uart_puts("hello from KosabaOS (S-mode)\n");
 
     for (;;) {
@@ -61,6 +68,11 @@ void kmain(void)
         }
         if (c == 'm') {
             proc_demo();       /* 'm' キーでマルチタスクのデモ */
+            continue;
+        }
+        if (c == 'l') {
+            uart_putc('\n');
+            fs_list();         /* 'l' キーでファイル一覧 */
             continue;
         }
         uart_putc(c);          /* そのまま打ち返す */
