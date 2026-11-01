@@ -40,4 +40,9 @@ echo "build: QEMU=$QEMU"
 
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c user.S embed.S
 "$OBJCOPY" -O binary kernel.elf kernel.bin
-timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true
+# Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
+# its scenarios cover the boot, and QEMU's raw terminal mode makes
+# Ctrl-C stop working while it runs).
+if [ -z "${BUILD_NO_RUN:-}" ]; then
+    timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true
+fi

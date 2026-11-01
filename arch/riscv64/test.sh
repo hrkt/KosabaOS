@@ -24,8 +24,9 @@ if [ -z "${QEMU:-}" ] && [ -n "$TOOLS_DIR" ] && [ -x "$TOOLS_DIR/qemu/qemu-syste
 fi
 QEMU=${QEMU:-qemu-system-riscv64}
 
-echo "== build =="
-if ! (cd ../.. && ./build.sh) > build-test.log 2>&1; then
+echo "== build == (takes a few seconds; QEMU runs make Ctrl-C"
+echo "   ineffective while they run -- Ctrl-A x ends that QEMU)"
+if ! (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1; then
     echo "FAIL: build (see build-test.log)"
     exit 1
 fi
