@@ -16,15 +16,18 @@
   echo 中に `x` キーを押すとページフォルトのデモが動く。
   `u` キーを押すとユーザープログラム (`uprog.c`) をユーザーモードで
   実行する: 挨拶と echo はシステムコール経由 (仕様は
-  `doc/syscalls.md`)、`q` でカーネルに帰る
+  `doc/syscalls.md`)、`q` でカーネルに帰る。
+  `m` キーを押すとマルチタスクのデモ (`proc.c`): 2 つのタスクが
+  協調的 (ABAB…) → プリエンプティブ (塊で交互) に文字を出す
 - 実行: `./build.sh` または `./build.sh riscv64`
   （ビルドして QEMU で5秒だけ起動）
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
   trap.S、trap.c / trap.h、vm.c / vm.h、user.S (U モードへの出入り)、
   uprog.c / user.ld (ユーザープログラム)、embed.S (バイナリ埋め込み)、
-  kernel.ld (0x80200000)、build.sh、run.log、instructions.md
-  (命令・レジスタ・メモリの早見表)
+  proc.c / proc.h / switch.S (タスクとコンテキストスイッチ)、
+  kernel.ld (0x80200000)、build.sh、test.sh (自動検証)、run.log、
+  instructions.md (命令・レジスタ・メモリの早見表)
 - ドキュメント: `doc/roadmap-multitasking.md` (計画と決定事項)、
   `doc/steps-1-3.html` (初心者向けまとめ)、`doc/syscalls.md`
   (システムコール仕様)

@@ -10,6 +10,8 @@
 #   シナリオ B: カーネルの echo と 'x' のページフォルトデモ
 #   シナリオ C: 'u' でユーザープログラム (挨拶、ユーザー側 echo、
 #               'q' で復帰、カーネル側 echo の再開)
+#   シナリオ D: 'm' でマルチタスクのデモ (協調で ABAB 交互、
+#               プリエンプティブで塊ごとに交互、全タスク完了)
 #
 # 使い方: ./test.sh    (このディレクトリで実行)
 # 終了コード: すべて PASS なら 0、どこか FAIL なら 1
@@ -93,6 +95,16 @@ check_order "$out" "hello from KosabaOS (S-mode)" \
     "[kernel] starting user program" "hello from user mode!" "z" \
     "[kernel] back from user program" "w"
 report "C user mode round trip" $?
+
+echo "== scenario D: multitasking demo =="
+{ sleep 3; printf 'm'; sleep 16; } \
+    | timeout 22 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-d.log 2>&1 || true
+out=$(strip_ticks < test-d.log)
+check_order "$out" "[proc] cooperative" "ABABAB" \
+    "[proc] preemptive" "AAAAAAAA" "BBBBBBBB" \
+    "[proc] all tasks done"
+report "D cooperative + preemptive multitasking" $?
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then

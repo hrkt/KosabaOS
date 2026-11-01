@@ -16,6 +16,7 @@
 #include "uart.h"
 #include "trap.h"
 #include "vm.h"
+#include "proc.h"
 
 /* embed.S が用意する、埋め込みユーザープログラムの範囲 */
 extern unsigned char user_prog_start[];
@@ -57,6 +58,10 @@ void kmain(void)
         }
         if (c == 'u') {
             start_user();      /* 'u' キーでユーザープログラム実行 */
+            continue;
+        }
+        if (c == 'm') {
+            proc_demo();       /* 'm' キーでマルチタスクのデモ */
             continue;
         }
         uart_putc(c);          /* そのまま打ち返す */

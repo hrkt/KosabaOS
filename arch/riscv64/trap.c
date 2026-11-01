@@ -4,22 +4,27 @@
  * (trap.S) に飛ぶ → レジスタを退避して trap_handler (ここ) を
  * 呼ぶ → 戻ると復元されて sret で元の処理に帰る。
  *
- * 今回扱うのはタイマ割り込みだけ。QEMU virt のタイマは
- * 10MHz (1 秒 = 10,000,000 カウント) で進む。S モードからは
- * タイマの予約を OpenSBI の Timer 拡張 (sbi_set_timer) に頼む:
- * 指定した時刻になると、S モードへタイマ割り込みが届く。
- * 時刻の読み取りは time レジスタ (CSR) から。
+ * QEMU virt のタイマは 10MHz (1 秒 = 10,000,000 カウント) で
+ * 進む。S モードからはタイマの予約を OpenSBI の Timer 拡張
+ * (sbi_set_timer) に頼む: 指定した時刻になると、S モードへ
+ * タイマ割り込みが届く。時刻の読み取りは time レジスタ (CSR)。
  *
- * 例外 (想定外のトラップ) は、原因を表示して止める。次の
- * ステップ (ページング) ではページフォルトがここに届く。
+ * 扱うもの: タイマ割り込み (100ms ごと。tick 表示と、ステップ 5
+ * のプリエンプティブなタスク切り替え)、ユーザーモードからの
+ * システムコール (ステップ 4)、例外 (カーネルのものは原因を
+ * 表示して停止、ユーザーのものはそのプログラムだけを終了)。
  */
 
 #include <stdint.h>
 #include "trap.h"
 #include "uart.h"
+#include "proc.h"
 
 #define TIMER_HZ        10000000ULL  /* QEMU virt のタイマ周波数 */
-#define TIMER_INTERVAL  TIMER_HZ     /* 1 秒ごとに割り込む */
+/* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
+ * 間隔)。tick の表示は 10 回に 1 回にして 1 秒に 1 行を保つ */
+#define TIMER_INTERVAL  (TIMER_HZ / 10)
+static int tick_divider = 0;
 
 #define SIE_STIE   (1ULL << 5)  /* sie のタイマ割り込み許可ビット */
 #define SSTATUS_SIE (1ULL << 1) /* sstatus の割り込み許可ビット */
@@ -46,6 +51,18 @@ static inline uint64_t r_sepc(void)
 static inline void w_sepc(uint64_t x)
 {
     asm volatile("csrw sepc, %0" : : "r"(x));
+}
+
+static inline uint64_t r_sstatus(void)
+{
+    uint64_t x;
+    asm volatile("csrr %0, sstatus" : "=r"(x));
+    return x;
+}
+
+static inline void w_sstatus(uint64_t x)
+{
+    asm volatile("csrw sstatus, %0" : : "r"(x));
 }
 
 static inline uint64_t r_stval(void)
@@ -196,14 +213,35 @@ void trap_handler(uint64_t *frame, int from_user)
     int is_interrupt = (int)(scause >> 63);
     uint64_t code = scause & 0xFF;
 
+    /* スケジューリング中に割り込まれたら、このタスクの
+     * sepc / sstatus を退避しておく (CSR は CPU に 1 組だけ
+     * なので、切り替え先のタスクのトラップで上書きされる前に) */
+    if (sched_active) {
+        sched_save_trapstate(r_sepc(), r_sstatus());
+    }
+
     if (is_interrupt && code == 5) {
-        /* スーパーバイザ・タイマ割り込み */
-        ticks++;
-        uart_puts("tick ");
-        put_dec(ticks);
-        uart_putc('\n');
+        /* スーパーバイザ・タイマ割り込み (100ms ごと) */
         next_deadline += TIMER_INTERVAL;
         sbi_set_timer(next_deadline);
+        if (++tick_divider >= 10) {
+            tick_divider = 0;
+            ticks++;
+            uart_puts("tick ");
+            put_dec(ticks);
+            uart_putc('\n');
+        }
+        if (sched_active && preempt_enabled) {
+            /* プリエンプティブな切り替え (ステップ 5)。
+             * 切り替わった先のタスクの文脈でこのハンドラに
+             * 戻ってくることがあるので、帰る前に「今の」タスクの
+             * sepc / sstatus を CSR に戻す */
+            uint64_t e, s;
+            schedule();
+            sched_restore_trapstate(&e, &s);
+            w_sepc(e);
+            w_sstatus(s);
+        }
         return;
     }
 
