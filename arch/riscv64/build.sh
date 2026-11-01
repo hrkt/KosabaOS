@@ -34,9 +34,10 @@ echo "build: QEMU=$QEMU"
 # -mcmodel=medany: the kernel sits at 0x80200000, outside the range
 # the default code model can address; medany uses PC-relative
 # addressing instead. -ffreestanding: no libc, no hosted assumptions.
-# User program first: its ELF is embedded into the kernel via
-# embed.S and loaded by the kernel's ELF loader (elf.c) at runtime.
+# User programs first: their ELFs are embedded into the kernel
+# via embed.S and loaded by the kernel's ELF loader (elf.c).
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o user.elf uprog.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o shell.elf shell.c
 
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c user.S embed.S proc.c switch.S elf.c fs.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin

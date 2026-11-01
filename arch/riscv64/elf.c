@@ -54,7 +54,7 @@ struct elf64_phdr {
 /* ユーザープログラムの領域の大きさ (vm.c の megapage 1 枚分) */
 #define USER_CODE_SIZE (2ULL * 1024 * 1024)
 
-uint64_t elf_load(const unsigned char *image)
+uint64_t elf_load_at(const unsigned char *image, uint64_t base_pa)
 {
     const struct elf64_header *h = (const struct elf64_header *)image;
     int i;
@@ -92,7 +92,7 @@ uint64_t elf_load(const unsigned char *image)
             uart_puts("[elf] segment out of user range\n");
             return 0;
         }
-        dst = (unsigned char *)(USER_CODE_PA + (p->p_vaddr - USER_CODE_VA));
+        dst = (unsigned char *)(base_pa + (p->p_vaddr - USER_CODE_VA));
         for (j = 0; j < p->p_filesz; j++) {
             dst[j] = image[p->p_offset + j];
         }
@@ -104,4 +104,9 @@ uint64_t elf_load(const unsigned char *image)
     /* 書いた命令を命令キャッシュ側へ反映させる */
     asm volatile("fence.i");
     return h->e_entry;
+}
+
+uint64_t elf_load(const unsigned char *image)
+{
+    return elf_load_at(image, USER_CODE_PA);
 }

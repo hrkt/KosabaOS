@@ -15,4 +15,19 @@ void vm_fault_demo(void);  /* わざと未マップ住所を触ってフォル�
 #define USER_STACK_PA      0x80600000UL
 #define USER_STACK_TOP_VA  0x40400000UL  /* スタック領域の末尾 */
 
+/* exec で子プログラムを置く予備の領域 (仮想アドレスは親と
+ * 同じ場所を差し替えて使う) */
+#define CHILD_CODE_PA      0x80800000UL
+#define CHILD_STACK_PA     0x80A00000UL
+
+/* ユーザー領域が今どの物理メモリを向いているかを差し替える
+ * (exec の親子切り替え用) */
+void vm_switch_user_region(uint64_t code_pa, uint64_t stack_pa);
+uint64_t vm_current_code_pa(void);
+uint64_t vm_current_stack_pa(void);
+
+/* ユーザーの仮想アドレスを、カーネルから触れる物理アドレスに
+ * 訳す (現在の割り当ての範囲外なら 0) */
+uint64_t user_va_to_pa(uint64_t va);
+
 #endif

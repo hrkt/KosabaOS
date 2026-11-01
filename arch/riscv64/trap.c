@@ -19,6 +19,9 @@
 #include "trap.h"
 #include "uart.h"
 #include "proc.h"
+#include "vm.h"
+#include "elf.h"
+#include "fs.h"
 
 #define TIMER_HZ        10000000ULL  /* QEMU virt のタイマ周波数 */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -170,13 +173,166 @@ void trap_init(void)
 #define FRAME_A0 8
 #define FRAME_A7 15
 
+#define FRAME_A1 9
+#define FRAME_A2 10
+
 #define SYS_PUTC 1
 #define SYS_GETC 2
 #define SYS_EXIT 3
+#define SYS_OPEN 4
+#define SYS_READ 5
+#define SYS_CLOSE 6
+#define SYS_READDIR 7
+#define SYS_EXEC 8
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
-static void do_syscall(uint64_t *frame)
+static inline uint64_t r_sscratch(void)
+{
+    uint64_t x;
+    asm volatile("csrr %0, sscratch" : "=r"(x));
+    return x;
+}
+
+static inline void w_sscratch(uint64_t x)
+{
+    asm volatile("csrw sscratch, %0" : : "r"(x));
+}
+
+/* --- ユーザーメモリの読み書き ---------------------------------------
+ * ポインタはユーザーの仮想アドレスで渡される。現在の割り当て
+ * (vm.c の user_va_to_pa) で訳せる範囲だけを触る。 */
+
+static int copy_user_string(uint64_t va, char *buf, int max)
+{
+    int i;
+    for (i = 0; i < max - 1; i++) {
+        uint64_t pa = user_va_to_pa(va + (uint64_t)i);
+        char c;
+        if (pa == 0) {
+            return -1;
+        }
+        c = *(char *)pa;
+        buf[i] = c;
+        if (c == '\0') {
+            return 0;
+        }
+    }
+    buf[max - 1] = '\0';
+    return 0;
+}
+
+static int copy_to_user(uint64_t va, const unsigned char *src, uint64_t n)
+{
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        uint64_t pa = user_va_to_pa(va + i);
+        if (pa == 0) {
+            return -1;
+        }
+        *(unsigned char *)pa = src[i];
+    }
+    return 0;
+}
+
+/* --- ファイルディスクリプタ (ステップ 6) ------------------------------
+ * 同時に動くユーザープログラムは 1 つなので、表は全体で 1 つ。
+ * exec を呼ぶと全部閉じられる (仕様 v1 の決まり)。 */
+
+#define MAX_FD 8
+static struct {
+    struct fs_file *file;
+    uint64_t pos;
+    int used;
+} fd_table[MAX_FD];
+
+static void close_all_fds(void)
+{
+    int i;
+    for (i = 0; i < MAX_FD; i++) {
+        fd_table[i].used = 0;
+    }
+}
+
+/* --- exec の親子 (ステップ 6) -----------------------------------------
+ * 親が exec を呼んだら、親の trapframe・sepc・sp・領域の割り当てを
+ * ここへ退避し、同じ仮想アドレスに子の領域を差し替えて子を
+ * 起動する。子が exit / 保護違反で終わったら、退避した親の状態を
+ * 現在の trapframe に書き戻し、親は exec から戻った形で再開する。 */
+
+static struct {
+    int active;
+    uint64_t frame[32];
+    uint64_t sepc;
+    uint64_t sp;
+    uint64_t code_pa;
+    uint64_t stack_pa;
+} exec_parent;
+
+static void resume_parent(uint64_t *frame, uint64_t result)
+{
+    int i;
+    for (i = 0; i < 32; i++) {
+        frame[i] = exec_parent.frame[i];
+    }
+    frame[FRAME_A0] = result;
+    w_sepc(exec_parent.sepc + 4);
+    w_sscratch(exec_parent.sp);
+    vm_switch_user_region(exec_parent.code_pa, exec_parent.stack_pa);
+    exec_parent.active = 0;
+    close_all_fds();
+}
+
+/* 戻り値: 1 = sepc は処理済みなので進めない、0 = 通常どおり進める */
+static int do_exec(uint64_t *frame)
+{
+    char name[32];
+    struct fs_file *f;
+    uint64_t entry;
+    int i;
+
+    if (exec_parent.active) {
+        frame[FRAME_A0] = (uint64_t)-1;  /* exec は 1 段まで */
+        return 0;
+    }
+    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+    f = fs_find(name);
+    if (f == 0) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+    entry = elf_load_at(f->data, CHILD_CODE_PA);
+    if (entry == 0) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+
+    /* 親の状態を退避する */
+    for (i = 0; i < 32; i++) {
+        exec_parent.frame[i] = frame[i];
+    }
+    exec_parent.sepc = r_sepc();
+    exec_parent.sp = r_sscratch();
+    exec_parent.code_pa = vm_current_code_pa();
+    exec_parent.stack_pa = vm_current_stack_pa();
+    exec_parent.active = 1;
+    close_all_fds();
+
+    /* 子の領域に差し替えて、子の入口から開始させる。
+     * レジスタは汚れたまま渡さないようゼロにしておく */
+    vm_switch_user_region(CHILD_CODE_PA, CHILD_STACK_PA);
+    for (i = 0; i < 32; i++) {
+        frame[i] = 0;
+    }
+    w_sepc(entry);
+    w_sscratch(USER_STACK_TOP_VA);
+    return 1;
+}
+
+static int do_syscall(uint64_t *frame)
 {
     uint64_t num = frame[FRAME_A7];
 
@@ -189,8 +345,92 @@ static void do_syscall(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)uart_getc();
         break;
     case SYS_EXIT:
+        if (exec_parent.active) {
+            resume_parent(frame, 0);  /* 親の exec へ戻る */
+            return 1;
+        }
         user_exit_jump();  /* ここからは戻ってこない */
         break;
+    case SYS_OPEN: {
+        char name[32];
+        int i;
+        struct fs_file *f;
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        f = fs_find(name);
+        if (f == 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        for (i = 0; i < MAX_FD; i++) {
+            if (!fd_table[i].used) {
+                fd_table[i].file = f;
+                fd_table[i].pos = 0;
+                fd_table[i].used = 1;
+                frame[FRAME_A0] = (uint64_t)i;
+                break;
+            }
+        }
+        if (i == MAX_FD) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        }
+        break;
+    }
+    case SYS_READ: {
+        uint64_t fd = frame[FRAME_A0];
+        uint64_t max = frame[FRAME_A2];
+        uint64_t remain, n;
+        if (fd >= MAX_FD || !fd_table[fd].used) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        remain = fd_table[fd].file->size - fd_table[fd].pos;
+        n = max < remain ? max : remain;
+        if (copy_to_user(frame[FRAME_A1],
+                         fd_table[fd].file->data + fd_table[fd].pos,
+                         n) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        fd_table[fd].pos += n;
+        frame[FRAME_A0] = n;
+        break;
+    }
+    case SYS_CLOSE: {
+        uint64_t fd = frame[FRAME_A0];
+        if (fd >= MAX_FD || !fd_table[fd].used) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            fd_table[fd].used = 0;
+            frame[FRAME_A0] = 0;
+        }
+        break;
+    }
+    case SYS_READDIR: {
+        struct fs_file *f = fs_at((int)frame[FRAME_A0]);
+        char namebuf[32];
+        int i;
+        if (f == 0) {
+            frame[FRAME_A0] = 0;
+            break;
+        }
+        for (i = 0; i < 31 && f->name[i] != '\0'; i++) {
+            namebuf[i] = f->name[i];
+        }
+        namebuf[i] = '\0';
+        if (copy_to_user(frame[FRAME_A1],
+                         (const unsigned char *)namebuf,
+                         (uint64_t)i + 1) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        frame[FRAME_A0] = 1;
+        break;
+    }
+    case SYS_EXEC:
+        return do_exec(frame);
     default:
         uart_puts("trap: unknown syscall ");
         put_dec(num);
@@ -201,6 +441,7 @@ static void do_syscall(uint64_t *frame)
 
     /* ecall の次の命令から再開させる (sepc を 1 命令分進める) */
     w_sepc(r_sepc() + 4);
+    return 0;
 }
 
 /* --- ハンドラ本体 (trap.S から呼ばれる) -------------------------------
@@ -261,7 +502,8 @@ void trap_handler(uint64_t *frame, int from_user)
 
     if (from_user) {
         /* ユーザープログラムの例外 (メモリ保護違反など):
-         * そのプログラムだけを終わらせてカーネルに帰る */
+         * そのプログラムだけを終わらせる。exec の子なら
+         * 親に戻して exec の結果として -2 を返す */
         uart_puts("trap: user program fault scause=");
         put_hex(scause);
         uart_puts(" sepc=");
@@ -269,6 +511,10 @@ void trap_handler(uint64_t *frame, int from_user)
         uart_puts(" stval=");
         put_hex(r_stval());
         uart_putc('\n');
+        if (exec_parent.active) {
+            resume_parent(frame, (uint64_t)-2);
+            return;
+        }
         user_exit_jump();  /* ここからは戻ってこない */
     }
 

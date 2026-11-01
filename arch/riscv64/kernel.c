@@ -24,18 +24,18 @@
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
 extern void user_launch(unsigned long entry, unsigned long user_stack_top);
 
-/* ユーザープログラムを実行する (ステップ 4、ELF 化とファイル
- * システム経由の取得はステップ 6)。
- * "uprog.elf" をファイルシステムから名前で引いて、ローダ
- * (elf.c) で配置してから降りる。プログラムが exit するか
- * 保護違反で終わると、ここへ戻ってくる。 */
-static void start_user(void)
+/* ユーザープログラムを名前で実行する (ステップ 4 で導入、
+ * ELF 化とファイルシステム経由の取得はステップ 6)。
+ * ファイルシステムから名前で引いて、ローダ (elf.c) で配置
+ * してから降りる。プログラムが exit するか保護違反で
+ * 終わると、ここへ戻ってくる。 */
+static void start_user_named(const char *name)
 {
-    struct fs_file *f = fs_find("uprog.elf");
+    struct fs_file *f = fs_find(name);
     uint64_t entry;
 
     if (f == 0) {
-        uart_puts("\n[kernel] uprog.elf not found\n");
+        uart_puts("\n[kernel] file not found\n");
         return;
     }
     entry = elf_load(f->data);
@@ -44,7 +44,9 @@ static void start_user(void)
         uart_puts("\n[kernel] failed to load user program\n");
         return;
     }
-    uart_puts("\n[kernel] starting user program ('q' quits it)\n");
+    uart_puts("\n[kernel] starting ");
+    uart_puts(name);
+    uart_putc('\n');
     user_launch(entry, USER_STACK_TOP_VA);
     uart_puts("\n[kernel] back from user program\n");
 }
@@ -63,7 +65,11 @@ void kmain(void)
             vm_fault_demo();   /* 'x' キーでページフォルトのデモ */
         }
         if (c == 'u') {
-            start_user();      /* 'u' キーでユーザープログラム実行 */
+            start_user_named("uprog.elf");  /* 'u' キーで実行 */
+            continue;
+        }
+        if (c == 's') {
+            start_user_named("shell.elf");  /* 's' キーでシェル */
             continue;
         }
         if (c == 'm') {

@@ -21,13 +21,18 @@
   協調的 (ABAB…) → プリエンプティブ (塊で交互) に文字を出す。
   `l` キーで RAM ファイルシステム (`fs.c`) のファイル一覧が出る。
   ユーザープログラムは `uprog.elf` というファイルとして
-  ファイルシステムから名前で引かれて実行される
+  ファイルシステムから名前で引かれて実行される。
+  `s` キーでユーザー空間のシェル (`shell.c`) が起動する:
+  `ls` / `cat <名前>` / `run <名前>` / `exit` が使え、
+  `run uprog.elf` のようにシェルからプログラムを実行して
+  シェルに戻ってこられる (システムコール v1、`doc/syscalls.md`)
 - 実行: `./build.sh` または `./build.sh riscv64`
   （ビルドして QEMU で5秒だけ起動）
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
   trap.S、trap.c / trap.h、vm.c / vm.h、user.S (U モードへの出入り)、
-  uprog.c / user.ld (ユーザープログラム)、embed.S (ELF 埋め込み)、
+  uprog.c / user.ld (ユーザープログラム)、shell.c (シェル)、
+  embed.S (ELF 埋め込み)、
   elf.c / elf.h (ELF ローダ)、fs.c / fs.h (RAM ファイルシステム)、
   proc.c / proc.h / switch.S (タスクとコンテキストスイッチ)、
   kernel.ld (0x80200000)、build.sh、test.sh (自動検証)、run.log、

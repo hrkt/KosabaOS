@@ -93,7 +93,7 @@ echo "== scenario C: user program =="
     > test-c.log 2>&1 || true
 out=$(strip_ticks < test-c.log)
 check_order "$out" "hello from KosabaOS (S-mode)" \
-    "[kernel] starting user program" "hello from user mode!" "z" \
+    "[kernel] starting uprog.elf" "hello from user mode!" "z" \
     "[kernel] back from user program" "w"
 report "C user mode round trip" $?
 
@@ -114,6 +114,18 @@ echo "== scenario E: filesystem listing =="
 out=$(strip_ticks < test-e.log)
 check_order "$out" "[fs] files:" "hello.txt" "uprog.elf"
 report "E filesystem listing" $?
+
+echo "== scenario F: shell =="
+{ sleep 3; printf 's'; sleep 3; printf 'ls\n'; sleep 2; \
+  printf 'cat hello.txt\n'; sleep 2; printf 'run uprog.elf\n'; sleep 3; \
+  printf 'q'; sleep 2; printf 'exit\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-f.log 2>&1 || true
+out=$(strip_ticks < test-f.log)
+check_order "$out" "KosabaOS shell" "kosaba> " "shell.elf" \
+    "Hello from the KosabaOS RAM filesystem." "hello from user mode!" \
+    "kosaba> " "[kernel] back from user program"
+report "F shell (ls / cat / run / exit)" $?
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
