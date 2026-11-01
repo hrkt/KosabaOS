@@ -3,3 +3,5 @@
 *.bin
 *.o
 run.log
+build-test.log
+test-*.log
