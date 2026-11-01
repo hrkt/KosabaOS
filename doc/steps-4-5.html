@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KosabaOS ステップ 4〜5 まとめ — ユーザーモードとマルチタスク</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --muted: #5b6472;
+    --accent: #2563eb;
+    --accent-soft: #eef4ff;
+    --line: #d9dee7;
+    --code-bg: #14181f;
+    --code-ink: #d7e0ee;
+    --ok: #15803d;
+    --warn-bg: #fff7e6;
+    --warn-line: #f0c46c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+                 "Noto Sans JP", sans-serif;
+    color: var(--ink);
+    line-height: 1.8;
+    background: #f6f7f9;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 20px 64px;
+  }
+  header.hero {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+    color: #fff;
+    border-radius: 14px;
+    padding: 28px 30px;
+    margin-bottom: 28px;
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 1.7rem; line-height: 1.4; }
+  header.hero p { margin: 0; opacity: .92; }
+  section.card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 22px;
+  }
+  h2 {
+    font-size: 1.3rem;
+    margin: 0 0 6px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+  }
+  h2 .step {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 999px;
+    font-size: .8rem;
+    padding: 2px 12px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  h3 { font-size: 1.05rem; margin: 1.4em 0 .4em; }
+  p { margin: .6em 0; }
+  .lead { color: var(--muted); font-size: 1.02rem; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #eef1f5;
+    border-radius: 5px;
+    padding: 0 .35em;
+    font-size: .92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: .95rem;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--accent-soft); }
+  .flow {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;
+    margin: 14px 0;
+  }
+  .flow .box {
+    background: var(--accent-soft);
+    border: 1px solid #c7dbff;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: .92rem;
+    text-align: center;
+  }
+  .flow .arrow { align-self: center; color: var(--muted); }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+  }
+  .ok { color: var(--ok); font-weight: 600; }
+  footer { color: var(--muted); font-size: .9rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <h1>KosabaOS ステップ 4〜5 まとめ</h1>
+  <p>カーネルの上で「他人のプログラム」を安全に動かせるようになり（ユーザーモードとシステムコール）、
+     さらに複数の実行の流れを切り替えながら動かせるようになった（マルチタスク）記録です。
+     前編は <a href="steps-1-3.html" style="color:#fff; text-decoration: underline;">ステップ 1〜3 まとめ</a> をどうぞ。</p>
+</header>
+
+<section class="card">
+  <h2>今の全体像 — 権限の 2 階建てになった</h2>
+  <p class="lead">ステップ 3 まではカーネルだけの世界でした。今は下の階に
+     ユーザープログラムが住み、決められた窓口（システムコール）越しにだけ
+     カーネルへ仕事を頼めます。</p>
+  <div class="flow">
+    <div class="box"><strong>ユーザープログラム</strong><br>U モード（権限が弱い）<br>UART には直接触れない</div>
+    <div class="arrow">→ ecall（お願い）→</div>
+    <div class="box"><strong>カーネル</strong><br>S モード<br>ドライバ・ページング・<br>スケジューラを管理</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>ハードウェア</strong><br>UART、タイマ、メモリ</div>
+  </div>
+  <table>
+    <tr><th>ファイル</th><th>役割（この 2 ステップで増えた分）</th></tr>
+    <tr><td><code>arch/riscv64/uprog.c</code> / <code>user.ld</code></td><td>ユーザープログラム側。挨拶と echo をシステムコールで書いたもの</td></tr>
+    <tr><td><code>arch/riscv64/user.S</code></td><td>U モードへの出入り。カーネルの文脈を退避して降り、exit で復元して戻る</td></tr>
+    <tr><td><code>arch/riscv64/embed.S</code></td><td>ユーザープログラムのバイナリをカーネルに埋め込む（ファイルシステムがまだ無いため）</td></tr>
+    <tr><td><code>arch/riscv64/proc.c</code> / <code>switch.S</code></td><td>タスク管理とスケジューラ、コンテキストスイッチ</td></tr>
+    <tr><td><code>arch/riscv64/test.sh</code></td><td>自動検証。4 つのシナリオを QEMU で実行して PASS/FAIL を判定</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2><span class="step">ステップ 4</span>ユーザーモードとシステムコール</h2>
+  <p class="lead">狙い：「OS の上でプログラムが動く」形を作ること。プログラムは権限の弱い
+     U モードで動き、メモリ保護（ステップ 3）によって自分の領域しか触れません。</p>
+
+  <h3>システムコールの仕様は自分たちで決めた</h3>
+  <p>約束はシンプルです：番号を <code>a7</code>、引数と戻り値を <code>a0</code> に入れ、
+     <code>ecall</code> を実行する。仕様書は <code>doc/syscalls.md</code> に v0 として残しました。</p>
+  <table>
+    <tr><th>番号</th><th>名前</th><th>意味</th></tr>
+    <tr><td>1</td><td>putc</td><td>コンソールに 1 文字出す</td></tr>
+    <tr><td>2</td><td>getc</td><td>コンソールから 1 文字受け取る（届くまで待つ）</td></tr>
+    <tr><td>3</td><td>exit</td><td>プログラムを終了し、カーネルに帰る</td></tr>
+  </table>
+  <p>知らない番号を呼ばれたら -1 を返して続けさせる、プログラムが保護違反をしたら
+     そのプログラムだけを終了させる、という決まりも含めてあります。
+     将来この窓口を使うのが、自作 C コンパイラ <strong>IwaC</strong> と、
+     IwaC が作るプログラムたちです。</p>
+
+  <h3>行き来の仕組み</h3>
+  <div class="flow">
+    <div class="box">カーネルが文脈<br>（戻り先など）を退避</div>
+    <div class="arrow">→ sret で降りる →</div>
+    <div class="box">U モードで<br>プログラムが動く</div>
+    <div class="arrow">→ ecall / exit →</div>
+    <div class="box">カーネルが処理し、<br>文脈を復元して戻る</div>
+  </div>
+  <p>細部の工夫：U モードから割り込みが来たとき、スタックはユーザー側を指したままなので、
+     <code>sscratch</code> という受け渡し場所を使ってカーネル専用のスタックに
+     乗り換えてから受けます。実測の往復ログです（<code>u</code> キーで起動）：</p>
+  <pre><code>[kernel] starting user program ('q' quits it)
+hello from user mode!     ← ユーザープログラムが syscall 経由で出した挨拶
+tick 2                    ← 実行中もタイマ割り込みは届いている
+a                         ← ユーザー側の echo
+[kernel] back from user program   ← 'q' で exit して戻った
+b                         ← カーネル側の echo が再開</code></pre>
+
+  <h3>つまずき 2 件</h3>
+  <table>
+    <tr><th>症状</th><th>原因</th></tr>
+    <tr><td>最初の ecall が「番号 0」と判定される</td><td>退避したレジスタの並びで、a7 の位置を 1 つ数え間違えていた</td></tr>
+    <tr><td>プログラムの途中から実行が始まる</td><td>バイナリの先頭が入口 <code>_start</code> になるとは限らない（リンカは関数を宣言順に並べない）。<code>.text.start</code> という専用の置き場所で先頭に固定した</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2><span class="step">ステップ 5</span>マルチタスク</h2>
+  <p class="lead">狙い：実行の流れ（タスク）を複数持ち、切り替えながら全部を進めること。
+     各タスクは自分のスタックと「文脈」（再開に必要なレジスタの組）を持ち、
+     スケジューラが順番に選んで交代します。</p>
+
+  <h3>切り替えのきっかけは 2 種類</h3>
+  <table>
+    <tr><th>方式</th><th>きっかけ</th><th>デモの出力（実測）</th></tr>
+    <tr><td>協調的</td><td>タスクが自分から yield（譲る）</td><td><code>ABABABAB…</code>（1 文字ごとに譲るので完全な交互）</td></tr>
+    <tr><td>プリエンプティブ</td><td>タイマ割り込み（100ms ごと）が強制的に交代</td><td><code>AAAAAAAAA BBBBBBBBB AAAAAAAAA…</code>（約 9 文字の塊で交互）</td></tr>
+  </table>
+  <p>タイマ割り込みは 100ms 間隔に変えました（tick の表示は 10 回に 1 回にして、
+     1 秒に 1 行の見た目は維持）。トラップをまたいで切り替えるときは、
+     CPU に 1 組しかない <code>sepc</code> / <code>sstatus</code> をタスクごとに
+     退避・復元するのが肝です。デモは <code>m</code> キーで起動し、
+     両方の幕が終わると通常の echo に戻ります。</p>
+
+  <h3>つまずき：「割り込み禁止」のまま走り出したタスク</h3>
+  <p>最初の実装では、第 2 幕で片方のタスクが最後まで走り切ってしまいました。
+     切り替え回数を数えるとスケジューラ自体は毎回切り替わっていて、
+     切替の流れを追って判明した原因はこれです：
+     <strong>トラップ処理の最中から初めて起動されたタスクは、割り込み禁止
+     （sstatus.SIE = 0）の状態を引き継いで走り出し、タイマ割り込みを
+     永遠に受けられなかった</strong>。
+     「通常の文脈に戻るとき（yield の出口と、タスクの入口）で割り込み許可を
+     立て直す」という決まりにして解決しました。</p>
+
+  <div class="note">
+    <strong>この段階のタスクはカーネルの中（S モード）の流れ</strong>で、
+    ページテーブルは全タスクで共有です。タスクごとにページを持ち、
+    U モードのプログラム自体をタスク化するのは、ステップ 6 側の発展として残しています。
+  </div>
+</section>
+
+<section class="card">
+  <h2>検証のしかた — 自動テストと実機ならぬ WSL2</h2>
+  <ul>
+    <li><code>test.sh</code> が 4 シナリオ（起動、echo とフォルトデモ、ユーザープログラムの往復、
+        マルチタスクの両幕）を自動で実行し、<span class="ok">ALL PASS</span> を確認しています</li>
+    <li>開発環境のほかに、利用者自身の WSL2（ThinkPad、QEMU 10.2 / OpenSBI 1.8 という
+        だいぶ新しい組み合わせ）でもビルド・起動・全シナリオ PASS を確認済みです。
+        バージョンが変わっても壊れていないことの実証になりました（手順は <code>doc/wsl2-guide.md</code>）</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>ここまでの到達点と、次</h2>
+  <ul>
+    <li>KosabaOS は、C で書かれ、割り込みとメモリ保護を持ち、U モードのプログラムを
+        システムコールで動かせ、複数のタスクを切り替えられるカーネルになった</li>
+    <li><strong>次のステップ 6</strong>：ELF ローダ（ファイルをプログラムとして読み込む）→
+        RAM ファイルシステム → ユーザー空間のシェル → OS の上で IwaC を動かして
+        Hello World をコンパイル → 実機へ、という全体ゴールへの接続</li>
+    <li>IwaC 側も並行して進んでいます：本物の <code>uart_puts</code> / <code>uart_putc</code> の
+        ソースが IwaC でコンパイルできるところまで到達済みです</li>
+  </ul>
+  <p>計画と決定事項は <code>doc/roadmap-multitasking.md</code>、システムコール仕様は
+     <code>doc/syscalls.md</code> にあります。</p>
+</section>
+
+<footer>
+  KosabaOS ドキュメント — ステップ 4〜5 まとめ（2026-11-01 時点、コミット 23cc3d7 までの内容）
+</footer>
+
+</main>
+</body>
+</html>
