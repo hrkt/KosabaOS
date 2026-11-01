@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KosabaOS ステップ 1〜3 まとめ — C 言語化・割り込み・ページング</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --muted: #5b6472;
+    --accent: #2563eb;
+    --accent-soft: #eef4ff;
+    --line: #d9dee7;
+    --code-bg: #14181f;
+    --code-ink: #d7e0ee;
+    --ok: #15803d;
+    --warn-bg: #fff7e6;
+    --warn-line: #f0c46c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+                 "Noto Sans JP", sans-serif;
+    color: var(--ink);
+    line-height: 1.8;
+    background: #f6f7f9;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 20px 64px;
+  }
+  header.hero {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+    color: #fff;
+    border-radius: 14px;
+    padding: 28px 30px;
+    margin-bottom: 28px;
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 1.7rem; line-height: 1.4; }
+  header.hero p { margin: 0; opacity: .92; }
+  section.card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 22px;
+  }
+  h2 {
+    font-size: 1.3rem;
+    margin: 0 0 6px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+  }
+  h2 .step {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 999px;
+    font-size: .8rem;
+    padding: 2px 12px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  h3 { font-size: 1.05rem; margin: 1.4em 0 .4em; }
+  p { margin: .6em 0; }
+  .lead { color: var(--muted); font-size: 1.02rem; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #eef1f5;
+    border-radius: 5px;
+    padding: 0 .35em;
+    font-size: .92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: .95rem;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--accent-soft); }
+  .flow {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;
+    margin: 14px 0;
+  }
+  .flow .box {
+    background: var(--accent-soft);
+    border: 1px solid #c7dbff;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: .92rem;
+    text-align: center;
+  }
+  .flow .arrow { align-self: center; color: var(--muted); }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+  }
+  .ok { color: var(--ok); font-weight: 600; }
+  .term {
+    border-bottom: 1px dotted var(--accent);
+  }
+  footer { color: var(--muted); font-size: .9rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <h1>KosabaOS ステップ 1〜3 まとめ</h1>
+  <p>アセンブラだけの小さなカーネルが、C で書けるようになり、割り込みを受けられるようになり、
+     メモリ保護（ページング）まで持つようになった道のりの記録です。
+     対象は RISC-V (riscv64)、実行環境は QEMU virt です。</p>
+</header>
+
+<section class="card">
+  <h2>まず全体像 — 今の KosabaOS はこう動いている</h2>
+  <p class="lead">電源（QEMU の起動）から、文字が打てるようになるまでの流れです。</p>
+  <div class="flow">
+    <div class="box"><strong>OpenSBI</strong><br>ファームウェアが<br>カーネルを置いて渡す</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>start.S</strong><br>スタックと .bss の<br>準備だけする</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>kmain (C)</strong><br>本体。初期化して<br>echo ループを回す</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>UART ドライバ</strong><br>シリアル通信で<br>文字の出し入れ</div>
+  </div>
+  <p>動いている間も、裏では2つの仕組みが働いています。
+     <strong>トラップ</strong>（タイマ割り込みを受けて 1 秒ごとに <code>tick</code> を出す）と、
+     <strong>ページング</strong>（Sv39。すべてのメモリアクセスがアドレス変換を通る）です。</p>
+  <table>
+    <tr><th>ファイル</th><th>役割</th></tr>
+    <tr><td><code>arch/riscv64/start.S</code></td><td>ブート処理（アセンブラ）。スタック用意、.bss ゼロ埋め、C の入口を呼ぶ</td></tr>
+    <tr><td><code>arch/riscv64/kernel.c</code></td><td>カーネル本体（C）。初期化の順番と echo ループ</td></tr>
+    <tr><td><code>arch/riscv64/uart.c</code></td><td>UART ドライバ（C）。文字の送受信</td></tr>
+    <tr><td><code>arch/riscv64/trap.S / trap.c</code></td><td>例外・割り込みの受け口。レジスタ退避とタイマ処理</td></tr>
+    <tr><td><code>arch/riscv64/vm.c</code></td><td>Sv39 ページング。対応表の作成と有効化</td></tr>
+    <tr><td><code>arch/riscv64/kernel.ld</code></td><td>リンカへの配置指示書（0x80200000 に置く約束）</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2><span class="step">ステップ 1</span>C 言語化</h2>
+  <p class="lead">狙い：この先の仕組み（ページテーブルやプロセス管理）はデータ構造の管理が中心で、
+     アセンブラだけでは辛い。土台を C に移すのが目的でした。</p>
+
+  <h3>やったこと</h3>
+  <ul>
+    <li><code>start.S</code> を「ブート専用」に縮小：スタックを用意し、<span class="term">.bss</span>（初期値ゼロのはずの領域）を実際にゼロで埋め、C の <code>kmain</code> を呼ぶだけにした</li>
+    <li>本体は <code>kernel.c</code> へ、UART ドライバは <code>uart.c</code> へ。動きはアセンブラ版とまったく同じ（hello と echo）</li>
+    <li>デバイスの読み書きには <code>volatile</code> が必須、という C 側の約束を導入（無いと最適化で状態待ちループが消える）</li>
+  </ul>
+
+  <h3>つまずき：.bss の範囲の印が 2 バイトずれていた</h3>
+  <p>リンカスクリプトで <code>__bss_start</code> をセクションの<em>外</em>に書いたら、住所が .bss の
+     始まりより 2 バイト手前に確定してしまいました。そのままでは .data の末尾をゼロで潰す恐れがあります。
+     シンボルの確認（nm）で気づいて、セクションの<em>中</em>に書く正しい形に直しました。
+     最終的に <code>__bss_start = 0x80200210</code>、<code>__bss_end = 0x80201210</code> と
+     スタックの範囲ぴったり一致することを確認しています。</p>
+
+  <div class="note">
+    <strong>合言葉：</strong>ビルドの指定は <code>-mcmodel=medany -ffreestanding</code>。
+    カーネルは 0x80200000 という高い住所に住むので、デフォルトのコードモデルでは住所を扱えません。
+    また前提の命令セットは <strong>RV64G</strong>（= I+M+A+F+D）と決めました。実機候補はすべて G 対応で、
+    掛け算・割り算命令がある前提にできるからです（2026-11-01 の決定事項）。
+  </div>
+</section>
+
+<section class="card">
+  <h2><span class="step">ステップ 2</span>トラップとタイマ割り込み</h2>
+  <p class="lead">狙い：例外（エラー）や割り込み（タイマなど）を「受け取る入口」を作ること。
+     これはページフォルト処理と、将来のタスク切り替えの土台になります。</p>
+
+  <h3>仕組み</h3>
+  <div class="flow">
+    <div class="box">タイマ割り込み<br>（1 秒ごと）</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>trap.S</strong><br>全レジスタを<br>スタックに退避</div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>trap.c</strong><br>原因を見て処理<br>（tick を表示）</div>
+    <div class="arrow">→</div>
+    <div class="box">レジスタを復元して<br><code>sret</code> で元の処理へ</div>
+  </div>
+  <p>割り込まれた側（echo のループ）は何も気づきません。実際、キー入力の echo の途中に
+     tick が割り込んでも、文字は正しく続きます。実測のログです：</p>
+  <pre><code>hello from KosabaOS (S-mode)
+tick 1
+abctick 2     ← "abc" の echo の直後に tick が割り込んだ様子
+tick 3</code></pre>
+
+  <h3>タイマの予約はファームウェアに頼む</h3>
+  <p>S モードからはタイマを直接設定できないので、OpenSBI の Timer 拡張
+     （<code>sbi_set_timer</code>、<code>ecall</code> で依頼）に「この時刻になったら割り込んで」
+     と頼みます。時刻の読み取りは CSR の <code>time</code> から。QEMU virt のタイマは
+     10MHz なので、1 秒 = 10,000,000 カウントです。</p>
+
+  <h3>つまずき 3 件（全部テストで発見）</h3>
+  <table>
+    <tr><th>症状</th><th>原因と対策</th></tr>
+    <tr><td>CSR 命令がアセンブラに拒否される</td><td>近年の binutils では CSR 命令は Zicsr 拡張扱い。ビルド指定に拡張を含める必要があった（現在は G 前提で解決）</td></tr>
+    <tr><td>64 ビット割り算でリンクエラー</td><td>基本命令だけの前提では割り算命令がなく、libgcc の補助関数が必要だった。G 前提に変えた今は命令で実行される</td></tr>
+    <tr><td><code>sbi_set_timer</code> が黙って失敗</td><td>機能番号を入れるレジスタ <code>a6</code> を設定していなかった。明示的に 0 を入れて解決。ついでにエラーコードも確認するようにした</td></tr>
+  </table>
+  <p>例外（想定外のトラップ）は、原因 <code>scause</code>、現場 <code>sepc</code>、
+     触った住所 <code>stval</code> を表示して止まります。これが次のステップの受け皿になりました。</p>
+</section>
+
+<section class="card">
+  <h2><span class="step">ステップ 3</span>Sv39 ページング — メモリ保護</h2>
+  <p class="lead">狙い：プログラムから見える住所（仮想アドレス）と実際のメモリ（物理アドレス）の
+     対応表を CPU に渡し、すべてのアクセスを変換経由にすること。対応のない住所や
+     許可のない操作はページフォルトになり、OS に届きます。これがメモリ保護の心臓です。</p>
+
+  <h3>対応表は最小形（gigapage 2 本の恒等マッピング）</h3>
+  <table>
+    <tr><th>仮想アドレス</th><th>物理アドレス</th><th>許可</th><th>正体</th></tr>
+    <tr><td>0x00000000 〜（1GB）</td><td>同じ</td><td>読み・書き（実行は禁止）</td><td>デバイス領域。UART (0x10000000) を含む</td></tr>
+    <tr><td>0x80000000 〜（1GB）</td><td>同じ</td><td>読み・書き・実行</td><td>RAM。カーネル自身が住む</td></tr>
+    <tr><td>それ以外</td><td>—</td><td>対応なし</td><td>触るとページフォルト</td></tr>
+  </table>
+  <p>1GB 単位の大きなページ（gigapage）で対応させる形です。gigapage は Sv39 の仕様の一部で、
+     数千円台の安いボード（Milk-V Duo など）でも使えます。
+     仮想 = 物理なので見た目は変わりませんが、全アクセスが変換を通るようになりました。</p>
+
+  <h3>見える成果：保護が働く瞬間</h3>
+  <p>echo の最中に <code>x</code> キーを押すと、わざと対応のない住所 <code>0x40000000</code> を
+     読みにいくデモが動きます。実測のログです：</p>
+  <pre><code>vm: touching unmapped address 0x40000000 ...
+trap: page fault (code=13) trap: exception scause=0x000000000000000d sepc=0x00000000802006e4 stval=0x0000000040000000</code></pre>
+  <p>code=13 は「読みのページフォルト」、<code>stval</code> には触った住所そのもの
+     （0x40000000）が記録されています。<span class="ok">メモリ保護が実際に仕事をした証拠</span>です。</p>
+</section>
+
+<section class="card">
+  <h2>ここまでの到達点と、次</h2>
+  <ul>
+    <li>KosabaOS は C で書かれ、割り込みを受けられ、メモリ保護が有効なカーネルになった</li>
+    <li>まだ無いもの：ユーザーモード（権限の弱い実行環境）、システムコール、複数のタスク、ファイルシステム</li>
+    <li><strong>次のステップ 4</strong>：ユーザーモードで小さなプログラムを動かし、
+        <code>ecall</code> によるシステムコール（仕様は自前で決める）で OS に仕事を頼ませる。
+        将来ここに乗るのが、自作 C コンパイラ <strong>IwaC</strong> です</li>
+  </ul>
+  <p>詳しい計画は <code>doc/roadmap-multitasking.md</code>、命令やレジスタの早見表は
+     <code>arch/riscv64/instructions.md</code> にあります。</p>
+</section>
+
+<footer>
+  KosabaOS ドキュメント — ステップ 1〜3 まとめ（2026-11-01 時点、コミット ca446b2 までの内容）
+</footer>
+
+</main>
+</body>
+</html>
