@@ -43,6 +43,11 @@ static inline uint64_t r_sepc(void)
     return x;
 }
 
+static inline void w_sepc(uint64_t x)
+{
+    asm volatile("csrw sepc, %0" : : "r"(x));
+}
+
 static inline uint64_t r_stval(void)
 {
     uint64_t x;
@@ -137,9 +142,55 @@ void trap_init(void)
     }
 }
 
-/* --- ハンドラ本体 (trap.S から呼ばれる) ----------------------------- */
+/* --- システムコール (ステップ 4) -------------------------------------
+ * 仕様は doc/syscalls.md。frame は trap.S が退避したレジスタの
+ * 配列で、並びは退避の順番: [8] = a0 (引数・戻り値)、[16] = a7
+ * (番号)。戻り値を返したいときは frame[8] を書き換えると、
+ * 復元されてユーザープログラムの a0 に入る。 */
 
-void trap_handler(void)
+/* 退避順は ra, gp, tp, t0, t1, t2, s0, s1, a0, a1, ..., a7, s2, ...
+ * なので a0 が 8 番目、a7 が 15 番目 */
+#define FRAME_A0 8
+#define FRAME_A7 15
+
+#define SYS_PUTC 1
+#define SYS_GETC 2
+#define SYS_EXIT 3
+
+extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
+
+static void do_syscall(uint64_t *frame)
+{
+    uint64_t num = frame[FRAME_A7];
+
+    switch (num) {
+    case SYS_PUTC:
+        uart_putc((char)frame[FRAME_A0]);
+        frame[FRAME_A0] = 0;
+        break;
+    case SYS_GETC:
+        frame[FRAME_A0] = (uint64_t)uart_getc();
+        break;
+    case SYS_EXIT:
+        user_exit_jump();  /* ここからは戻ってこない */
+        break;
+    default:
+        uart_puts("trap: unknown syscall ");
+        put_dec(num);
+        uart_putc('\n');
+        frame[FRAME_A0] = (uint64_t)-1;
+        break;
+    }
+
+    /* ecall の次の命令から再開させる (sepc を 1 命令分進める) */
+    w_sepc(r_sepc() + 4);
+}
+
+/* --- ハンドラ本体 (trap.S から呼ばれる) -------------------------------
+ * frame: 退避したレジスタ一式。from_user: ユーザーモードからの
+ * トラップなら 1、カーネル自身なら 0。 */
+
+void trap_handler(uint64_t *frame, int from_user)
 {
     uint64_t scause = r_scause();
     int is_interrupt = (int)(scause >> 63);
@@ -163,7 +214,27 @@ void trap_handler(void)
         return;
     }
 
-    /* 例外: 原因と現場を表示して止める */
+    /* ここから例外 */
+    if (from_user && code == 8) {
+        /* ユーザーモードからの ecall = システムコール */
+        do_syscall(frame);
+        return;
+    }
+
+    if (from_user) {
+        /* ユーザープログラムの例外 (メモリ保護違反など):
+         * そのプログラムだけを終わらせてカーネルに帰る */
+        uart_puts("trap: user program fault scause=");
+        put_hex(scause);
+        uart_puts(" sepc=");
+        put_hex(r_sepc());
+        uart_puts(" stval=");
+        put_hex(r_stval());
+        uart_putc('\n');
+        user_exit_jump();  /* ここからは戻ってこない */
+    }
+
+    /* カーネル自身の例外: 原因と現場を表示して止める */
     if (code == 12 || code == 13 || code == 15) {
         uart_puts("trap: page fault (code=");
         put_dec(code);

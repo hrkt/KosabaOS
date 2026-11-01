@@ -13,13 +13,21 @@
   1 行出した後は echo を続け、トラップ処理 (`trap.S` / `trap.c`) が
   タイマ割り込みで 1 秒ごとに `tick N` を割り込ませる。
   ページング (`vm.c`) は Sv39 の恒等マッピングで有効になっており、
-  echo 中に `x` キーを押すとページフォルトのデモが動く
+  echo 中に `x` キーを押すとページフォルトのデモが動く。
+  `u` キーを押すとユーザープログラム (`uprog.c`) をユーザーモードで
+  実行する: 挨拶と echo はシステムコール経由 (仕様は
+  `doc/syscalls.md`)、`q` でカーネルに帰る
 - 実行: `./build.sh` または `./build.sh riscv64`
   （ビルドして QEMU で5秒だけ起動）
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
-  trap.S、trap.c / trap.h、vm.c / vm.h、kernel.ld (0x80200000)、
-  build.sh、run.log、instructions.md (命令・レジスタ・メモリの早見表)
+  trap.S、trap.c / trap.h、vm.c / vm.h、user.S (U モードへの出入り)、
+  uprog.c / user.ld (ユーザープログラム)、embed.S (バイナリ埋め込み)、
+  kernel.ld (0x80200000)、build.sh、run.log、instructions.md
+  (命令・レジスタ・メモリの早見表)
+- ドキュメント: `doc/roadmap-multitasking.md` (計画と決定事項)、
+  `doc/steps-1-3.html` (初心者向けまとめ)、`doc/syscalls.md`
+  (システムコール仕様)
 - 先の計画: `doc/roadmap-multitasking.md`（メモリ保護付き
   マルチタスクへの計画案）
 

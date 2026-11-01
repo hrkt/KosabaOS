@@ -79,3 +79,13 @@ _start:                     # カーネルの入口 (kernel.ld の ENTRY がこ�
 stack:
     .space 4096             # スタック用に 4KB 確保して
 stack_top:                  # その末尾がスタックの出発点
+
+# ユーザーモードからのトラップ専用のスタック。ユーザーモードで
+# 実行中に割り込みが来ると、カーネル側のスタックは「呼び出しの
+# 途中」で使われている最中なので、割り込み用に別の場所が要る。
+# trap_entry_user は sscratch 経由でここの末尾を受け取る。
+    .align 4
+    .globl trapstack_top
+trapstack:
+    .space 4096
+trapstack_top:
