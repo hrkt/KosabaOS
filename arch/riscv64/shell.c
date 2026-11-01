@@ -8,6 +8,7 @@
  *   help          この一覧
  *   ls            ファイル一覧
  *   cat <名前>    ファイルの中身を表示
+ *   write <名前> <本文>  ファイルを作って本文を書く
  *   run <名前>    プログラムを実行 (終わると戻ってくる)
  *   exit          シェルを終わってカーネルに帰る
  */
@@ -20,6 +21,8 @@
 #define SYS_CLOSE 6
 #define SYS_READDIR 7
 #define SYS_EXEC 8
+#define SYS_CREATE 9
+#define SYS_WRITE 10
 
 static long syscall3(long num, long a0, long a1, long a2)
 {
@@ -90,6 +93,36 @@ static void cmd_cat(const char *name)
     syscall3(SYS_CLOSE, fd, 0, 0);
 }
 
+/* write <名前> <本文>: ファイルを作って本文を書く */
+static void cmd_write(char *arg)
+{
+    char *text = arg;
+    long fd, len = 0;
+
+    while (*text != '\0' && *text != ' ') {
+        text++;
+    }
+    if (*text != ' ') {
+        puts_("usage: write <name> <text>\n");
+        return;
+    }
+    *text = '\0';
+    text++;
+    while (text[len] != '\0') {
+        len++;
+    }
+    fd = syscall3(SYS_CREATE, (long)arg, 0, 0);
+    if (fd < 0) {
+        puts_("write: cannot create\n");
+        return;
+    }
+    syscall3(SYS_WRITE, fd, (long)text, len);
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    puts_("wrote ");
+    puts_(arg);
+    putc_('\n');
+}
+
 static void cmd_run(const char *name)
 {
     long r = syscall3(SYS_EXEC, (long)name, 0, 0);
@@ -157,12 +190,15 @@ void _start(void)
             puts_("help        this list\n");
             puts_("ls          list files\n");
             puts_("cat <name>  show a file\n");
+            puts_("write <name> <text>  create a file with text\n");
             puts_("run <name>  run a program\n");
             puts_("exit        leave the shell\n");
         } else if (streq(line, "ls")) {
             cmd_ls();
         } else if (streq(line, "cat")) {
             cmd_cat(arg);
+        } else if (streq(line, "write")) {
+            cmd_write(arg);
         } else if (streq(line, "run")) {
             cmd_run(arg);
         } else if (streq(line, "exit")) {

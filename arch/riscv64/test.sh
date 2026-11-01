@@ -127,6 +127,17 @@ check_order "$out" "KosabaOS shell" "kosaba> " "shell.elf" \
     "kosaba> " "[kernel] back from user program"
 report "F shell (ls / cat / run / exit)" $?
 
+echo "== scenario G: shell write =="
+{ sleep 3; printf 's'; sleep 3; printf 'write memo.txt hello-write-test\n'; sleep 2; \
+  printf 'ls\n'; sleep 2; printf 'cat memo.txt\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-g.log 2>&1 || true
+out=$(strip_ticks < test-g.log)
+check_order "$out" "KosabaOS shell" "wrote memo.txt" "memo.txt" \
+    "hello-write-test" "[kernel] back from user program"
+report "G shell write (create / write / cat)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

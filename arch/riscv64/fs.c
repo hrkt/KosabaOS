@@ -63,6 +63,7 @@ int fs_add(const char *name, const unsigned char *src, uint64_t size)
         f->data[i] = src[i];
     }
     f->size = size;
+    f->capacity = size;  /* 組み込みファイルはその分だけ */
     arena_used += size;
     file_count++;
     return 0;
@@ -135,4 +136,49 @@ struct fs_file *fs_at(int index)
         return 0;
     }
     return &files[index];
+}
+
+/* 書き込み用に作るファイルの上限 (作成時に arena から確保) */
+#define FS_CREATE_RESERVE (32 * 1024)
+
+struct fs_file *fs_create(const char *name)
+{
+    struct fs_file *f = fs_find(name);
+    int n = 0;
+
+    if (f != 0) {
+        f->size = 0;  /* 同名があれば空にする (容量はそのまま) */
+        return f;
+    }
+    if (file_count >= FS_MAX_FILES ||
+        arena_used + FS_CREATE_RESERVE > FS_ARENA_SIZE) {
+        return 0;
+    }
+    f = &files[file_count];
+    while (name[n] != '\0' && n < 31) {
+        f->name[n] = name[n];
+        n++;
+    }
+    f->name[n] = '\0';
+    f->data = arena + arena_used;
+    f->size = 0;
+    f->capacity = FS_CREATE_RESERVE;
+    arena_used += FS_CREATE_RESERVE;
+    file_count++;
+    return f;
+}
+
+uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
+                       uint64_t n)
+{
+    uint64_t room = f->capacity - f->size;
+    uint64_t i;
+    if (n > room) {
+        n = room;  /* 入る分だけ書く */
+    }
+    for (i = 0; i < n; i++) {
+        f->data[f->size + i] = src[i];
+    }
+    f->size += n;
+    return n;
 }

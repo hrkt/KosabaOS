@@ -184,6 +184,8 @@ void trap_init(void)
 #define SYS_CLOSE 6
 #define SYS_READDIR 7
 #define SYS_EXEC 8
+#define SYS_CREATE 9
+#define SYS_WRITE 10
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -235,6 +237,19 @@ static int copy_to_user(uint64_t va, const unsigned char *src, uint64_t n)
     return 0;
 }
 
+static int copy_from_user(unsigned char *dst, uint64_t va, uint64_t n)
+{
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        uint64_t pa = user_va_to_pa(va + i);
+        if (pa == 0) {
+            return -1;
+        }
+        dst[i] = *(unsigned char *)pa;
+    }
+    return 0;
+}
+
 /* --- ファイルディスクリプタ (ステップ 6) ------------------------------
  * 同時に動くユーザープログラムは 1 つなので、表は全体で 1 つ。
  * exec を呼ぶと全部閉じられる (仕様 v1 の決まり)。 */
@@ -244,6 +259,7 @@ static struct {
     struct fs_file *file;
     uint64_t pos;
     int used;
+    int writable;  /* 1 = create で開いた書き込み用 */
 } fd_table[MAX_FD];
 
 static void close_all_fds(void)
@@ -369,6 +385,7 @@ static int do_syscall(uint64_t *frame)
                 fd_table[i].file = f;
                 fd_table[i].pos = 0;
                 fd_table[i].used = 1;
+                fd_table[i].writable = 0;
                 frame[FRAME_A0] = (uint64_t)i;
                 break;
             }
@@ -382,7 +399,7 @@ static int do_syscall(uint64_t *frame)
         uint64_t fd = frame[FRAME_A0];
         uint64_t max = frame[FRAME_A2];
         uint64_t remain, n;
-        if (fd >= MAX_FD || !fd_table[fd].used) {
+        if (fd >= MAX_FD || !fd_table[fd].used || fd_table[fd].writable) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
@@ -431,6 +448,66 @@ static int do_syscall(uint64_t *frame)
     }
     case SYS_EXEC:
         return do_exec(frame);
+    case SYS_CREATE: {
+        char name[32];
+        int i;
+        struct fs_file *f;
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        f = fs_create(name);
+        if (f == 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        for (i = 0; i < MAX_FD; i++) {
+            if (!fd_table[i].used) {
+                fd_table[i].file = f;
+                fd_table[i].pos = 0;
+                fd_table[i].used = 1;
+                fd_table[i].writable = 1;
+                frame[FRAME_A0] = (uint64_t)i;
+                break;
+            }
+        }
+        if (i == MAX_FD) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        }
+        break;
+    }
+    case SYS_WRITE: {
+        uint64_t fd = frame[FRAME_A0];
+        uint64_t len = frame[FRAME_A2];
+        unsigned char buf[256];
+        uint64_t done = 0;
+        if (fd >= MAX_FD || !fd_table[fd].used || !fd_table[fd].writable) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        /* ユーザーメモリから小分けに運んでファイルへ書く */
+        while (done < len) {
+            uint64_t chunk = len - done;
+            uint64_t w;
+            if (chunk > sizeof(buf)) {
+                chunk = sizeof(buf);
+            }
+            if (copy_from_user(buf, frame[FRAME_A1] + done, chunk) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                done = (uint64_t)-1;
+                break;
+            }
+            w = fs_write_data(fd_table[fd].file, buf, chunk);
+            done += w;
+            if (w < chunk) {
+                break;  /* 容量いっぱい */
+            }
+        }
+        if (done != (uint64_t)-1) {
+            frame[FRAME_A0] = done;
+        }
+        break;
+    }
     default:
         uart_puts("trap: unknown syscall ");
         put_dec(num);
