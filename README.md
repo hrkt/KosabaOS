@@ -5,6 +5,13 @@
 アーキテクチャ依存のコードは `arch/<arch>/` に閉じ込め、
 共通コードはその外に置く。
 
+関連リポジトリ: この OS の上で動かす自作コンパイラ IwaC
+(https://github.com/hrkt/IwaC) と対で開発している。
+clone は KosabaOS と IwaC をセットで実施するのが前提で、
+「OS のシェルからコンパイラで Hello World」のデモは
+両方を組み合わせて確認している。OS 側の ABI を定義して
+ABI 向けバイナリをツールとして OS 側に置く話は別途検討中。
+
 ## 現状: arch/riscv64 の最小カーネル
 
 - 起動: QEMU virt + デフォルト BIOS (OpenSBI) の下で S-mode に入る
