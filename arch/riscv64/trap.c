@@ -282,6 +282,7 @@ static struct {
     uint64_t sepc;
     uint64_t sp;
     uint64_t code_pa;
+    uint64_t data_pa;
     uint64_t stack_pa;
 } exec_parent;
 
@@ -294,7 +295,8 @@ static void resume_parent(uint64_t *frame, uint64_t result)
     frame[FRAME_A0] = result;
     w_sepc(exec_parent.sepc + 4);
     w_sscratch(exec_parent.sp);
-    vm_switch_user_region(exec_parent.code_pa, exec_parent.stack_pa);
+    vm_switch_user_region(exec_parent.code_pa, exec_parent.data_pa,
+                          exec_parent.stack_pa);
     exec_parent.active = 0;
     close_all_fds();
 }
@@ -320,7 +322,7 @@ static int do_exec(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
-    entry = elf_load_at(f->data, CHILD_CODE_PA);
+    entry = elf_load_to(f->data, CHILD_CODE_PA, CHILD_DATA_PA);
     if (entry == 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
@@ -333,13 +335,15 @@ static int do_exec(uint64_t *frame)
     exec_parent.sepc = r_sepc();
     exec_parent.sp = r_sscratch();
     exec_parent.code_pa = vm_current_code_pa();
+    exec_parent.data_pa = vm_current_data_pa();
     exec_parent.stack_pa = vm_current_stack_pa();
     exec_parent.active = 1;
     close_all_fds();
 
     /* 子の領域に差し替えて、子の入口から開始させる。
      * レジスタは汚れたまま渡さないようゼロにしておく */
-    vm_switch_user_region(CHILD_CODE_PA, CHILD_STACK_PA);
+    vm_switch_user_region(CHILD_CODE_PA, CHILD_DATA_PA,
+                          CHILD_STACK_PA);
     for (i = 0; i < 32; i++) {
         frame[i] = 0;
     }

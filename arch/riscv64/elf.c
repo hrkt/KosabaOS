@@ -51,10 +51,11 @@ struct elf64_phdr {
 #define ET_EXEC 2
 #define EM_RISCV 0xF3
 
-/* ユーザープログラムの領域の大きさ (vm.c の megapage 1 枚分) */
-#define USER_CODE_SIZE (2ULL * 1024 * 1024)
+/* ユーザープログラムの各領域の大きさ (megapage 1 枚分) */
+#define REGION_SIZE (2ULL * 1024 * 1024)
 
-uint64_t elf_load_at(const unsigned char *image, uint64_t base_pa)
+uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
+                     uint64_t data_pa)
 {
     const struct elf64_header *h = (const struct elf64_header *)image;
     int i;
@@ -86,13 +87,18 @@ uint64_t elf_load_at(const unsigned char *image, uint64_t base_pa)
         if (p->p_type != PT_LOAD) {
             continue;
         }
-        /* 行き先はユーザープログラムの領域の中だけに限る */
-        if (p->p_vaddr < USER_CODE_VA ||
-            p->p_vaddr + p->p_memsz > USER_CODE_VA + USER_CODE_SIZE) {
+        /* 行き先はコード領域かデータ領域の中だけに限る。
+         * どちらに入るかで置く物理メモリが変わる */
+        if (p->p_vaddr >= USER_CODE_VA &&
+            p->p_vaddr + p->p_memsz <= USER_CODE_VA + REGION_SIZE) {
+            dst = (unsigned char *)(code_pa + (p->p_vaddr - USER_CODE_VA));
+        } else if (p->p_vaddr >= USER_DATA_VA &&
+                   p->p_vaddr + p->p_memsz <= USER_DATA_VA + REGION_SIZE) {
+            dst = (unsigned char *)(data_pa + (p->p_vaddr - USER_DATA_VA));
+        } else {
             uart_puts("[elf] segment out of user range\n");
             return 0;
         }
-        dst = (unsigned char *)(base_pa + (p->p_vaddr - USER_CODE_VA));
         for (j = 0; j < p->p_filesz; j++) {
             dst[j] = image[p->p_offset + j];
         }
@@ -108,5 +114,5 @@ uint64_t elf_load_at(const unsigned char *image, uint64_t base_pa)
 
 uint64_t elf_load(const unsigned char *image)
 {
-    return elf_load_at(image, USER_CODE_PA);
+    return elf_load_to(image, USER_CODE_PA, USER_DATA_PA);
 }

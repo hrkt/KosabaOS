@@ -6,6 +6,7 @@
 /* ELF イメージをユーザープログラムの領域へ読み込み、
  * 入口アドレスを返す。失敗したら 0。実装は elf.c */
 uint64_t elf_load(const unsigned char *image);
-uint64_t elf_load_at(const unsigned char *image, uint64_t base_pa);
+uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
+                     uint64_t data_pa);
 
 #endif

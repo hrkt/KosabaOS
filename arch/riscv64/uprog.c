@@ -30,13 +30,25 @@ static void puts(const char *s)
     }
 }
 
+/* 書き換える静的変数 (.data と .bss)。データ専用領域が
+ * できたことの確認用 probe: コード領域だけだった頃は、
+ * ここへの書き込みが store page fault になっていた */
+static int data_probe = 7;
+static char bss_probe;
+
 /* 入口はバイナリの先頭に置く (user.ld が .text.start を先頭に
- * 配置する)。カーネルはファイルの先頭から実行を始めるため、
- * この指定が無いと別の関数から実行が始まってしまう */
+ * 配置する) */
 __attribute__((section(".text.start")))
 void _start(void)
 {
     puts("hello from user mode!\n");
+    data_probe++;
+    bss_probe = 'x';
+    puts("data probe: ");
+    syscall1(SYS_PUTC, '0' + data_probe);
+    syscall1(SYS_PUTC, ' ');
+    syscall1(SYS_PUTC, bss_probe);
+    syscall1(SYS_PUTC, '\n');
 
     for (;;) {
         long c = syscall1(SYS_GETC, 0);

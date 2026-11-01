@@ -48,11 +48,12 @@
 static uint64_t root_table[512] __attribute__((aligned(4096)));
 
 /* ユーザー領域用の中段テーブル (root のエントリ 1 の先)。
- * エントリ 0 = コード、エントリ 1 = スタック (各 2MB megapage) */
+ * エントリ 0 = コード、1 = データ、2 = スタック (各 2MB) */
 static uint64_t user_l1_table[512] __attribute__((aligned(4096)));
 
 /* ユーザー領域が今向いている物理メモリ (exec で差し替わる) */
 static uint64_t cur_code_pa = USER_CODE_PA;
+static uint64_t cur_data_pa = USER_DATA_PA;
 static uint64_t cur_stack_pa = USER_STACK_PA;
 
 static uint64_t make_leaf_pte(uint64_t pa, uint64_t flags);
@@ -61,7 +62,9 @@ static void apply_user_region(void)
 {
     user_l1_table[0] = make_leaf_pte(cur_code_pa,
                                      PTE_V | PTE_R | PTE_X | PTE_U | PTE_A | PTE_D);
-    user_l1_table[1] = make_leaf_pte(cur_stack_pa,
+    user_l1_table[1] = make_leaf_pte(cur_data_pa,
+                                     PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
+    user_l1_table[2] = make_leaf_pte(cur_stack_pa,
                                      PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
 }
 
@@ -92,6 +95,7 @@ void vm_init(void)
      * カーネルのメモリに届かない。 */
     root_table[1] = ((uint64_t)user_l1_table >> 12 << 10) | PTE_V;
     cur_code_pa = USER_CODE_PA;
+    cur_data_pa = USER_DATA_PA;
     cur_stack_pa = USER_STACK_PA;
     apply_user_region();
 
@@ -124,9 +128,11 @@ void vm_fault_demo(void)
 
 /* --- exec のための領域差し替えとアドレス変換 (ステップ 6) -------- */
 
-void vm_switch_user_region(uint64_t code_pa, uint64_t stack_pa)
+void vm_switch_user_region(uint64_t code_pa, uint64_t data_pa,
+                           uint64_t stack_pa)
 {
     cur_code_pa = code_pa;
+    cur_data_pa = data_pa;
     cur_stack_pa = stack_pa;
     apply_user_region();
     asm volatile("sfence.vma zero, zero");
@@ -137,17 +143,25 @@ uint64_t vm_current_code_pa(void)
     return cur_code_pa;
 }
 
+uint64_t vm_current_data_pa(void)
+{
+    return cur_data_pa;
+}
+
 uint64_t vm_current_stack_pa(void)
 {
     return cur_stack_pa;
 }
 
-/* 仮想アドレスの範囲は固定 (コード 2MB + スタック 2MB) で、
- * 中身の物理メモリだけが差し替わる */
+/* 仮想アドレスの範囲は固定 (コード / データ / スタック各 2MB)
+ * で、中身の物理メモリだけが差し替わる */
 uint64_t user_va_to_pa(uint64_t va)
 {
     if (va >= USER_CODE_VA && va < USER_CODE_VA + 0x200000ULL) {
         return cur_code_pa + (va - USER_CODE_VA);
+    }
+    if (va >= USER_DATA_VA && va < USER_DATA_VA + 0x200000ULL) {
+        return cur_data_pa + (va - USER_DATA_VA);
     }
     if (va >= USER_STACK_VA && va < USER_STACK_VA + 0x200000ULL) {
         return cur_stack_pa + (va - USER_STACK_VA);

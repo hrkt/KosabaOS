@@ -93,7 +93,8 @@ echo "== scenario C: user program =="
     > test-c.log 2>&1 || true
 out=$(strip_ticks < test-c.log)
 check_order "$out" "hello from KosabaOS (S-mode)" \
-    "[kernel] starting uprog.elf" "hello from user mode!" "z" \
+    "[kernel] starting uprog.elf" "hello from user mode!" \
+    "data probe: 8 x" "z" \
     "[kernel] back from user program" "w"
 report "C user mode round trip" $?
 
