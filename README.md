@@ -39,7 +39,7 @@ ABI 向けバイナリをツールとして OS 側に置く話は別途検討中
 - 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
 - ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
   trap.S、trap.c / trap.h、vm.c / vm.h、user.S (U モードへの出入り)、
-  uprog.c / user.ld (ユーザープログラム)、shell.c (シェル)、
+  uprog.c / user.ld (ユーザープログラム)、nish.c (シェル Nish)、
   embed.S (ELF 埋め込み)、
   elf.c / elf.h (ELF ローダ)、fs.c / fs.h (RAM ファイルシステム)、
   proc.c / proc.h / switch.S (タスクとコンテキストスイッチ)、

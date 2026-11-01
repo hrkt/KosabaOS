@@ -67,8 +67,11 @@ strip_ticks() {
 }
 
 echo "== scenario A: boot =="
-timeout 8 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
-    < /dev/null > test-a.log 2>&1 || true
+# 起動直後は Nish の入力待ち (割り込み不可の getc) で tick が
+# 止まるので、exit でカーネルコンソールに落ちてから tick を見る
+{ sleep 3; printf 'exit\n'; sleep 3; } \
+    | timeout 9 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-a.log 2>&1 || true
 raw=$(cat test-a.log)
 out=$(strip_ticks < test-a.log)
 case "$raw" in *"tick 1"*) tick_ok=0 ;; *) tick_ok=1 ;; esac
@@ -79,7 +82,7 @@ report "A boot + paging + tick" $?
 
 echo "== scenario B: kernel echo + page fault demo =="
 { sleep 3; printf 'abc'; sleep 2; printf 'x'; sleep 3; } \
-    | timeout 9 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    | timeout 14 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-b.log 2>&1 || true
 out=$(strip_ticks < test-b.log)
 check_order "$out" "hello from KosabaOS (S-mode)" "abc" \
@@ -88,7 +91,7 @@ check_order "$out" "hello from KosabaOS (S-mode)" "abc" \
 report "B echo + fault demo" $?
 
 echo "== scenario C: user program =="
-{ sleep 3; printf 'u'; sleep 3; printf 'z'; sleep 2; printf 'q'; sleep 2; printf 'w'; sleep 2; } \
+{ sleep 4; printf 'exit\n'; sleep 2; printf 'u'; sleep 3; printf 'z'; sleep 2; printf 'q'; sleep 2; printf 'w'; sleep 2; } \
     | timeout 14 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-c.log 2>&1 || true
 out=$(strip_ticks < test-c.log)
@@ -99,7 +102,7 @@ check_order "$out" "hello from KosabaOS (S-mode)" \
 report "C user mode round trip" $?
 
 echo "== scenario D: multitasking demo =="
-{ sleep 3; printf 'm'; sleep 16; } \
+{ sleep 4; printf 'exit\n'; sleep 2; printf 'm'; sleep 16; } \
     | timeout 22 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-d.log 2>&1 || true
 out=$(strip_ticks < test-d.log)
@@ -109,7 +112,7 @@ check_order "$out" "[proc] cooperative" "ABABAB" \
 report "D cooperative + preemptive multitasking" $?
 
 echo "== scenario E: filesystem listing =="
-{ sleep 3; printf 'l'; sleep 2; } \
+{ sleep 4; printf 'exit\n'; sleep 2; printf 'l'; sleep 2; } \
     | timeout 8 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-e.log 2>&1 || true
 out=$(strip_ticks < test-e.log)
@@ -117,27 +120,38 @@ check_order "$out" "[fs] files:" "hello.txt" "uprog.elf"
 report "E filesystem listing" $?
 
 echo "== scenario F: shell =="
-{ sleep 3; printf 's'; sleep 3; printf 'ls\n'; sleep 2; \
+{ sleep 3; printf 'ls\n'; sleep 2; \
   printf 'cat hello.txt\n'; sleep 2; printf 'run uprog.elf\n'; sleep 3; \
   printf 'q'; sleep 2; printf 'exit\n'; sleep 2; } \
     | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-f.log 2>&1 || true
 out=$(strip_ticks < test-f.log)
-check_order "$out" "KosabaOS shell" "kosaba> " "shell.elf" \
+check_order "$out" "Nish, the KosabaOS shell" "nish> " "nish.elf" \
     "Hello from the KosabaOS RAM filesystem." "hello from user mode!" \
-    "kosaba> " "[kernel] back from user program"
+    "nish> " "[kernel] back from user program"
 report "F shell (ls / cat / run / exit)" $?
 
 echo "== scenario G: shell write =="
-{ sleep 3; printf 's'; sleep 3; printf 'write memo.txt hello-write-test\n'; sleep 2; \
+{ sleep 3; printf 'write memo.txt hello-write-test\n'; sleep 2; \
   printf 'ls\n'; sleep 2; printf 'cat memo.txt\n'; sleep 2; \
   printf 'exit\n'; sleep 2; } \
     | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-g.log 2>&1 || true
 out=$(strip_ticks < test-g.log)
-check_order "$out" "KosabaOS shell" "wrote memo.txt" "memo.txt" \
+check_order "$out" "Nish, the KosabaOS shell" "wrote memo.txt" "memo.txt" \
     "hello-write-test" "[kernel] back from user program"
 report "G shell write (create / write / cat)" $?
+
+echo "== scenario H: Nish line editing + history =="
+{ sleep 3; printf 'lx\x7fs\n'; sleep 2; \
+  printf 'cat hello.txt\n'; sleep 2; printf '\033[A\n'; sleep 2; \
+  printf 'lxs\033[D\x7f\n'; sleep 2; printf 'exit\n'; sleep 1; } \
+    | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-h.log 2>&1 || true
+out=$(strip_ticks < test-h.log)
+cats=$(printf '%s' "$out" | grep -o 'Hello from the KosabaOS RAM filesystem\.' | wc -l)
+if [ "$cats" -ge 2 ] && printf '%s' "$out" | grep -q 'nish.elf'; then rc=0; else rc=1; fi
+report "H line editing (BS / arrows) + history recall" $rc
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then

@@ -200,3 +200,36 @@ void proc_demo(void)
     preempt_enabled = 0;
     uart_puts("\n[proc] all tasks done\n");
 }
+
+/* タスク一覧をテキストで書く (ps コマンド / SYS_TASKS 用)。
+ * 戻り値は書いたバイト数 */
+int proc_list(char *buf, unsigned long max)
+{
+    static const char *names[] = { "free", "ready", "done" };
+    unsigned long n = 0;
+    int i;
+
+    for (i = 0; i < NTASK; i++) {
+        const char *s = "task ";
+        const char *st = names[tasks[i].state];
+        while (*s != '\0' && n < max) {
+            buf[n++] = *s++;
+        }
+        if (n < max) {
+            buf[n++] = (char)('0' + i);
+        }
+        if (n < max) {
+            buf[n++] = ':';
+        }
+        if (n < max) {
+            buf[n++] = ' ';
+        }
+        while (*st != '\0' && n < max) {
+            buf[n++] = *st++;
+        }
+        if (n < max) {
+            buf[n++] = '\n';
+        }
+    }
+    return (int)n;
+}

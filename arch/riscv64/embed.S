@@ -13,8 +13,8 @@ user_prog_start:
     .incbin "user.elf"
 user_prog_end:
 
-    .globl shell_prog_start
-    .globl shell_prog_end
-shell_prog_start:
-    .incbin "shell.elf"
-shell_prog_end:
+    .globl nish_prog_start
+    .globl nish_prog_end
+nish_prog_start:
+    .incbin "nish.elf"
+nish_prog_end:

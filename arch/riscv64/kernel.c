@@ -59,6 +59,12 @@ void kmain(void)
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
     uart_puts("hello from KosabaOS (S-mode)\n");
 
+    /* シェル Nish を最初に起動する (主役化)。
+     * Nish で exit すると下のカーネルコンソールに落ちる */
+    start_user_named("nish.elf");
+    uart_puts("[kernel] kernel console "
+              "(u: uprog, s: Nish, m: multitask, l: files, x: fault)\n");
+
     for (;;) {
         char c = uart_getc();  /* 1 文字届くまで待って受け取る */
         if (c == 'x') {
@@ -69,7 +75,7 @@ void kmain(void)
             continue;
         }
         if (c == 's') {
-            start_user_named("shell.elf");  /* 's' キーでシェル */
+            start_user_named("nish.elf");  /* 's' キーで Nish */
             continue;
         }
         if (c == 'm') {

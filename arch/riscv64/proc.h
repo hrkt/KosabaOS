@@ -11,6 +11,7 @@ struct context {
 };
 
 void proc_demo(void);   /* 'm' キーで起動するマルチタスクのデモ */
+int proc_list(char *buf, unsigned long max);  /* タスク一覧 (ps 用) */
 
 /* スケジューラ (proc.c)。trap.c のタイマ処理からも使う */
 extern int sched_active;

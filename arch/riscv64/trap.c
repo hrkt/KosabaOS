@@ -186,6 +186,7 @@ void trap_init(void)
 #define SYS_EXEC 8
 #define SYS_CREATE 9
 #define SYS_WRITE 10
+#define SYS_TASKS 11
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -452,6 +453,18 @@ static int do_syscall(uint64_t *frame)
     }
     case SYS_EXEC:
         return do_exec(frame);
+    case SYS_TASKS: {
+        char kbuf[256];
+        int n = proc_list(kbuf, sizeof(kbuf));
+        if (copy_to_user(frame[FRAME_A0],
+                         (const unsigned char *)kbuf,
+                         (uint64_t)n) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            frame[FRAME_A0] = (uint64_t)n;
+        }
+        break;
+    }
     case SYS_CREATE: {
         char name[32];
         int i;

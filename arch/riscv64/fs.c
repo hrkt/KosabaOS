@@ -28,8 +28,8 @@ static uint64_t arena_used = 0;
 /* embed.S が用意する埋め込み ELF たち */
 extern unsigned char user_prog_start[];
 extern unsigned char user_prog_end[];
-extern unsigned char shell_prog_start[];
-extern unsigned char shell_prog_end[];
+extern unsigned char nish_prog_start[];
+extern unsigned char nish_prog_end[];
 
 static int name_eq(const char *a, const char *b)
 {
@@ -121,8 +121,8 @@ void fs_init(void)
 
     fs_add("hello.txt", (const unsigned char *)hello, sizeof(hello) - 1);
     fs_add("uprog.elf", user_prog_start, elf_size);
-    fs_add("shell.elf", shell_prog_start,
-           (uint64_t)(shell_prog_end - shell_prog_start));
+    fs_add("nish.elf", nish_prog_start,
+           (uint64_t)(nish_prog_end - nish_prog_start));
 }
 
 int fs_count(void)
