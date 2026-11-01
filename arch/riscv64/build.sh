@@ -26,6 +26,9 @@ echo "build: QEMU=$QEMU"
 # -march/-mabi are pinned on purpose: toolchain defaults differ
 # (riscv64-linux-gnu-gcc defaults to rv64, xPack riscv-none-elf-gcc
 # defaults to rv32), and this kernel is rv64i / lp64.
-"$CC" -march=rv64i -mabi=lp64 -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S
+# -mcmodel=medany: the kernel sits at 0x80200000, outside the range
+# the default code model can address; medany uses PC-relative
+# addressing instead. -ffreestanding: no libc, no hosted assumptions.
+"$CC" -march=rv64i -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true

@@ -5,18 +5,20 @@
 アーキテクチャ依存のコードは `arch/<arch>/` に閉じ込め、
 共通コードはその外に置く。
 
-## 現状: arch/riscv64 の最小カーネル（ドラフト）
+## 現状: arch/riscv64 の最小カーネル
 
-xv6 の次の一歩として用意した最小版。まだコミットも push もしていない
-ローカルなドラフト。
-
-- 起動: QEMU virt + デフォルト BIOS (OpenSBI v1.3) の下で S-mode に入り、
-  レガシー SBI `sbi_console_putchar` (EID 1) で1行出して `wfi` で止まる
+- 起動: QEMU virt + デフォルト BIOS (OpenSBI) の下で S-mode に入る
+- 構成: `arch/riscv64/start.S` がスタックと .bss の準備をして
+  C の `kmain` (`kernel.c`) を呼び、UART ドライバ (`uart.c`) 越しに
+  1 行出し、その後は打たれたキーをそのまま打ち返す (echo)
 - 実行: `./build.sh` または `./build.sh riscv64`
   （ビルドして QEMU で5秒だけ起動）
-- 確認済み出力: `hello from KosabaOS (S-mode)`
-- ファイル: `arch/riscv64/start.S` (全体約30行),
-  `arch/riscv64/kernel.ld` (0x80200000), `arch/riscv64/run.log`
+- 確認済み出力: `hello from KosabaOS (S-mode)` の後に echo が続く
+- ファイル: `arch/riscv64/` に start.S、kernel.c、uart.c / uart.h、
+  kernel.ld (0x80200000)、build.sh、run.log、instructions.md
+  (命令・レジスタ・メモリの早見表)
+- 先の計画: `doc/roadmap-multitasking.md`（メモリ保護付き
+  マルチタスクへの計画案）
 
 はまった点（再現するときの注意）:
 - `la` はデフォルトで GOT 経由になり、裸のバイナリでは動かない。PC相対の
@@ -25,9 +27,8 @@ xv6 の次の一歩として用意した最小版。まだコミットも push �
   OpenSBI のジャンプ先がコードにならない。`--build-id=none` で回避
 - ELF を `-kernel` で渡すと OpenSBI の Next Address がずれる場合があったため、
   `objcopy -O binary` した `kernel.bin` を渡している
-
-次に広げる候補: SBI Debug Console (DBCN) への置き換え、UART 直接出力、
-キー入力の受け取り、のいずれか。xv6 の `sh.c` を先に読むルートも残っている。
+- C のコードは `-mcmodel=medany` でビルドする。デフォルトのコードモデル
+  では 0x80200000 のような住所を扱えない
 
 ## 必要なツール（自分でインストールする）
 
