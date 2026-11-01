@@ -25,16 +25,15 @@ echo "build: QEMU=$QEMU"
 
 # -march/-mabi are pinned on purpose: toolchain defaults differ
 # (riscv64-linux-gnu-gcc defaults to rv64, xPack riscv-none-elf-gcc
-# defaults to rv32), and this kernel is rv64i / lp64.
-# _zicsr: since step 2 the kernel uses CSR instructions (csrr/csrw),
-# which current binutils assigns to the Zicsr extension; without it
-# the assembler rejects them.
+# defaults to rv32). Target baseline is RV64G (decided 2026-11-01,
+# see doc/roadmap-multitasking.md): G = I+M+A+F+D, so multiply and
+# divide are real instructions and libgcc helpers are not needed.
+# G also covers the Zicsr extension the CSR instructions belong to.
+# The ABI stays lp64 (integer-only calling convention; the kernel
+# uses no floating point).
 # -mcmodel=medany: the kernel sits at 0x80200000, outside the range
 # the default code model can address; medany uses PC-relative
 # addressing instead. -ffreestanding: no libc, no hosted assumptions.
-# -lgcc: base rv64i has no divide instruction (that is the M
-# extension), so 64-bit / and % compile into libgcc calls
-# (__udivdi3/__umoddi3); link the toolchain's libgcc for them.
-"$CC" -march=rv64i_zicsr -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c -lgcc
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true

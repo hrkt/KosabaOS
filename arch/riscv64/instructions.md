@@ -398,8 +398,12 @@ OS に飛ばされる) になることがある決まり。`.align` や
 CSR は汎用レジスタとは別枠の、CPU の状態・設定レジスタ群
 (stvec、scause、sepc、stval、sie、sstatus、time など)。
 読み書きには専用命令が要る。近年の binutils では CSR 命令は
-Zicsr 拡張に分類されるので、ビルド時は `-march=rv64i_zicsr` と
-指定している (build.sh 参照)。
+Zicsr 拡張に分類される。KosabaOS の前提は RV64G (2026-11-01
+決定) で、G には Zicsr が含まれるため、ビルドは
+`-march=rv64gc` を指定している (build.sh 参照)。
+ついでに G の M 拡張のおかげで、掛け算・割り算も命令で
+実行される (以前の rv64i 前提では libgcc の補助関数を
+リンクしていた)。
 
 ### csrr — CSR Read (疑似命令)
 
