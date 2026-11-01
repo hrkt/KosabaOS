@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KosabaOS ステップ 6 まとめ — シェルとコンパイラ、ゴールの中心へ</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --muted: #5b6472;
+    --accent: #2563eb;
+    --accent-soft: #eef4ff;
+    --line: #d9dee7;
+    --code-bg: #14181f;
+    --code-ink: #d7e0ee;
+    --ok: #15803d;
+    --warn-bg: #fff7e6;
+    --warn-line: #f0c46c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+                 "Noto Sans JP", sans-serif;
+    color: var(--ink);
+    line-height: 1.8;
+    background: #f6f7f9;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 20px 64px;
+  }
+  header.hero {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+    color: #fff;
+    border-radius: 14px;
+    padding: 28px 30px;
+    margin-bottom: 28px;
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 1.7rem; line-height: 1.4; }
+  header.hero p { margin: 0; opacity: .92; }
+  section.card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 22px;
+  }
+  h2 {
+    font-size: 1.3rem;
+    margin: 0 0 6px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+  }
+  h2 .step {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 999px;
+    font-size: .8rem;
+    padding: 2px 12px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  h3 { font-size: 1.05rem; margin: 1.4em 0 .4em; }
+  p { margin: .6em 0; }
+  .lead { color: var(--muted); font-size: 1.02rem; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #eef1f5;
+    border-radius: 5px;
+    padding: 0 .35em;
+    font-size: .92em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: .95rem;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--accent-soft); }
+  .flow {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;
+    margin: 14px 0;
+  }
+  .flow .box {
+    background: var(--accent-soft);
+    border: 1px solid #c7dbff;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: .92rem;
+    text-align: center;
+  }
+  .flow .arrow { align-self: center; color: var(--muted); }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+  }
+  .ok { color: var(--ok); font-weight: 600; }
+  footer { color: var(--muted); font-size: .9rem; text-align: center; }
+</style>
+
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <h1>KosabaOS ステップ 6 まとめ</h1>
+  <p>ELF ローダ、ファイルシステム、ユーザー空間のシェルを積み上げて、
+     自作コンパイラ IwaC が OS の上で動き、Hello World を
+     コンパイル・実行するところまで。</p>
+</header>
+
+<p class="lead">ステップ 6 のテーマは「全体ゴールへの接続」。
+前のステップまでで、OS は「プログラムを守って動かす」土台が
+できていました。このステップでは、プログラムを<b>名前で扱い</b>、
+<b>ファイルに読み書き</b>し、<b>シェルから別のプログラムを実行</b>
+できるようにします。最後に、もう 1 つの自作プロジェクトである
+C コンパイラ IwaC がこの OS の上で走り、ゴールだった
+「OS のシェルからコンパイラで Hello World」が QEMU 上で
+成立しました。</p>
+
+<section class="card" id="elf">
+  <h2><span class="step">6-1</span>ELF ローダ — ファイルが自分の配置を申告する</h2>
+  <p>それまでユーザープログラムは「平らなバイナリを先頭から実行」
+  する形でした。これを <b>ELF</b> という標準のプログラム形式で
+  扱うように変えました。ELF ファイルの先頭には「入口はここ」
+  「この部分をメモリのこの住所へ置く」という申告が書いてあり、
+  OS 側のローダ（<code>elf.c</code>）はそれを読んで配置します。</p>
+  <ul>
+    <li>ヘッダを検証する（形式、64 ビット、RISC-V 用か）</li>
+    <li>セグメントごとにコピーし、足りない分はゼロ埋め（.bss）</li>
+    <li>ユーザー領域の範囲外を指すセグメントは拒否する</li>
+  </ul>
+  <p class="note">効能：プログラムの置き場所が「OS 側の決め打ち」から
+  「ファイル側の申告」に変わり、コンパイラが作った ELF を
+  そのまま受け取れるようになりました。これが IwaC との
+  合流の前提です。</p>
+</section>
+
+<section class="card" id="fs">
+  <h2><span class="step">6-2</span>RAM ファイルシステム — 名前で引けるファイル</h2>
+  <p>ディスクはまだ無いので、ファイルは全部メモリの中に置く
+  一番単純なファイルシステム（<code>fs.c</code>）を作りました。
+  「名前 → データとサイズ」の表と、実体を詰める大きな
+  バイト配列（arena）の組み合わせです。</p>
+  <ul>
+    <li>初期ファイル：<code>hello.txt</code> と、実行プログラム
+        <code>uprog.elf</code></li>
+    <li>プログラム実行は、埋め込みの直参照から
+        「ファイルシステムから名前で引く」形に</li>
+    <li><code>l</code> キーでファイルの一覧（名前とサイズ）が見える</li>
+  </ul>
+</section>
+
+<section class="card" id="shell">
+  <h2><span class="step">6-3</span>シェル — OS を「使う」場所ができた</h2>
+  <p>システムコール仕様を v1 に拡張し、ファイルを開く・読む
+  操作（open / read / close / readdir）を足しました。
+  その上で、ユーザーモードで動く対話プログラムとしての
+  <b>シェル</b>（<code>shell.c</code>）を実装しました。</p>
+  <div class="flow"><div class="box">help — コマンド一覧</div><div class="arrow">→</div><div class="box">ls — ファイル一覧</div><div class="arrow">→</div><div class="box">cat — ファイル表示</div></div>
+  <pre><code>[kernel] starting shell.elf
+KosabaOS shell. Type 'help'.
+kosaba&gt; ls
+  hello.txt
+  uprog.elf
+  shell.elf
+kosaba&gt; cat hello.txt
+Hello from the KosabaOS RAM filesystem.</code></pre>
+  <p>シェル自体も「ただのユーザープログラム」で、文字の
+  出し入れもファイル読みも、全部システムコール経由です。</p>
+</section>
+
+<section class="card" id="exec">
+  <h2><span class="step">6-4</span>exec — シェルからプログラムを実行して戻る</h2>
+  <p>シェルの <code>run &lt;名前&gt;</code> を支える仕組みが
+  <b>exec</b>（システムコール 8 番）です。山場は「親（シェル）の
+  途中状態を壊さずに、子を実行して、子の終了後に親の続きへ
+  戻る」ことで、こう実現しました：</p>
+  <div class="flow"><div class="box">親のレジスタ・sepc・sp<br>を退避</div><div class="arrow">→</div><div class="box">同じ仮想アドレスに<br>子の物理領域を差し替え</div><div class="arrow">→</div><div class="box">子を実行</div><div class="arrow">→</div><div class="box">子の exit / 保護違反で<br>退避した親の文脈に戻す</div></div>
+  <p>親と子は同じ仮想アドレス（0x40000000）を使うので、どちらの
+  プログラムも同じ前提で作れます。割り切りとして「exec は
+  1 段まで」「exec で開いていたファイルは閉じる」を
+  仕様に明記しました。</p>
+  <pre><code>kosaba&gt; run uprog.elf
+hello from user mode!
+kosaba&gt; </code></pre>
+</section>
+
+<section class="card" id="write">
+  <h2><span class="step">6-5</span>書く系システムコール — コンパイラの出口</h2>
+  <p>コンパイラは「ソースを読んで、生成物を書く」プログラム
+  です。読みの窓口に続いて、書きの窓口を足しました：</p>
+  <ul>
+    <li><b>create（9 番）</b>：ファイルを作る（同名は空に）。
+        作ったファイルは 32KB まで書ける</li>
+    <li><b>write（10 番）</b>：末尾へ書く。入る分だけ書いて
+        書けたバイト数を返す</li>
+    <li>fd には読み用／書き用の区別があり、逆向きはエラー</li>
+  </ul>
+  <p>シェルにも <code>write memo.txt hello</code> のような
+  コマンドが付き、その場でファイルを作って cat で
+  読み戻せるようになりました。</p>
+</section>
+
+<section class="card" id="data">
+  <h2><span class="step">6-6</span>データ専用領域 — IwaC の指摘で見つかった食い違い</h2>
+  <p>IwaC を OS に載せる作業の中で、本物の不具合が見つかり
+  ました。コード領域は「読み + 実行のみ」だったのに、
+  .data / .bss（書き換える静的変数）もそこに置く約束に
+  なっていたため、<b>静的変数に書くプログラムは
+  store page fault で落ちて</b>いたのです。自前のプログラムは
+  全部スタックで済ませていたので踏んでいませんでした。</p>
+  <p>直し方は 2 案から検討して、(b) を採用：</p>
+  <ul>
+    <li>(a) コード領域を読み書き実行可にする — 簡単だが
+        W^X（書ける場所では実行できない守り）を手放す</li>
+    <li><b>(b) データ専用の読み書き領域をもう 1 枚足す</b> —
+        本筋の形。ユーザーの住所は 3 領域構成になりました：
+        コード 0x40000000（読み + 実行）、データ 0x40200000
+        （読み書き）、スタック 0x40400000（読み書き）。ELF
+        ローダはセグメントの住所で行き先を振り分けます</li>
+  </ul>
+  <p>回帰防止に、uprog が静的変数を書き換えて
+  <code>data probe: 8 x</code> と表示する確認を
+  自動テストへ組み込みました。</p>
+</section>
+
+<section class="card" id="goal">
+  <h2><span class="step">到達点</span>OS の上でコンパイラが回った</h2>
+  <p>IwaC 側が新しい配置に追随し、OS 本線は無改造のまま、
+  両方を組み合わせて検証した結果がこれです：</p>
+  <pre><code>kosaba&gt; run iwac.elf
+kosaba&gt; run hello.elf
+Hello, World!
+kosaba&gt; </code></pre>
+  <p>自作 OS のシェルから、自作コンパイラを実行し、
+  ソース（hello.c）から生成された Hello World が OS の上で
+  動き、シェルに戻ってくる。<b>プロジェクト開始時に描いた
+  成功イメージの中心が、QEMU の上で成立しました。</b></p>
+  <p class="ok">✓ ELF ローダ（6-1）　✓ RAM ファイルシステム（6-2）　✓ シェルと exec（6-3 / 6-4）　✓ 書く系 syscall（6-5）　✓ データ領域（6-6）　✓ IwaC 合流</p>
+</section>
+
+<section>
+  <h2>検証のしかた — 自動テスト全 7 件</h2>
+  <p><code>test.sh</code> がビルドから QEMU 起動、キー入力の
+  脚本実行、出力の順序チェックまでを行います。シナリオは
+  A（起動）/ B（echo とフォルト）/ C（ユーザープログラム、
+  静的変数の probe 含む）/ D（マルチタスク）/ E（FS 一覧）/
+  F（シェルの ls・cat・run・exit）/ G（シェルの write → cat
+  往復）で、現在 <b>ALL PASS</b> です。自分の WSL2 環境でも
+  同じ脚本で確認できます。</p>
+  <h2>運用の決め事と、残っていること</h2>
+  <ul>
+    <li>clone は KosabaOS と IwaC を<b>セット</b>で実施する
+      （現時点の運用。OS 側の ABI 定義と、ABI 向けバイナリを
+      ツールとして置く話は別途検討）</li>
+    <li>残る大きな工程は<b>実機移植</b>：ボード選定・購入と、
+      起動方式・UART・メモリ配置の実機差分への対応</li>
+  </ul>
+  <p>計画と決定事項は <code>doc/roadmap-multitasking.md</code>、
+     システムコール仕様は <code>doc/syscalls.md</code>、
+     前のまとめは <a href="steps-1-3.html">ステップ 1〜3</a> と
+     <a href="steps-4-5.html">ステップ 4〜5</a> にあります。</p>
+</section>
+
+<footer>
+  KosabaOS ドキュメント — ステップ 6 まとめ（2026-11-02 時点、コミット 2d60413 までの内容。IwaC 側の合流は IwaC リポジトリの 78010c8 / 9a7da91 / a05009a）
+</footer>
+
+</main>
+</body>
+</html>
