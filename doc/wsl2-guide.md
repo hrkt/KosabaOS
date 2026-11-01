@@ -19,11 +19,13 @@ wsl --install -d Ubuntu
 
 ```sh
 sudo apt update
-sudo apt install -y git gcc-riscv64-linux-gnu qemu-system-misc
+sudo apt install -y git gcc-riscv64-linux-gnu qemu-system-riscv
 ```
 
 - `gcc-riscv64-linux-gnu`: クロスコンパイラ (`riscv64-linux-gnu-gcc`)
-- `qemu-system-misc`: `qemu-system-riscv64` と OpenSBI ファームウェア
+- `qemu-system-riscv`: `qemu-system-riscv64` と OpenSBI ファームウェア
+  (Ubuntu の版が古い場合は `qemu-system-misc` に含まれています。
+  その場合はそちらを入れてください)
 
 これが一番手軽な方法です。`build.sh` は、プロジェクト専用の
 `tools/` が無ければシステム側のツールを自動で使うので、
