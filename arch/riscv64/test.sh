@@ -81,7 +81,7 @@ order_ok=$?
 report "A boot + paging + tick" $?
 
 echo "== scenario B: kernel echo + page fault demo =="
-{ sleep 3; printf 'abc'; sleep 2; printf 'x'; sleep 3; } \
+{ sleep 4; printf 'exit\n'; sleep 2; printf 'abc'; sleep 2; printf 'x'; sleep 3; } \
     | timeout 14 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-b.log 2>&1 || true
 out=$(strip_ticks < test-b.log)
