@@ -332,11 +332,12 @@ void lcd_tick_draw(uint64_t seconds) {
         while (m > 0) buf[n++] = rev[--m];
     }
     buf[n] = '\0';
-    /* 前回の桁の方が多ければ、はみ出し分を背景で消す */
-    if (tick_digits > n) {
-        lcd_fill_rect(tick_x + 6 * tick_scale * n, tick_y,
-                      6 * tick_scale * (tick_digits - n), 7 * tick_scale,
-                      tick_bg);
+    /* 前回の数字を丸ごと背景で消してから描く。lcd_draw_text は
+     * 点の部分しか塗らないので、消さずに重ねると前の数字が
+     * 残って数秒で真っ平らな四角になってしまう */
+    if (tick_digits > 0) {
+        lcd_fill_rect(tick_x, tick_y, 6 * tick_scale * tick_digits,
+                      7 * tick_scale, tick_bg);
     }
     tick_digits = n;
     lcd_draw_text(tick_x, tick_y, buf, tick_scale, tick_fg);
