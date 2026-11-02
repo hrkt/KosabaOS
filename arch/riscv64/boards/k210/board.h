@@ -17,4 +17,15 @@
 #define BOARD_HELLO_SUFFIX "(k210)"
 #define BOARD_FEATURE_SMODE_PATH 0
 
+/* M モードのトラップ (CLINT タイマ割り込み) が使えるか。
+ * K210 はファームウェアなしで M のまま動くので、タイマは
+ * SBI ではなく CLINT の mtimecmp を直接叩く (mtrap.c)。 */
+#define BOARD_FEATURE_MMODE_TRAP 1
+
+/* mtrap.c: M モードトラップとタイマ割り込みの初期化 */
+void mtrap_init(void);
+
+/* uart.c: sysctl 読み戻しによる CPU クロック (Hz) */
+unsigned long board_cpu_freq(void);
+
 #endif

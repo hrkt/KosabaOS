@@ -18,4 +18,7 @@
  * 使えないボードでは 0 にして、kmain がその初期化と起動を飛ばす。 */
 #define BOARD_FEATURE_SMODE_PATH 1
 
+/* M モードのトラップは使わない (virt では SBI + S モードの trap)。 */
+#define BOARD_FEATURE_MMODE_TRAP 0
+
 #endif

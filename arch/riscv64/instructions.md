@@ -494,3 +494,9 @@ csrrw sp, sscratch, sp   ; sp と sscratch を交換
 トラップから元の処理に戻る命令。飛び先は sepc の住所で、
 割り込み許可などの状態もトラップ前の状態に戻る。
 trap.S の最後で、退避したレジスタを全部復元してから使う。
+
+### mret — Machine Return
+
+sret の M モード版。飛び先は mepc の住所で、状態は
+mstatus の MPIE/MIE などが元に戻る。K210 の入口
+(boards/k210/mtrap.S) が M モードのトラップから戻るのに使う。

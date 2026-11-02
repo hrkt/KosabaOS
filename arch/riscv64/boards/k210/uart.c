@@ -48,8 +48,9 @@
 
 /* sysctl の読み戻し値から CPU クロック (Hz) を計算する。
  * clk_sel0 の bit0 が 0 なら水晶そのまま、1 なら PLL0 を
- * 分周セレクタ (bits[2:1]) で割ったもの (step1 で実測確認)。 */
-static uint32_t cpu_freq(void)
+ * 分周セレクタ (bits[2:1]) で割ったもの (step1 で実測確認)。
+ * mtrap.c (タイマの分周計算) からも使うため board.h で公開。 */
+unsigned long board_cpu_freq(void)
 {
     uint32_t pll0 = SYSCTL_PLL0;
     uint32_t clk_sel0 = SYSCTL_CLK_SEL0;
@@ -69,7 +70,7 @@ void uart_init(void)
 {
     FPIOA_IO4 = FPIOA_VAL_UARTHS_RX;
     FPIOA_IO5 = FPIOA_VAL_UARTHS_TX;
-    UARTHS_DIV = cpu_freq() / 115200 - 1;
+    UARTHS_DIV = board_cpu_freq() / 115200 - 1;
     UARTHS_TXCTRL = 1;
     UARTHS_RXCTRL = 1;
 }

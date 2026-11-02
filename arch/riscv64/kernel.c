@@ -63,6 +63,9 @@ void kmain(void)
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
 #endif
+#if BOARD_FEATURE_MMODE_TRAP
+    mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
+#endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
     uart_puts("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
