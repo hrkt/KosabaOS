@@ -416,6 +416,9 @@ OS に飛ばされる) になることがある決まり。`.align` や
 
 ## CSR とトラップまわりの命令
 
+（特権モード U/S/M という概念自体の説明は、学習用ドキュメント
+`doc/privilege-modes.md` にまとめてある）
+
 CSR は汎用レジスタとは別枠の、CPU の状態・設定レジスタ群
 (stvec、scause、sepc、stval、sie、sstatus、time など)。
 読み書きには専用命令が要る。近年の binutils では CSR 命令は
