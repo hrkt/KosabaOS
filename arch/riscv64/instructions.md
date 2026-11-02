@@ -432,7 +432,13 @@ CSR の値を汎用レジスタに読む。
 
 ```asm
 csrr a5, scause   ; 例外・割り込みの原因を読む
+csrr t0, mhartid  ; 自分が何番の hart かを読む (M モード専用 CSR)
 ```
+
+M モード専用の CSR もある。`mhartid` は hart 番号の読み専用
+レジスタで、K210 の入口 (boards/k210/start.S) が hart1 を
+駐車させる判定に使う。`mtvec` は M モードのトラップ先で、
+同じく K210 の入口が事故止めに設定する (stvec の M 版)。
 
 ### csrw — CSR Write (疑似命令)
 

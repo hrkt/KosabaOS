@@ -1,6 +1,11 @@
 #!/bin/sh
 # Build the riscv64 kernel and boot it in QEMU for 5 seconds.
 #
+# Board selection: BOARD=<name> picks boards/<name>/ (board.h,
+# kernel.ld, start.S, uart.c). Default is virt (QEMU). Board-specific
+# parts live only in boards/; the common code sees board.h alone.
+# Example: BOARD=k210 ./build.sh   (build only; flashing is separate)
+#
 # Toolchain selection (first match wins):
 #   1. $CC / $QEMU environment variables, if set
 #   2. The project-local tools in ../../../tools (not committed to git,
@@ -20,8 +25,14 @@ fi
 CC=${CC:-riscv64-linux-gnu-gcc}
 OBJCOPY=${OBJCOPY:-riscv64-linux-gnu-objcopy}
 QEMU=${QEMU:-qemu-system-riscv64}
+BOARD=${BOARD:-virt}
+if [ ! -d "boards/$BOARD" ]; then
+    echo "build: unknown BOARD=$BOARD (no boards/$BOARD/)" >&2
+    exit 1
+fi
 echo "build: CC=$CC"
 echo "build: QEMU=$QEMU"
+echo "build: BOARD=$BOARD"
 
 # -march/-mabi are pinned on purpose: toolchain defaults differ
 # (riscv64-linux-gnu-gcc defaults to rv64, xPack riscv-none-elf-gcc
@@ -39,11 +50,12 @@ echo "build: QEMU=$QEMU"
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o user.elf uprog.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o nish.elf nish.c
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T kernel.ld -o kernel.elf start.S kernel.c uart.c trap.S trap.c vm.c user.S embed.S proc.c switch.S elf.c fs.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf "boards/$BOARD/start.S" kernel.c "boards/$BOARD/uart.c" trap.S trap.c vm.c user.S embed.S proc.c switch.S elf.c fs.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes
-# Ctrl-C stop working while it runs).
-if [ -z "${BUILD_NO_RUN:-}" ]; then
+# Ctrl-C stop working while it runs). Non-virt boards have no QEMU
+# boot check here; their kernel.bin is flashed to the real board.
+if [ -z "${BUILD_NO_RUN:-}" ] && [ "$BOARD" = virt ]; then
     timeout 5 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic || true
 fi

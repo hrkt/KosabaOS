@@ -14,6 +14,7 @@
  */
 
 #include <stdint.h>
+#include "board.h"
 #include "uart.h"
 #include "trap.h"
 #include "vm.h"
@@ -21,9 +22,12 @@
 #include "elf.h"
 #include "fs.h"
 
+#if BOARD_FEATURE_SMODE_PATH
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
 extern void user_launch(unsigned long entry, unsigned long user_stack_top);
+#endif
 
+#if BOARD_FEATURE_SMODE_PATH
 /* ユーザープログラムを名前で実行する (ステップ 4 で導入、
  * ELF 化とファイルシステム経由の取得はステップ 6)。
  * ファイルシステムから名前で引いて、ローダ (elf.c) で配置
@@ -50,23 +54,29 @@ static void start_user_named(const char *name)
     user_launch(entry, USER_STACK_TOP_VA);
     uart_puts("\n[kernel] back from user program\n");
 }
+#endif /* BOARD_FEATURE_SMODE_PATH */
 
 void kmain(void)
 {
     uart_init();
+#if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
+#endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
-    uart_puts("hello from KosabaOS (S-mode)\n");
+    uart_puts("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
+#if BOARD_FEATURE_SMODE_PATH
     /* シェル Nish を最初に起動する (主役化)。
      * Nish で exit すると下のカーネルコンソールに落ちる */
     start_user_named("nish.elf");
     uart_puts("[kernel] kernel console "
               "(u: uprog, s: Nish, m: multitask, l: files, x: fault)\n");
+#endif
 
     for (;;) {
         char c = uart_getc();  /* 1 文字届くまで待って受け取る */
+#if BOARD_FEATURE_SMODE_PATH
         if (c == 'x') {
             vm_fault_demo();   /* 'x' キーでページフォルトのデモ */
         }
@@ -82,6 +92,7 @@ void kmain(void)
             proc_demo();       /* 'm' キーでマルチタスクのデモ */
             continue;
         }
+#endif
         if (c == 'l') {
             uart_putc('\n');
             fs_list();         /* 'l' キーでファイル一覧 */
