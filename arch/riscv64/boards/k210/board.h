@@ -22,6 +22,11 @@
  * SBI ではなく CLINT の mtimecmp を直接叩く (mtrap.c)。 */
 #define BOARD_FEATURE_MMODE_TRAP 1
 
+/* 付属 LCD (ST7789) へ起動の進み具合を表示するか。
+ * ドライバは boards/k210/lcd.c、公開部分は lcd.h。
+ * 経緯は doc/k210-lcd-driver.md。 */
+#define BOARD_FEATURE_LCD 1
+
 /* mtrap.c: M モードトラップとタイマ割り込みの初期化 */
 void mtrap_init(void);
 

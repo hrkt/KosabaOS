@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "board.h"
 #include "uart.h"
+#include "lcd.h"
 
 #define REG64(addr) (*(volatile uint64_t *)(addr))
 #define CLINT_MTIME    REG64(0x0200BFF8)
@@ -83,6 +84,7 @@ void mtrap_handler(void)
             uart_puts("tick ");
             put_dec(tick_seconds);
             uart_putc('\n');
+            lcd_tick_draw(tick_seconds);  /* LCD の tick 表示も進める */
         }
         return;
     }

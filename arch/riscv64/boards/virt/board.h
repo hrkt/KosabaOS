@@ -21,4 +21,7 @@
 /* M モードのトラップは使わない (virt では SBI + S モードの trap)。 */
 #define BOARD_FEATURE_MMODE_TRAP 0
 
+/* LCD は無い (ステータス表示はシリアルだけ)。 */
+#define BOARD_FEATURE_LCD 0
+
 #endif

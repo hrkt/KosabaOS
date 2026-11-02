@@ -21,6 +21,9 @@
 #include "proc.h"
 #include "elf.h"
 #include "fs.h"
+#if BOARD_FEATURE_LCD
+#include "lcd.h"  /* ボード付属 LCD へのステータス表示 (k210 のみ) */
+#endif
 
 #if BOARD_FEATURE_SMODE_PATH
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
@@ -59,6 +62,16 @@ static void start_user_named(const char *name)
 void kmain(void)
 {
     uart_init();
+#if BOARD_FEATURE_LCD
+    /* LCD にタイトルと最初のステージを出す。以後のステージは
+     * 各初期化が終わるたびに 1 行ずつ足す。最後に tick 表示を
+     * 有効化すると、割り込みハンドラが毎秒数字を描き直す */
+    lcd_init();
+    lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, LCD_RGB(24, 24, 24));
+    lcd_draw_text(64, 16, "KOSABAOS", 4, LCD_WHITE);
+    lcd_draw_text(100, 56, "BOARD K210", 2, LCD_RGB(150, 150, 150));
+    lcd_draw_text(28, 92, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
+#endif
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
@@ -66,7 +79,13 @@ void kmain(void)
 #if BOARD_FEATURE_MMODE_TRAP
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
 #endif
+#if BOARD_FEATURE_LCD
+    lcd_draw_text(28, 118, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
+#endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
+#if BOARD_FEATURE_LCD
+    lcd_draw_text(28, 144, "FS READY", 2, LCD_RGB(200, 200, 200));
+#endif
     uart_puts("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
 #if BOARD_FEATURE_SMODE_PATH
@@ -75,6 +94,13 @@ void kmain(void)
     start_user_named("nish.elf");
     uart_puts("[kernel] kernel console "
               "(u: uprog, s: Nish, m: multitask, l: files, x: fault)\n");
+#endif
+
+#if BOARD_FEATURE_LCD
+    lcd_draw_text(28, 170, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 200, "TICK", 3, LCD_CYAN);
+    lcd_tick_setup(118, 200, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
+    lcd_tick_draw(0);
 #endif
 
     for (;;) {
