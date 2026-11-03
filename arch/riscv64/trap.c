@@ -413,7 +413,12 @@ static int do_syscall(uint64_t *frame)
         break;
     case SYS_EXIT:
         if (exec_parent.active) {
-            resume_parent(frame, 0);  /* 親の exec へ戻る */
+            /* a0 = 終了ステータス。そのまま親の exec の戻り値に
+             * なる (0 が正常。-1 / -2 は exec 自身の失敗と
+             * 保護違反用に予約されているので、ステータスは
+             * 0 以上を使う約束) */
+            uint64_t status = frame[FRAME_A0];
+            resume_parent(frame, status);  /* 親の exec へ戻る */
             return 1;
         }
         user_exit_jump();  /* ここからは戻ってこない */

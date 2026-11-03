@@ -58,6 +58,25 @@ static void puts_(const char *s)
     }
 }
 
+/* 0 以上の整数を10進で出す (終了ステータスの表示用) */
+static void put_dec_(long v)
+{
+    char buf[20];
+    int n = 0;
+
+    if (v == 0) {
+        putc_('0');
+        return;
+    }
+    while (v > 0) {
+        buf[n++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (n > 0) {
+        putc_(buf[--n]);
+    }
+}
+
 static int streq(const char *a, const char *b)
 {
     while (*a != '\0' && *b != '\0') {
@@ -312,6 +331,11 @@ static void cmd_run(char *arg)
         puts_("run: cannot start\n");
     } else if (r == -2) {
         puts_("run: program faulted\n");
+    } else if (r != 0) {
+        /* 子の終了ステータス (exit の引数) がそのまま戻る */
+        puts_("run: exit status ");
+        put_dec_(r);
+        putc_('\n');
     }
 }
 

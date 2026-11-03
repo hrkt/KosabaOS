@@ -65,6 +65,11 @@ void _start(int argc, char **argv)
         if (c == 'q') {
             syscall1(SYS_EXIT, 0);  /* ここからは戻ってこない */
         }
+        if (c == 'e') {
+            /* 終了ステータスの確認用: exec の戻り値として
+             * 親 (Nish) に 7 が伝わる */
+            syscall1(SYS_EXIT, 7);  /* ここからは戻ってこない */
+        }
         syscall1(SYS_PUTC, c);
     }
 }

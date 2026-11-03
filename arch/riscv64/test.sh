@@ -174,6 +174,16 @@ check_order "$out" "Nish, the KosabaOS shell" "hello from user mode!" \
     "args: aa bb cc" "[kernel] back from user program"
 report "J exec args (run uprog.elf aa bb cc)" $?
 
+echo "== scenario K: exit status =="
+{ sleep 3; printf 'run uprog.elf\n'; sleep 2; \
+  printf 'e'; sleep 2; printf 'exit\n'; sleep 2; } \
+    | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-k.log 2>&1 || true
+out=$(strip_ticks < test-k.log)
+check_order "$out" "Nish, the KosabaOS shell" "hello from user mode!" \
+    "run: exit status 7" "[kernel] back from user program"
+report "K exit status (uprog exits with 7 via 'e')" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
