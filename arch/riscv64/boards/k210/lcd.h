@@ -42,6 +42,11 @@ void lcd_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
 void lcd_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t scale,
                    uint16_t color);
 
+/* 10 進の数を描き、描いた幅 (ピクセル) を返す。文字列と
+ * つなげて 1 行を作るときに使う */
+uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
+                      uint16_t color);
+
 /* tick 表示の場所・大きさ・色を覚える。以後の lcd_tick_draw が
  * 有効になる */
 void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,

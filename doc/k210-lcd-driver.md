@@ -13,14 +13,20 @@
   (リポジトリ外の実験置き場。詳細はそこの README)。
 - spike で確認した表示: 「HELLO WORLD!」+ 起動経過時間の時計
   (HH:MM:SS、CLINT mtime 駆動)。
-- 本体で表示するもの: タイトル「KOSABAOS / BOARD K210」、ステージ行
-  (STEP2 BOARD OK → STEP3 TRAP TIMER OK → FS READY →
-  CONSOLE READY) を各初期化の完了ごとに 1 行ずつ追加し、最下行に
-  tick 秒数を毎秒描き直す。tick の描画は mtrap の割り込みハンドラ
-  から呼ぶが、`lcd_tick_setup` が済むまでは描かない (起動中の
-  描画と割り込みからの描画がぶつからないための番人)。
-  フォントは A-Z・0-9・記号の 43 字に拡張した (生成と検品の
-  手順は落とし穴 4 の通り)。
+- 本体で表示するもの (ステータスボード):
+  タイトル「KOSABAOS」、ボード行「BOARD K210 390 MHZ」
+  (クロックは board_cpu_freq の実測)、プロジェクト行
+  「GOAL: HELLO WORLD ON HW」と「NOW: STEP4 USER MODE」
+  (現在地は kernel.c の LCD_NOW_TEXT を進捗に合わせて書き換える)、
+  ステージ行 (STEP2 BOARD OK → STEP3 TRAP TIMER OK → FS READY →
+  CONSOLE READY) を各初期化の完了ごとに 1 行ずつ追加、状態行
+  「HART1 PARK FS 3 FILES」(fs_count は fs の公開 getter)、
+  最下行に tick 秒数を毎秒描き直す。数字の描画は lcd_draw_u32
+  (幅を返すので文字列とつなげられる)。tick の描画は mtrap の
+  割り込みハンドラから呼ぶが、`lcd_tick_setup` が済むまでは
+  描かない (起動中の描画と割り込みからの描画がぶつからない
+  ための番人)。フォントは A-Z・0-9・記号の 43 字に拡張した
+  (生成と検品の手順は落とし穴 4 の通り)。
 
 ## ドライバの形
 

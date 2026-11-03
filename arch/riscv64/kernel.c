@@ -23,6 +23,10 @@
 #include "fs.h"
 #if BOARD_FEATURE_LCD
 #include "lcd.h"  /* ボード付属 LCD へのステータス表示 (k210 のみ) */
+
+/* LCD の NOW 行: プロジェクトの現在地。ステップが進んだら
+ * ここを書き換える (済んだものはステージ行へ移す) */
+#define LCD_NOW_TEXT "NOW: STEP4 USER MODE"
 #endif
 
 #if BOARD_FEATURE_SMODE_PATH
@@ -68,9 +72,18 @@ void kmain(void)
      * 有効化すると、割り込みハンドラが毎秒数字を描き直す */
     lcd_init();
     lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, LCD_RGB(24, 24, 24));
-    lcd_draw_text(64, 16, "KOSABAOS", 4, LCD_WHITE);
-    lcd_draw_text(100, 56, "BOARD K210", 2, LCD_RGB(150, 150, 150));
-    lcd_draw_text(28, 92, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(64, 12, "KOSABAOS", 4, LCD_WHITE);
+    /* ボード名 + 実測クロック (board_cpu_freq は sysctl 読み戻し) */
+    lcd_draw_text(88, 48, "BOARD K210", 2, LCD_RGB(150, 150, 150));
+    {
+        uint32_t w = lcd_draw_u32(214, 48, board_cpu_freq() / 1000000,
+                                  2, LCD_RGB(150, 150, 150));
+        lcd_draw_text(214 + w + 6, 48, "MHZ", 2, LCD_RGB(150, 150, 150));
+    }
+    /* プロジェクトのゴールと現在地 */
+    lcd_draw_text(22, 74, "GOAL: HELLO WORLD ON HW", 2, LCD_RGB(140, 240, 140));
+    lcd_draw_text(28, 94, LCD_NOW_TEXT, 2, LCD_RGB(255, 210, 110));
+    lcd_draw_text(28, 120, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
 #endif
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
@@ -80,11 +93,18 @@ void kmain(void)
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
 #endif
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 118, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 139, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
 #endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 144, "FS READY", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 158, "FS READY", 2, LCD_RGB(200, 200, 200));
+    /* 機械の状態: hart1 は駐車中、FS のファイル数 */
+    lcd_draw_text(28, 198, "HART1 PARK FS", 2, LCD_RGB(150, 150, 150));
+    {
+        uint32_t w = lcd_draw_u32(196, 198, (uint64_t)fs_count(),
+                                  2, LCD_RGB(150, 150, 150));
+        lcd_draw_text(196 + w + 6, 198, "FILES", 2, LCD_RGB(150, 150, 150));
+    }
 #endif
     uart_puts("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
@@ -97,9 +117,9 @@ void kmain(void)
 #endif
 
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 170, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
-    lcd_draw_text(28, 200, "TICK", 3, LCD_CYAN);
-    lcd_tick_setup(118, 200, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
+    lcd_draw_text(28, 177, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 216, "TICK", 3, LCD_CYAN);
+    lcd_tick_setup(118, 216, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
     lcd_tick_draw(0);
 #endif
 

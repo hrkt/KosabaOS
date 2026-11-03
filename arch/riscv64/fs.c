@@ -130,6 +130,11 @@ int fs_count(void)
     return file_count;
 }
 
+uint64_t fs_used(void)
+{
+    return arena_used;
+}
+
 struct fs_file *fs_at(int index)
 {
     if (index < 0 || index >= file_count) {

@@ -298,6 +298,26 @@ void lcd_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t scale, uint16
     }
 }
 
+uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
+                      uint16_t color) {
+    char buf[24];
+    int n = 0;
+    if (v == 0) {
+        buf[n++] = '0';
+    } else {
+        char rev[24];
+        int m = 0;
+        while (v > 0) {
+            rev[m++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (m > 0) buf[n++] = rev[--m];
+    }
+    buf[n] = '\0';
+    lcd_draw_text(x, y, buf, scale, color);
+    return (uint32_t)n * 6 * scale;
+}
+
 /* ---- tick 表示 (割り込みハンドラから毎秒呼ばれる) ---- */
 static int tick_armed;
 static uint32_t tick_x, tick_y, tick_scale;
