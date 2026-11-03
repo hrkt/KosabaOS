@@ -452,7 +452,10 @@ static int do_syscall(uint64_t *frame)
         break;
     }
     case SYS_EXEC:
-        return do_exec(frame);
+        if (do_exec(frame)) {
+            return 1;  /* sepc は do_exec が子の入口に設定済み */
+        }
+        break;  /* 失敗時は通常どおり sepc を進めて戻る */
     case SYS_TASKS: {
         char kbuf[256];
         int n = proc_list(kbuf, sizeof(kbuf));

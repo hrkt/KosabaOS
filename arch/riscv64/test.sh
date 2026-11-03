@@ -153,6 +153,17 @@ cats=$(printf '%s' "$out" | grep -o 'Hello from the KosabaOS RAM filesystem\.' |
 if [ "$cats" -ge 2 ] && printf '%s' "$out" | grep -q 'nish.elf'; then rc=0; else rc=1; fi
 report "H line editing (BS / arrows) + history recall" $rc
 
+echo "== scenario I: shell run failure =="
+{ sleep 3; printf 'run nosuch.elf\n'; sleep 2; \
+  printf 'run hello.txt\n'; sleep 2; printf 'ls\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-i.log 2>&1 || true
+out=$(strip_ticks < test-i.log)
+check_order "$out" "Nish, the KosabaOS shell" "run: cannot start" \
+    "run: cannot start" "nish.elf" "[kernel] back from user program"
+report "I shell run failure (missing / not an ELF)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
