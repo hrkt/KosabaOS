@@ -17,9 +17,9 @@ void vm_fault_demo(void);
 #define USER_CODE_PA       BOARD_USER_CODE_PA
 #define USER_DATA_VA       0x40200000UL  /* データ領域の仮想アドレス */
 #define USER_DATA_PA       BOARD_USER_DATA_PA
-#define USER_STACK_VA      0x40400000UL  /* スタック領域の仮想アドレス */
+#define USER_STACK_TOP_VA  BOARD_STACK_TOP_VA  /* スタック領域の末尾 (ボード依存) */
+#define USER_STACK_VA      (USER_STACK_TOP_VA - BOARD_STACK_SIZE)
 #define USER_STACK_PA      BOARD_USER_STACK_PA
-#define USER_STACK_TOP_VA  0x40600000UL  /* スタック領域の末尾 */
 
 /* exec で子プログラムを置く予備の領域 (仮想アドレスは親と
  * 同じ場所を差し替えて使う) */

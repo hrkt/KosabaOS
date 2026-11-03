@@ -51,8 +51,10 @@ struct elf64_phdr {
 #define ET_EXEC 2
 #define EM_RISCV 0xF3
 
-/* ユーザープログラムの各領域の大きさ (megapage 1 枚分) */
-#define REGION_SIZE BOARD_REGION_SIZE  /* 1 領域の上限 (ボード依存) */
+/* ユーザープログラムの各領域の大きさはボード依存 (board.h の
+ * BOARD_CODE_SIZE / BOARD_DATA_SIZE)。コードとデータで大きさが
+ * 違うボード (virt はデータ 4MB) があるため、範囲チェックは
+ * 領域ごとに分ける */
 
 uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
                      uint64_t data_pa)
@@ -90,10 +92,10 @@ uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
         /* 行き先はコード領域かデータ領域の中だけに限る。
          * どちらに入るかで置く物理メモリが変わる */
         if (p->p_vaddr >= USER_CODE_VA &&
-            p->p_vaddr + p->p_memsz <= USER_CODE_VA + REGION_SIZE) {
+            p->p_vaddr + p->p_memsz <= USER_CODE_VA + BOARD_CODE_SIZE) {
             dst = (unsigned char *)(code_pa + (p->p_vaddr - USER_CODE_VA));
         } else if (p->p_vaddr >= USER_DATA_VA &&
-                   p->p_vaddr + p->p_memsz <= USER_DATA_VA + REGION_SIZE) {
+                   p->p_vaddr + p->p_memsz <= USER_DATA_VA + BOARD_DATA_SIZE) {
             dst = (unsigned char *)(data_pa + (p->p_vaddr - USER_DATA_VA));
         } else {
             uart_puts("[elf] segment out of user range\n");

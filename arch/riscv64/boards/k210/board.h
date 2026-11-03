@@ -60,8 +60,8 @@
 #define BOARD_CODE_SIZE      (1ULL * 1024 * 1024)
 #define BOARD_DATA_SIZE      (1ULL * 1024 * 1024)
 #define BOARD_STACK_SIZE     (512ULL * 1024)
-/* elf.c の検証用: 1 領域に入るセグメントの上限 */
-#define BOARD_REGION_SIZE    (1ULL * 1024 * 1024)
+/* スタック領域の仮想アドレス末尾 (virt と違い、こちらは従来どおり) */
+#define BOARD_STACK_TOP_VA   0x40600000UL
 
 /* vm.c から呼ばれるボード固有の追加マップ (vmhook.c) */
 void board_vm_hook(void);
