@@ -16,9 +16,10 @@
 #include <stdint.h>
 #include "fs.h"
 #include "uart.h"
+#include "board.h"  /* arena と作成予約の大きさはボード依存 */
 
 #define FS_MAX_FILES 16
-#define FS_ARENA_SIZE (256 * 1024)
+#define FS_ARENA_SIZE BOARD_FS_ARENA_SIZE
 
 static struct fs_file files[FS_MAX_FILES];
 static int file_count = 0;
@@ -147,8 +148,10 @@ struct fs_file *fs_at(int index)
     return &files[index];
 }
 
-/* 書き込み用に作るファイルの上限 (作成時に arena から確保) */
-#define FS_CREATE_RESERVE (32 * 1024)
+/* 書き込み用に作るファイルの上限 (作成時に arena から確保。
+ * ボード依存: virt は IwaC のセルフホスト (約 3MB の ELF を
+ * 書き出す) に合わせて 4MB、K210 は SRAM の都合で 32KB) */
+#define FS_CREATE_RESERVE BOARD_FS_CREATE_RESERVE
 
 struct fs_file *fs_create(const char *name)
 {

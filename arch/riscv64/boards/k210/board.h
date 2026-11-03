@@ -63,6 +63,11 @@
 /* スタック領域の仮想アドレス末尾 (virt と違い、こちらは従来どおり) */
 #define BOARD_STACK_TOP_VA   0x40600000UL
 
+/* RAM FS の大きさ (fs.c が参照する)。K210 は SRAM の都合で
+ * 従来どおり小さく (セルフホストは K210 の目標ではない) */
+#define BOARD_FS_ARENA_SIZE    (256ULL * 1024)
+#define BOARD_FS_CREATE_RESERVE (32ULL * 1024)
+
 /* vm.c から呼ばれるボード固有の追加マップ (vmhook.c) */
 void board_vm_hook(void);
 

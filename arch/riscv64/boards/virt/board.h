@@ -39,19 +39,27 @@
 
 /* ユーザープログラムの物理配置 (vm.h が参照する)。
  * virt の RAM は 0x80000000 から 128MB あるので余裕がある。
+ * カーネル (0x80200000〜) には 16MB 空けてある: FS の arena を
+ * 8MB に広げたので、カーネルの BSS が大きくなるため。
  * データ領域は 4MB: IwaC のセルフホスト (コンパイル済み iwac の
  * 静的データ約 2.9MB) を載せるため (2026-11-03 に案A として決定)。
  * スタックの仮想アドレス末尾も合わせて 0x40800000 に移る。 */
-#define BOARD_USER_CODE_PA   0x80400000UL
-#define BOARD_USER_DATA_PA   0x80600000UL
-#define BOARD_USER_STACK_PA  0x80A00000UL
-#define BOARD_CHILD_CODE_PA  0x80C00000UL
-#define BOARD_CHILD_DATA_PA  0x80E00000UL
-#define BOARD_CHILD_STACK_PA 0x81200000UL
+#define BOARD_USER_CODE_PA   0x81200000UL
+#define BOARD_USER_DATA_PA   0x81400000UL
+#define BOARD_USER_STACK_PA  0x81800000UL
+#define BOARD_CHILD_CODE_PA  0x81A00000UL
+#define BOARD_CHILD_DATA_PA  0x81C00000UL
+#define BOARD_CHILD_STACK_PA 0x82000000UL
 #define BOARD_CODE_SIZE      (2ULL * 1024 * 1024)
 #define BOARD_DATA_SIZE      (4ULL * 1024 * 1024)
 #define BOARD_STACK_SIZE     (2ULL * 1024 * 1024)
 /* スタック領域の仮想アドレス末尾 (データ領域の直後) */
 #define BOARD_STACK_TOP_VA   0x40800000UL
+
+/* RAM FS の大きさ (fs.c が参照する)。virt は IwaC のセルフホスト
+ * (約 3MB の ELF を読み書きする) に合わせて広く取る:
+ * arena 8MB / 作成時の予約 4MB (IwaC 側の検証で確認した値) */
+#define BOARD_FS_ARENA_SIZE    (8ULL * 1024 * 1024)
+#define BOARD_FS_CREATE_RESERVE (4ULL * 1024 * 1024)
 
 #endif
