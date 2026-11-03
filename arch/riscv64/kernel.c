@@ -26,7 +26,7 @@
 
 /* LCD の NOW 行: プロジェクトの現在地。ステップが進んだら
  * ここを書き換える (済んだものはステージ行へ移す) */
-#define LCD_NOW_TEXT "NOW: STEP4 USER MODE"
+#define LCD_NOW_TEXT "NOW: STEP5 NISH + EXEC"
 #endif
 
 #if BOARD_FEATURE_SMODE_PATH
@@ -83,7 +83,7 @@ void kmain(void)
     /* プロジェクトのゴールと現在地 */
     lcd_draw_text(22, 74, "GOAL: HELLO WORLD ON HW", 2, LCD_RGB(140, 240, 140));
     lcd_draw_text(28, 94, LCD_NOW_TEXT, 2, LCD_RGB(255, 210, 110));
-    lcd_draw_text(28, 120, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 116, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
 #endif
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
@@ -93,11 +93,12 @@ void kmain(void)
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
 #endif
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 139, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 132, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
 #endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 158, "FS READY", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 148, "STEP4 USER MODE OK", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 164, "FS READY", 2, LCD_RGB(200, 200, 200));
     /* 機械の状態: hart1 は駐車中、FS のファイル数 */
     lcd_draw_text(28, 198, "HART1 PARK FS", 2, LCD_RGB(150, 150, 150));
     {
@@ -117,7 +118,7 @@ void kmain(void)
 #endif
 
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 177, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
+    lcd_draw_text(28, 180, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
     lcd_draw_text(28, 216, "TICK", 3, LCD_CYAN);
     lcd_tick_setup(118, 216, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
     lcd_tick_draw(0);

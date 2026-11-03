@@ -1,21 +1,21 @@
-# mtrap.S -- M モードのトラップ入口 (k210)
+# mshim.S -- M モードシムのトラップ入口 (k210)
 # ======================================================
-# S モード版 (trap.S) の M 版。タイマ割り込みなどが起きると CPU は
-# mtvec の指す住所へ飛んでくる。仕事は S 版と同じ 3 つ:
-#   1. レジスタを全部スタックに退避する
-#   2. C の mtrap_handler を呼ぶ
-#   3. レジスタを全部戻して mret で帰る
-# 違いは帰り方 (mret) と、飛び先レジスタ (mtvec) だけ。
-# カーネル自身が M モードで動いているので、割り込まれても
-# スタックは同じものを使える (sscratch 交換のような細工は不要)。
-#
-# トラップが起きた瞬間に CPU が mstatus.MIE を 0 にするので、
-# ハンドラの中に次の割り込みが割り込むことはない。
+# S モード (場合により U モード) で割り込み・例外が起きて M に
+# 落ちてきたときの入口。仕事は 3 つ:
+#   1. mscratch と sp を交換して M 専用スタックに切り替える
+#      (割り込まれた側の sp はユーザーの仮想アドレスかもしれず、
+#       M では物理でしか触れないため、そのまま使えない)
+#   2. レジスタを全部退避して C の mshim_handler を呼ぶ
+#   3. レジスタを戻し、sp を交換し直して mret で帰る
+# 退避の並びは mtrap.S (step 3) と同じ (a0 はオフセット 64、
+# a7 は 120)。mscratch には起動時に M スタックの末尾を入れて
+# ある (mshim.c の mshim_boot)。
 
     .section .text
-    .globl mtrap_entry
+    .globl mshim_entry
     .align 4                # mtvec の住所は 4 バイト境界が必須
-mtrap_entry:
+mshim_entry:
+    csrrw sp, mscratch, sp  # sp = M スタック末尾、mscratch = 元の sp
     addi sp, sp, -256       # 退避用に 256 バイト確保
     sd ra, 0(sp)
     sd gp, 8(sp)
@@ -48,7 +48,8 @@ mtrap_entry:
     sd t5, 224(sp)
     sd t6, 232(sp)
 
-    call mtrap_handler      # C 側の処理へ (mtrap.c)
+    mv a0, sp               # ハンドラへ trapframe を渡す
+    call mshim_handler      # C 側の処理へ (mshim.c)
 
     ld ra, 0(sp)
     ld gp, 8(sp)
@@ -82,4 +83,5 @@ mtrap_entry:
     ld t6, 232(sp)
     addi sp, sp, 256        # 退避用領域を返す
 
+    csrrw sp, mscratch, sp  # sp = 元の sp、mscratch = M スタック末尾
     mret                    # 割り込まれた場所へ帰る (mepc の住所へ)

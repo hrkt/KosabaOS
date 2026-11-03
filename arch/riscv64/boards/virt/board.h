@@ -24,4 +24,32 @@
 /* LCD は無い (ステータス表示はシリアルだけ)。 */
 #define BOARD_FEATURE_LCD 0
 
+/* ページフォルトは現行仕様どおり独立番号 (12/13/15) で届く */
+#define BOARD_DRAFT_FAULT_CODES 0
+
+/* vm.c の追加マップ用フックは無い (LCD 用 MMIO のような
+ * ボード都合の割り当てが無いため)。 */
+#define BOARD_FEATURE_VM_HOOK 0
+
+/* vm.c の TLB フラッシュ: 現行仕様の sfence.vma */
+#define BOARD_SFENCE_VMA() __asm__ volatile("sfence.vma zero, zero")
+
+/* trap.c のタイマ: QEMU virt の CLINT は 10MHz */
+#define BOARD_TIMER_HZ 10000000ULL
+
+/* ユーザープログラムの物理配置 (vm.h が参照する)。
+ * virt の RAM は 0x80000000 から 128MB あるので、各 2MB の
+ * メガページ配置がそのまま使える。 */
+#define BOARD_USER_CODE_PA   0x80400000UL
+#define BOARD_USER_DATA_PA   0x80600000UL
+#define BOARD_USER_STACK_PA  0x80800000UL
+#define BOARD_CHILD_CODE_PA  0x80A00000UL
+#define BOARD_CHILD_DATA_PA  0x80C00000UL
+#define BOARD_CHILD_STACK_PA 0x80E00000UL
+#define BOARD_CODE_SIZE      (2ULL * 1024 * 1024)
+#define BOARD_DATA_SIZE      (2ULL * 1024 * 1024)
+#define BOARD_STACK_SIZE     (2ULL * 1024 * 1024)
+/* elf.c の検証用: 1 領域に入るセグメントの上限 */
+#define BOARD_REGION_SIZE    (2ULL * 1024 * 1024)
+
 #endif

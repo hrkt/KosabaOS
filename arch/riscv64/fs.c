@@ -49,6 +49,10 @@ int fs_add(const char *name, const unsigned char *src, uint64_t size)
     uint64_t i;
     int n = 0;
 
+    /* データの先頭は 8 バイト境界にそろえる。K210 は境界に
+     * そろっていない読み書きがそのまま例外になるので、ELF の
+     * ヘッダ読みなどで踏まないための約束 (virt では無害) */
+    arena_used = (arena_used + 7) & ~7ULL;
     if (file_count >= FS_MAX_FILES || arena_used + size > FS_ARENA_SIZE) {
         return -1;
     }
@@ -155,6 +159,7 @@ struct fs_file *fs_create(const char *name)
         f->size = 0;  /* 同名があれば空にする (容量はそのまま) */
         return f;
     }
+    arena_used = (arena_used + 7) & ~7ULL;  /* fs_add と同じ約束 */
     if (file_count >= FS_MAX_FILES ||
         arena_used + FS_CREATE_RESERVE > FS_ARENA_SIZE) {
         return 0;

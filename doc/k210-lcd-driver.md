@@ -16,10 +16,11 @@
 - 本体で表示するもの (ステータスボード):
   タイトル「KOSABAOS」、ボード行「BOARD K210 390 MHZ」
   (クロックは board_cpu_freq の実測)、プロジェクト行
-  「GOAL: HELLO WORLD ON HW」と「NOW: STEP4 USER MODE」
+  「GOAL: HELLO WORLD ON HW」と「NOW: STEP5 NISH + EXEC」
   (現在地は kernel.c の LCD_NOW_TEXT を進捗に合わせて書き換える)、
-  ステージ行 (STEP2 BOARD OK → STEP3 TRAP TIMER OK → FS READY →
-  CONSOLE READY) を各初期化の完了ごとに 1 行ずつ追加、状態行
+  ステージ行 (STEP2 BOARD OK → STEP3 TRAP TIMER OK →
+  STEP4 USER MODE OK → FS READY → CONSOLE READY) を各初期化の
+  完了ごとに 1 行ずつ追加、状態行
   「HART1 PARK FS 3 FILES」(fs_count は fs の公開 getter)、
   最下行に tick 秒数を毎秒描き直す。数字の描画は lcd_draw_u32
   (幅を返すので文字列とつなげられる)。tick の描画は mtrap の

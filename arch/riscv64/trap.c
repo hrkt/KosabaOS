@@ -23,7 +23,7 @@
 #include "elf.h"
 #include "fs.h"
 
-#define TIMER_HZ        10000000ULL  /* QEMU virt のタイマ周波数 */
+#define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
  * 間隔)。tick の表示は 10 回に 1 回にして 1 秒に 1 行を保つ */
 #define TIMER_INTERVAL  (TIMER_HZ / 10)
@@ -612,8 +612,14 @@ void trap_handler(uint64_t *frame, int from_user)
         user_exit_jump();  /* ここからは戻ってこない */
     }
 
-    /* カーネル自身の例外: 原因と現場を表示して止める */
-    if (code == 12 || code == 13 || code == 15) {
+    /* カーネル自身の例外: 原因と現場を表示して止める。
+     * K210 のドラフト仕様ではページフォルトが独立番号を持たず、
+     * 一般のアクセスフォルト (1/5/7) として届く */
+    if (code == 12 || code == 13 || code == 15
+#if BOARD_DRAFT_FAULT_CODES
+        || code == 1 || code == 5 || code == 7
+#endif
+        ) {
         uart_puts("trap: page fault (code=");
         put_dec(code);
         uart_puts(") ");

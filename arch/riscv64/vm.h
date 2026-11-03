@@ -2,6 +2,7 @@
 #define KOSABAOS_VM_H
 
 #include <stdint.h>
+#include "board.h"  /* 物理配置はボード層が決める */
 
 /* ページングの初期化 (kernel.c から起動時に 1 回呼ぶ) */
 void vm_init(void);
@@ -12,19 +13,24 @@ void vm_fault_demo(void);
 /* ユーザープログラムの置き場所 (仮想 → 物理)。
  * コードは読み + 実行のみ (W^X)、データとスタックは
  * 読み書き可・実行不可に分ける */
-#define USER_CODE_VA       0x40000000UL  /* コード (2MB megapage) */
-#define USER_CODE_PA       0x80400000UL
-#define USER_DATA_VA       0x40200000UL  /* データ (2MB megapage) */
-#define USER_DATA_PA       0x80600000UL
-#define USER_STACK_VA      0x40400000UL  /* スタック (2MB megapage) */
-#define USER_STACK_PA      0x80800000UL
+#define USER_CODE_VA       0x40000000UL  /* コード領域の仮想アドレス */
+#define USER_CODE_PA       BOARD_USER_CODE_PA
+#define USER_DATA_VA       0x40200000UL  /* データ領域の仮想アドレス */
+#define USER_DATA_PA       BOARD_USER_DATA_PA
+#define USER_STACK_VA      0x40400000UL  /* スタック領域の仮想アドレス */
+#define USER_STACK_PA      BOARD_USER_STACK_PA
 #define USER_STACK_TOP_VA  0x40600000UL  /* スタック領域の末尾 */
 
 /* exec で子プログラムを置く予備の領域 (仮想アドレスは親と
  * 同じ場所を差し替えて使う) */
-#define CHILD_CODE_PA      0x80A00000UL
-#define CHILD_DATA_PA      0x80C00000UL
-#define CHILD_STACK_PA     0x80E00000UL
+#define CHILD_CODE_PA      BOARD_CHILD_CODE_PA
+#define CHILD_DATA_PA      BOARD_CHILD_DATA_PA
+#define CHILD_STACK_PA     BOARD_CHILD_STACK_PA
+
+/* ボード固有のデバイス用追加マップ: 物理アドレス pa を含む
+ * 2MB ブロックを VA = PA でカーネル専用 RW に割り当てる
+ * (vm_init の中から board_vm_hook が使う) */
+void vm_map_device(uint64_t pa);
 
 /* ユーザー領域が今どの物理メモリを向いているかを差し替える
  * (exec の親子切り替え用) */

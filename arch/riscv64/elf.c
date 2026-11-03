@@ -52,7 +52,7 @@ struct elf64_phdr {
 #define EM_RISCV 0xF3
 
 /* ユーザープログラムの各領域の大きさ (megapage 1 枚分) */
-#define REGION_SIZE (2ULL * 1024 * 1024)
+#define REGION_SIZE BOARD_REGION_SIZE  /* 1 領域の上限 (ボード依存) */
 
 uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
                      uint64_t data_pa)
