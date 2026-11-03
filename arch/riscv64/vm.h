@@ -44,4 +44,15 @@ uint64_t vm_current_stack_pa(void);
  * 訳す (現在の割り当ての範囲外なら 0) */
 uint64_t user_va_to_pa(uint64_t va);
 
+/* ユーザースタックの末尾に引数を置く: 文字列群を末尾から積み、
+ * その下に argv 配列 (文字列へのポインタ列 + NULL 終端) を置く。
+ * stack_pa は置き先のスタック領域の物理アドレス (親用でも
+ * exec の子用でもよい)。tokens はカーネル側の文字列 (argc 個、
+ * 16 個まで)。戻り値は新しい sp (仮想アドレス) で、argv 配列の
+ * 仮想アドレスが *argv_va に返る。プログラムの入口では
+ * a0 = argc、a1 = argv になる (doc/syscalls.md の入口の約束) */
+uint64_t user_stack_setup_argv(uint64_t stack_pa, int argc,
+                               const char *const *tokens,
+                               uint64_t *argv_va);
+
 #endif

@@ -247,6 +247,46 @@ uint64_t vm_current_stack_pa(void)
     return cur_stack_pa;
 }
 
+/* スタック末尾への引数の配置 (vm.h の説明参照)。物理アドレスと
+ * 仮想アドレスは領域の大きさ分だけずれて対応するので、物理側で
+ * 書きながら仮想アドレスを数える */
+#define ARGV_MAX_TOKENS 16
+
+uint64_t user_stack_setup_argv(uint64_t stack_pa, int argc,
+                               const char *const *tokens,
+                               uint64_t *argv_va)
+{
+    uint64_t str_va[ARGV_MAX_TOKENS];
+    uint64_t pa = stack_pa + BOARD_STACK_SIZE;  /* 末尾 (排他的) */
+    int i;
+
+    if (argc > ARGV_MAX_TOKENS) {
+        argc = ARGV_MAX_TOKENS;
+    }
+    /* 文字列を末尾から積む (最後の引数から置く) */
+    for (i = argc - 1; i >= 0; i--) {
+        uint64_t len = 0, j;
+        while (tokens[i][len] != '\0') {
+            len++;
+        }
+        len++;  /* NUL の分 */
+        pa -= len;
+        for (j = 0; j < len; j++) {
+            *(char *)(pa + j) = tokens[i][j];
+        }
+        str_va[i] = USER_STACK_VA + (pa - stack_pa);
+    }
+    /* その下に argv 配列。16 バイト境界に揃え、そこが新しい sp */
+    pa -= (uint64_t)(argc + 1) * 8;
+    pa &= ~15ULL;
+    for (i = 0; i < argc; i++) {
+        *(uint64_t *)(pa + (uint64_t)i * 8) = str_va[i];
+    }
+    *(uint64_t *)(pa + (uint64_t)argc * 8) = 0;
+    *argv_va = USER_STACK_VA + (pa - stack_pa);
+    return *argv_va;
+}
+
 /* 仮想アドレスの範囲は固定 (大きさはボード依存) で、
  * 中身の物理メモリだけが差し替わる。スタックは末尾寄せ */
 uint64_t user_va_to_pa(uint64_t va)

@@ -37,9 +37,11 @@ static int data_probe = 7;
 static char bss_probe;
 
 /* 入口はバイナリの先頭に置く (user.ld が .text.start を先頭に
- * 配置する) */
+ * 配置する)。入口の約束: a0 = argc、a1 = argv で呼ばれる
+ * (doc/syscalls.md)。引数が付いているときだけ表示するので、
+ * 引数なしの従来の動きは変わらない */
 __attribute__((section(".text.start")))
-void _start(void)
+void _start(int argc, char **argv)
 {
     puts("hello from user mode!\n");
     data_probe++;
@@ -48,6 +50,14 @@ void _start(void)
     syscall1(SYS_PUTC, '0' + data_probe);
     syscall1(SYS_PUTC, ' ');
     syscall1(SYS_PUTC, bss_probe);
+    if (argc > 1) {
+        int i;
+        puts("\nargs:");
+        for (i = 1; i < argc; i++) {
+            syscall1(SYS_PUTC, ' ');
+            puts(argv[i]);
+        }
+    }
     syscall1(SYS_PUTC, '\n');
 
     for (;;) {

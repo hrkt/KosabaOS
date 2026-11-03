@@ -1,8 +1,10 @@
 # user.S -- ユーザーモードへの出入り (riscv64)
 # ======================================================
-# user_launch(entry, user_stack_top)
+# user_launch(entry, user_stack_top, argc, argv)
 #   カーネルの文脈 (戻り先やレジスタ) を kernel_context に保存して
-#   から、ユーザーモードへ sret で降りる。ユーザープログラムが
+#   から、ユーザーモードへ sret で降りる。降りる直前に a0 = argc、
+#   a1 = argv に差し替える (プログラムの入口の約束)。
+#   ユーザープログラムが
 #   exit システムコールを呼ぶと、user_exit_jump が保存した文脈を
 #   復元して、user_launch の呼び出し元に「戻って」くる。
 #   いわば行って戻るための往復切符。
@@ -58,6 +60,8 @@ user_launch:
 
     csrw sepc, a0           # 降り先はプログラムの入口
     mv sp, a1               # スタックはユーザー側のものに
+    mv a0, a2               # 入口の約束: a0 = argc
+    mv a1, a3               #             a1 = argv
     sret                    # ユーザーモードへ
 
     .globl user_exit_jump

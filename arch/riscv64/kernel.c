@@ -31,7 +31,8 @@
 
 #if BOARD_FEATURE_SMODE_PATH
 /* user.S: ユーザーモードへ降り、プログラムが exit したら戻る */
-extern void user_launch(unsigned long entry, unsigned long user_stack_top);
+extern void user_launch(unsigned long entry, unsigned long user_stack_top,
+                        unsigned long argc, unsigned long argv);
 #endif
 
 #if BOARD_FEATURE_SMODE_PATH
@@ -58,7 +59,14 @@ static void start_user_named(const char *name)
     uart_puts("\n[kernel] starting ");
     uart_puts(name);
     uart_putc('\n');
-    user_launch(entry, USER_STACK_TOP_VA);
+    /* カーネルから直接起動する場合の引数は {プログラム名} のみ */
+    {
+        const char *tokens[1];
+        uint64_t argv_va, sp;
+        tokens[0] = name;
+        sp = user_stack_setup_argv(USER_STACK_PA, 1, tokens, &argv_va);
+        user_launch(entry, sp, 1, argv_va);
+    }
     uart_puts("\n[kernel] back from user program\n");
 }
 #endif /* BOARD_FEATURE_SMODE_PATH */

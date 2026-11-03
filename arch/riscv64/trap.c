@@ -302,10 +302,17 @@ static void resume_parent(uint64_t *frame, uint64_t result)
     close_all_fds();
 }
 
+/* exec の引数 (a1 で渡される空白区切りの文字列) の上限 */
+#define EXEC_ARGS_MAX 512
+#define EXEC_ARGC_MAX 16
+
 /* 戻り値: 1 = sepc は処理済みなので進めない、0 = 通常どおり進める */
 static int do_exec(uint64_t *frame)
 {
     char name[32];
+    char argsbuf[EXEC_ARGS_MAX];
+    const char *tokens[EXEC_ARGC_MAX];
+    int argc = 0;
     struct fs_file *f;
     uint64_t entry;
     int i;
@@ -317,6 +324,36 @@ static int do_exec(uint64_t *frame)
     if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
+    }
+    /* 引数文字列 (任意、a1) を親のメモリから読み、空白で割る。
+     * 引用符やエスケープは v1 では扱わない (割り切り) */
+    argsbuf[0] = '\0';
+    if (frame[FRAME_A1] != 0 &&
+        copy_user_string(frame[FRAME_A1], argsbuf, sizeof(argsbuf)) != 0) {
+        argsbuf[0] = '\0';
+    }
+    {
+        char *p = argsbuf;
+        while (*p != '\0' && argc < EXEC_ARGC_MAX) {
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            tokens[argc++] = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t') {
+                p++;
+            }
+            if (*p != '\0') {
+                *p = '\0';
+                p++;
+            }
+        }
+    }
+    if (argc == 0) {
+        tokens[0] = name;  /* 引数が無ければ argv[0] = プログラム名 */
+        argc = 1;
     }
     f = fs_find(name);
     if (f == 0) {
@@ -342,14 +379,23 @@ static int do_exec(uint64_t *frame)
     close_all_fds();
 
     /* 子の領域に差し替えて、子の入口から開始させる。
-     * レジスタは汚れたまま渡さないようゼロにしておく */
+     * レジスタは汚れたまま渡さないようゼロにしておく。
+     * 引数は子のスタック末尾に置き、入口の約束どおり
+     * a0 = argc、a1 = argv で渡す */
     vm_switch_user_region(CHILD_CODE_PA, CHILD_DATA_PA,
                           CHILD_STACK_PA);
     for (i = 0; i < 32; i++) {
         frame[i] = 0;
     }
-    w_sepc(entry);
-    w_sscratch(USER_STACK_TOP_VA);
+    {
+        uint64_t argv_va;
+        uint64_t sp = user_stack_setup_argv(CHILD_STACK_PA, argc,
+                                            tokens, &argv_va);
+        frame[FRAME_A0] = (uint64_t)argc;
+        frame[FRAME_A1] = argv_va;
+        w_sepc(entry);
+        w_sscratch(sp);
+    }
     return 1;
 }
 

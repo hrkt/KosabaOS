@@ -293,9 +293,21 @@ static void cmd_write(char *arg)
     putc_('\n');
 }
 
-static void cmd_run(const char *name)
+/* run の引数は「プログラム名＋渡したい引数」の並び全体。
+ * 名前だけを切り出して a0 に、並び全体を a1 に渡すと、
+ * 子は argv として受け取る (入口の約束、doc/syscalls.md) */
+static void cmd_run(char *arg)
 {
-    long r = syscall3(SYS_EXEC, (long)name, 0, 0);
+    char name[32];
+    int i = 0;
+    long r;
+
+    while (arg[i] != '\0' && arg[i] != ' ' && i < 31) {
+        name[i] = arg[i];
+        i++;
+    }
+    name[i] = '\0';
+    r = syscall3(SYS_EXEC, (long)name, (long)arg, 0);
     if (r == -1) {
         puts_("run: cannot start\n");
     } else if (r == -2) {
@@ -350,7 +362,7 @@ void _start(void)
             puts_("ls              list files\n");
             puts_("cat <name>      show a file\n");
             puts_("write <n> <t>   create a file with text\n");
-            puts_("run <name>      run a program\n");
+            puts_("run <name> [..] run a program (args after the name)\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
             puts_("clear           clear the screen\n");

@@ -164,6 +164,16 @@ check_order "$out" "Nish, the KosabaOS shell" "run: cannot start" \
     "run: cannot start" "nish.elf" "[kernel] back from user program"
 report "I shell run failure (missing / not an ELF)" $?
 
+echo "== scenario J: exec with arguments =="
+{ sleep 3; printf 'run uprog.elf aa bb cc\n'; sleep 2; \
+  printf 'q'; sleep 2; printf 'exit\n'; sleep 2; } \
+    | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-j.log 2>&1 || true
+out=$(strip_ticks < test-j.log)
+check_order "$out" "Nish, the KosabaOS shell" "hello from user mode!" \
+    "args: aa bb cc" "[kernel] back from user program"
+report "J exec args (run uprog.elf aa bb cc)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
