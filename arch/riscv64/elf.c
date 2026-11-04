@@ -12,12 +12,17 @@
  * 今回読むのは、自分たちの user.elf に必要な最小限:
  * ELF64 / リトルエンディアン / 実行形式 (ET_EXEC) / RISC-V、
  * PT_LOAD セグメントだけを対象にする。
+ *
+ * ファイルからの読み出しは fs_read_at (位置指定) 経由。
+ * FS のブロックチェーン化 (doc/fs-design.md 段1) で、
+ * ファイルのデータは連続とは限らなくなったため。
  */
 
 #include <stdint.h>
 #include "elf.h"
 #include "uart.h"
 #include "vm.h"
+#include "fs.h"
 
 struct elf64_header {
     unsigned char e_ident[16];
@@ -56,65 +61,90 @@ struct elf64_phdr {
  * 違うボード (virt はデータ 4MB) があるため、範囲チェックは
  * 領域ごとに分ける */
 
-uint64_t elf_load_to(const unsigned char *image, uint64_t code_pa,
+uint64_t elf_load_to(struct fs_file *f, uint64_t code_pa,
                      uint64_t data_pa)
 {
-    const struct elf64_header *h = (const struct elf64_header *)image;
+    struct elf64_header h;
     int i;
 
-    /* ヘッダの確認: マジック (0x7F 'E' 'L' 'F')、64 ビット、
-     * リトルエンディアン、実行形式、RISC-V */
-    if (!(h->e_ident[0] == 0x7F && h->e_ident[1] == 'E' &&
-          h->e_ident[2] == 'L' && h->e_ident[3] == 'F')) {
+    /* ヘッダを読む。短ければ ELF ではない */
+    if (fs_read_at(f, 0, (unsigned char *)&h, sizeof(h)) != sizeof(h)) {
         uart_puts("[elf] bad magic\n");
         return 0;
     }
-    if (h->e_ident[4] != 2 || h->e_ident[5] != 1) {
+
+    /* ヘッダの確認: マジック (0x7F 'E' 'L' 'F')、64 ビット、
+     * リトルエンディアン、実行形式、RISC-V */
+    if (!(h.e_ident[0] == 0x7F && h.e_ident[1] == 'E' &&
+          h.e_ident[2] == 'L' && h.e_ident[3] == 'F')) {
+        uart_puts("[elf] bad magic\n");
+        return 0;
+    }
+    if (h.e_ident[4] != 2 || h.e_ident[5] != 1) {
         uart_puts("[elf] not a 64-bit little-endian ELF\n");
         return 0;
     }
-    if (h->e_type != ET_EXEC || h->e_machine != EM_RISCV) {
+    if (h.e_type != ET_EXEC || h.e_machine != EM_RISCV) {
         uart_puts("[elf] not a RISC-V executable\n");
         return 0;
     }
 
     /* プログラムヘッダ表をたどり、PT_LOAD を置いていく */
-    for (i = 0; i < h->e_phnum; i++) {
-        const struct elf64_phdr *p =
-            (const struct elf64_phdr *)(image + h->e_phoff +
-                                         (uint64_t)i * h->e_phentsize);
+    for (i = 0; i < h.e_phnum; i++) {
+        struct elf64_phdr p;
         unsigned char *dst;
-        uint64_t j;
+        uint64_t done, j;
 
-        if (p->p_type != PT_LOAD) {
+        if (fs_read_at(f, h.e_phoff + (uint64_t)i * h.e_phentsize,
+                       (unsigned char *)&p, sizeof(p)) != sizeof(p)) {
+            uart_puts("[elf] truncated program header\n");
+            return 0;
+        }
+        if (p.p_type != PT_LOAD) {
             continue;
         }
         /* 行き先はコード領域かデータ領域の中だけに限る。
          * どちらに入るかで置く物理メモリが変わる */
-        if (p->p_vaddr >= USER_CODE_VA &&
-            p->p_vaddr + p->p_memsz <= USER_CODE_VA + BOARD_CODE_SIZE) {
-            dst = (unsigned char *)(code_pa + (p->p_vaddr - USER_CODE_VA));
-        } else if (p->p_vaddr >= USER_DATA_VA &&
-                   p->p_vaddr + p->p_memsz <= USER_DATA_VA + BOARD_DATA_SIZE) {
-            dst = (unsigned char *)(data_pa + (p->p_vaddr - USER_DATA_VA));
+        if (p.p_vaddr >= USER_CODE_VA &&
+            p.p_vaddr + p.p_memsz <= USER_CODE_VA + BOARD_CODE_SIZE) {
+            dst = (unsigned char *)(code_pa + (p.p_vaddr - USER_CODE_VA));
+        } else if (p.p_vaddr >= USER_DATA_VA &&
+                   p.p_vaddr + p.p_memsz <= USER_DATA_VA + BOARD_DATA_SIZE) {
+            dst = (unsigned char *)(data_pa + (p.p_vaddr - USER_DATA_VA));
         } else {
             uart_puts("[elf] segment out of user range\n");
             return 0;
         }
-        for (j = 0; j < p->p_filesz; j++) {
-            dst[j] = image[p->p_offset + j];
+        /* ファイルにある分を小分けに運ぶ */
+        done = 0;
+        while (done < p.p_filesz) {
+            unsigned char buf[512];
+            uint64_t chunk = p.p_filesz - done;
+            uint64_t got, k;
+            if (chunk > sizeof(buf)) {
+                chunk = sizeof(buf);
+            }
+            got = fs_read_at(f, p.p_offset + done, buf, chunk);
+            if (got == 0) {
+                uart_puts("[elf] truncated segment\n");
+                return 0;
+            }
+            for (k = 0; k < got; k++) {
+                dst[done + k] = buf[k];
+            }
+            done += got;
         }
-        for (; j < p->p_memsz; j++) {
+        for (j = p.p_filesz; j < p.p_memsz; j++) {
             dst[j] = 0;  /* ファイルに無い分はゼロ埋め (.bss) */
         }
     }
 
     /* 書いた命令を命令キャッシュ側へ反映させる */
     asm volatile("fence.i");
-    return h->e_entry;
+    return h.e_entry;
 }
 
-uint64_t elf_load(const unsigned char *image)
+uint64_t elf_load(struct fs_file *f)
 {
-    return elf_load_to(image, USER_CODE_PA, USER_DATA_PA);
+    return elf_load_to(f, USER_CODE_PA, USER_DATA_PA);
 }

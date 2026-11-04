@@ -50,7 +50,7 @@ static void start_user_named(const char *name)
         uart_puts("\n[kernel] file not found\n");
         return;
     }
-    entry = elf_load(f->data);
+    entry = elf_load(f);
 
     if (entry == 0) {
         uart_puts("\n[kernel] failed to load user program\n");

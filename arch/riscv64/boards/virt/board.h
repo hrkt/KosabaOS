@@ -57,9 +57,9 @@
 #define BOARD_STACK_TOP_VA   0x40800000UL
 
 /* RAM FS の大きさ (fs.c が参照する)。virt は IwaC のセルフホスト
- * (約 3MB の ELF を読み書きする) に合わせて広く取る:
- * arena 8MB / 作成時の予約 4MB (IwaC 側の検証で確認した値) */
+ * (約 3MB の ELF を読み書きする) に合わせて広く取る。
+ * ファイルはブロックチェーン式で書いた分だけ育つので、
+ * 作成時の予約は無い (doc/fs-design.md の段1で変更) */
 #define BOARD_FS_ARENA_SIZE    (8ULL * 1024 * 1024)
-#define BOARD_FS_CREATE_RESERVE (4ULL * 1024 * 1024)
 
 #endif

@@ -360,7 +360,7 @@ static int do_exec(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
-    entry = elf_load_to(f->data, CHILD_CODE_PA, CHILD_DATA_PA);
+    entry = elf_load_to(f, CHILD_CODE_PA, CHILD_DATA_PA);
     if (entry == 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
@@ -454,21 +454,38 @@ static int do_syscall(uint64_t *frame)
     case SYS_READ: {
         uint64_t fd = frame[FRAME_A0];
         uint64_t max = frame[FRAME_A2];
-        uint64_t remain, n;
+        unsigned char buf[256];
+        uint64_t remain, n, done = 0;
         if (fd >= MAX_FD || !fd_table[fd].used || fd_table[fd].writable) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
         remain = fd_table[fd].file->size - fd_table[fd].pos;
         n = max < remain ? max : remain;
-        if (copy_to_user(frame[FRAME_A1],
-                         fd_table[fd].file->data + fd_table[fd].pos,
-                         n) != 0) {
-            frame[FRAME_A0] = (uint64_t)-1;
-            break;
+        /* ファイルからは位置指定 (fs_read_at) で小分けに読み、
+         * ユーザーメモリへ運ぶ (データは連続とは限らない) */
+        while (done < n) {
+            uint64_t chunk = n - done;
+            uint64_t got;
+            if (chunk > sizeof(buf)) {
+                chunk = sizeof(buf);
+            }
+            got = fs_read_at(fd_table[fd].file,
+                             fd_table[fd].pos + done, buf, chunk);
+            if (got == 0) {
+                break;
+            }
+            if (copy_to_user(frame[FRAME_A1] + done, buf, got) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                done = (uint64_t)-1;
+                break;
+            }
+            done += got;
         }
-        fd_table[fd].pos += n;
-        frame[FRAME_A0] = n;
+        if (done != (uint64_t)-1) {
+            fd_table[fd].pos += done;
+            frame[FRAME_A0] = done;
+        }
         break;
     }
     case SYS_CLOSE: {
