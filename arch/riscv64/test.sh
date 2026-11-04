@@ -213,6 +213,16 @@ check_order "$out" "Nish, the KosabaOS shell" "f17.txt" \
     "removed f01.txt" "cat: no such file" "[kernel] back from user program"
 report "M fs stage 2 (create 17 files, rm, cat fails)" $?
 
+echo "== scenario N: page allocator demo =="
+{ sleep 3; printf 'exit\n'; sleep 2; printf 'p'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-n.log 2>&1 || true
+out=$(strip_ticks < test-n.log)
+check_order "$out" "[kernel] back from user program" \
+    "page: pool total 24064, free 24064" \
+    "page: alloc 0x0000000082200000" "(reused)" "(back to start)"
+report "N page allocator (alloc / free / reuse, no leak)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

@@ -63,6 +63,13 @@
 /* スタック領域の仮想アドレス末尾 (virt と違い、こちらは従来どおり) */
 #define BOARD_STACK_TOP_VA   0x40600000UL
 
+/* ページアロケータ (page.c) のプール範囲。汎用 SRAM 6MB は
+ * 上の配置で使い切っているため、当面プールは空 (BASE = END)。
+ * exec 多段化のプール化の段で、子領域のセットを解体して
+ * ここへ回す想定 */
+#define BOARD_PAGE_POOL_BASE 0x80600000UL
+#define BOARD_PAGE_POOL_END  0x80600000UL
+
 /* RAM FS の大きさ (fs.c が参照する)。K210 は SRAM の都合で
  * 小さく (セルフホストは K210 の目標ではない)。ファイルは
  * ブロックチェーン式で書いた分だけ育つ (予約は無い) */

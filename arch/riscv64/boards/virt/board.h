@@ -56,6 +56,12 @@
 /* スタック領域の仮想アドレス末尾 (データ領域の直後) */
 #define BOARD_STACK_TOP_VA   0x40800000UL
 
+/* ページアロケータ (page.c) のプール範囲。子領域の末尾
+ * (0x82000000 + 2MB) から RAM の末尾まで。今の固定配置では
+ * 誰も使っていない範囲で、将来 exec の実需割り当てが使う */
+#define BOARD_PAGE_POOL_BASE 0x82200000UL
+#define BOARD_PAGE_POOL_END  0x88000000UL
+
 /* RAM FS の大きさ (fs.c が参照する)。virt は IwaC のセルフホスト
  * (約 3MB の ELF を読み書きする) に合わせて広く取る。
  * ファイルはブロックチェーン式で書いた分だけ育つので、

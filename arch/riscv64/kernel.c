@@ -18,6 +18,7 @@
 #include "uart.h"
 #include "trap.h"
 #include "vm.h"
+#include "page.h"
 #include "proc.h"
 #include "elf.h"
 #include "fs.h"
@@ -95,6 +96,7 @@ void kmain(void)
 #endif
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
+    page_init();  /* ページアロケータ (プールはボード依存) */
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
 #endif
 #if BOARD_FEATURE_MMODE_TRAP
@@ -122,7 +124,8 @@ void kmain(void)
      * Nish で exit すると下のカーネルコンソールに落ちる */
     start_user_named("nish.elf");
     uart_puts("[kernel] kernel console "
-              "(u: uprog, s: Nish, m: multitask, l: files, x: fault)\n");
+              "(u: uprog, s: Nish, m: multitask, l: files, "
+              "x: fault, p: pages)\n");
 #endif
 
 #if BOARD_FEATURE_LCD
@@ -148,6 +151,10 @@ void kmain(void)
         }
         if (c == 'm') {
             proc_demo();       /* 'm' キーでマルチタスクのデモ */
+            continue;
+        }
+        if (c == 'p') {
+            page_demo();       /* 'p' キーでページアロケータのデモ */
             continue;
         }
 #endif
