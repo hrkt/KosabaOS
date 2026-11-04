@@ -36,11 +36,21 @@ player.wasm) は Ikesu 計画 (段0〜段6) が持ち、本書は
   SPI モードのみ (Sipeed Wiki の MaixPy FAQ に明記)。
   本書の前提どおりで問題なし
 - Maix Dock (M1) に TF スロットが載っていることは
-  複数資料で確認。スロットの配線は PCB 上で固定なので、
-  ピンは「回路図か MaixPy の Dock 向け既定値」で確定する。
-  最有力は SPI1 系: SCLK=IO27 / MISO=IO26 / MOSI=IO28
-  (Sipeed Wiki の SPI 例がこのピン組)。CS は GPIO の
-  一本で、番号は回路図で裏取りする
+  複数資料で確認。スロットの配線は PCB 上で固定
+- ピンの裏取り (2026-11-04 追加): Dock の回路図
+  (Maix Dock_11.27 / K210_dock.sch) で、TF スロットの
+  ネットは **SPI0 系** と確定: DAT3/CS ← SPI0_CS0、
+  CMD/MOSI ← SPI0_MOSI、CLK ← SPI0_SCLK、
+  DAT0/MISO ← SPI0_MISO (10K プルアップ付き)。
+  K210 の IO は 26〜29 の組で、CS = IO29 は MaixPy の
+  既定設定と MaixBit データシートの両方で一致。
+  ただし SCLK / MOSI / MISO の IO26/27/28 への割り当ては
+  資料によって表記が揺れている (MaixBit 表: MISO=26 /
+  SCLK=27 / MOSI=28、MaixPy 既定の要約: SCLK=28 /
+  MOSI=26 / MISO=27)。MaixPy の sdcard.c の実物を読むか、
+  段1 スパイクで応答を見て確定する。FPIOA でどの SPI
+  機能を載せるかはこちらの選択で、回路図のネット名に
+  合わせて SPI0 を使うのが素直
 - カードの相性注意 (Sipeed Wiki): SPI モードに正しく
   対応しないカードが市販品にある。Class10 の正規品を
   推奨、128GB まで動作実績ありとのこと
