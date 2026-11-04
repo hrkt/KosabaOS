@@ -11,6 +11,8 @@ struct fs_file {
     char name[32];
     uint32_t first_block;  /* 鎖の最初のブロック (空なら FS_NO_BLOCK) */
     uint64_t size;
+    int used;    /* 表の項が生きているか (段2 の削除対応で導入) */
+    int is_dir;  /* ディレクトリか (段4 で使う。今は常に 0) */
 };
 
 #define FS_NO_BLOCK 0xFFFFFFFFu
@@ -23,6 +25,7 @@ int fs_count(void);                          /* ファイルの数 */
 uint64_t fs_used(void);                      /* arena の使用バイト数 */
 struct fs_file *fs_at(int index);            /* 番号で引く (readdir 用) */
 struct fs_file *fs_create(const char *name); /* 作成 (同名は空にする) */
+int fs_unlink(const char *name);             /* 削除 (無ければ -1) */
 uint64_t fs_read_at(struct fs_file *f, uint64_t pos,
                     unsigned char *dst, uint64_t n);  /* 位置を指定して読む */
 uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,

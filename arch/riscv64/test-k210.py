@@ -162,10 +162,12 @@ def main():
     ok = command("ls", "nish\\.elf") and ok
     report("K4 run failure keeps the shell alive", ok)
 
-    print("== scenario K5: write + cat ==")
+    print("== scenario K5: write + cat + rm ==")
     ok = command("write memo.txt hw-test", "wrote memo\\.txt")
     ok = command("cat memo.txt", "hw-test") and ok
-    report("K5 write + cat", ok)
+    ok = command("rm memo.txt", "removed memo\\.txt") and ok
+    ok = command("cat memo.txt", "cat: no such file") and ok
+    report("K5 write + cat + rm", ok)
 
     print("== scenario K6: exit to kernel console ==")
     ok = command("exit", "back from user program")

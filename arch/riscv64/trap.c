@@ -22,6 +22,7 @@
 #include "vm.h"
 #include "elf.h"
 #include "fs.h"
+#include "fat.h"
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -187,6 +188,7 @@ void trap_init(void)
 #define SYS_CREATE 9
 #define SYS_WRITE 10
 #define SYS_TASKS 11
+#define SYS_UNLINK 12
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -257,11 +259,20 @@ static int copy_from_user(unsigned char *dst, uint64_t va, uint64_t n)
 
 #define MAX_FD 8
 static struct {
-    struct fs_file *file;
+    struct fs_file *file;  /* RAM FS のファイル (is_sd でないとき) */
+    struct fat_file fat;   /* SD 側のファイル (is_sd のとき) */
     uint64_t pos;
     int used;
     int writable;  /* 1 = create で開いた書き込み用 */
+    int is_sd;     /* 1 = /sd の向こう (FAT) のファイル */
 } fd_table[MAX_FD];
+
+/* パスが固定マウント /sd の配下かどうか (doc/sd-design.md) */
+static int is_sd_path(const char *name)
+{
+    return name[0] == '/' && name[1] == 's' && name[2] == 'd' &&
+           name[3] == '/';
+}
 
 static void close_all_fds(void)
 {
@@ -426,22 +437,38 @@ static int do_syscall(uint64_t *frame)
     case SYS_OPEN: {
         char name[32];
         int i;
-        struct fs_file *f;
+        struct fs_file *f = 0;
+        struct fat_file fat;
+        int is_sd = 0;
+        fat.first_cluster = 0;
+        fat.size = 0;
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
-        f = fs_find(name);
-        if (f == 0) {
-            frame[FRAME_A0] = (uint64_t)-1;
-            break;
+        if (is_sd_path(name)) {
+            /* /sd は固定マウント。mount 点を外して FAT 側へ */
+            if (fat_ensure_mounted() != 0 ||
+                fat_find(name + 4, &fat) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+            is_sd = 1;
+        } else {
+            f = fs_find(name);
+            if (f == 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
         }
         for (i = 0; i < MAX_FD; i++) {
             if (!fd_table[i].used) {
                 fd_table[i].file = f;
+                fd_table[i].fat = fat;
                 fd_table[i].pos = 0;
                 fd_table[i].used = 1;
                 fd_table[i].writable = 0;
+                fd_table[i].is_sd = is_sd;
                 frame[FRAME_A0] = (uint64_t)i;
                 break;
             }
@@ -460,18 +487,24 @@ static int do_syscall(uint64_t *frame)
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
-        remain = fd_table[fd].file->size - fd_table[fd].pos;
+        remain = (fd_table[fd].is_sd ? fd_table[fd].fat.size
+                                     : fd_table[fd].file->size) -
+                 fd_table[fd].pos;
         n = max < remain ? max : remain;
-        /* ファイルからは位置指定 (fs_read_at) で小分けに読み、
-         * ユーザーメモリへ運ぶ (データは連続とは限らない) */
+        /* ファイルからは位置指定 (fs_read_at / fat_read_at) で
+         * 小分けに読み、ユーザーメモリへ運ぶ
+         * (データは連続とは限らない) */
         while (done < n) {
             uint64_t chunk = n - done;
             uint64_t got;
             if (chunk > sizeof(buf)) {
                 chunk = sizeof(buf);
             }
-            got = fs_read_at(fd_table[fd].file,
-                             fd_table[fd].pos + done, buf, chunk);
+            got = fd_table[fd].is_sd
+                      ? fat_read_at(&fd_table[fd].fat,
+                                    fd_table[fd].pos + done, buf, chunk)
+                      : fs_read_at(fd_table[fd].file,
+                                   fd_table[fd].pos + done, buf, chunk);
             if (got == 0) {
                 break;
             }
@@ -536,12 +569,43 @@ static int do_syscall(uint64_t *frame)
         }
         break;
     }
+    case SYS_UNLINK: {
+        char name[32];
+        int i;
+        struct fs_file *f;
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        f = fs_find(name);
+        if (f == 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        /* 開いているファイルは消せない (段2 の割り切り)。
+         * 消すと fd の先が宙に浮くため */
+        for (i = 0; i < MAX_FD; i++) {
+            if (fd_table[i].used && fd_table[i].file == f) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+        }
+        if (i != MAX_FD) {
+            break;
+        }
+        frame[FRAME_A0] = (uint64_t)fs_unlink(name);
+        break;
+    }
     case SYS_CREATE: {
         char name[32];
         int i;
         struct fs_file *f;
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (is_sd_path(name)) {
+            frame[FRAME_A0] = (uint64_t)-1;  /* SD は読み取り専用 */
             break;
         }
         f = fs_create(name);

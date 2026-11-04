@@ -184,6 +184,35 @@ check_order "$out" "Nish, the KosabaOS shell" "hello from user mode!" \
     "run: exit status 7" "[kernel] back from user program"
 report "K exit status (uprog exits with 7 via 'e')" $?
 
+echo "== scenario L: SD card (FAT32 on ramdisk) =="
+{ sleep 3; printf 'cat /sd/HELLO.TXT\n'; sleep 3; \
+  printf 'cat /sd/SUB/INNER.TXT\n'; sleep 2; \
+  printf 'cat /sd/NOPE.TXT\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-l.log 2>&1 || true
+out=$(strip_ticks < test-l.log)
+check_order "$out" "Nish, the KosabaOS shell" "SD line 0000" \
+    "SD-END-MARKER" "SD-INNER-MARKER" "cat: no such file" \
+    "[kernel] back from user program"
+report "L SD card (FAT32: root file, subdir file, missing file)" $?
+
+echo "== scenario M: fs stage 2 (64 files + rm) =="
+{ sleep 3; \
+  for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17; do \
+    printf "write f$i.txt x\n"; sleep 0.4; \
+  done; \
+  printf 'ls\n'; sleep 2; \
+  printf 'rm f01.txt\n'; sleep 1; \
+  printf 'cat f01.txt\n'; sleep 1; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-m.log 2>&1 || true
+out=$(strip_ticks < test-m.log)
+check_order "$out" "Nish, the KosabaOS shell" "f17.txt" \
+    "removed f01.txt" "cat: no such file" "[kernel] back from user program"
+report "M fs stage 2 (create 17 files, rm, cat fails)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

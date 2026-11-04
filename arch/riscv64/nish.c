@@ -12,6 +12,7 @@
  *   ls              ファイル一覧
  *   cat <名前>      ファイルの中身を表示
  *   write <名前> <本文>  ファイルを作って本文を書く
+ *   rm <名前>       ファイルを消す
  *   run <名前>      プログラムを実行 (終わると戻ってくる)
  *   echo <本文>     本文をそのまま表示
  *   ps              カーネルタスクの一覧
@@ -33,6 +34,7 @@
 #define SYS_CREATE 9
 #define SYS_WRITE 10
 #define SYS_TASKS 11
+#define SYS_UNLINK 12
 
 static long syscall3(long num, long a0, long a1, long a2)
 {
@@ -285,6 +287,17 @@ static void cmd_cat(const char *name)
     syscall3(SYS_CLOSE, fd, 0, 0);
 }
 
+static void cmd_rm(const char *name)
+{
+    if (syscall3(SYS_UNLINK, (long)name, 0, 0) < 0) {
+        puts_("rm: cannot remove\n");
+        return;
+    }
+    puts_("removed ");
+    puts_(name);
+    putc_('\n');
+}
+
 static void cmd_write(char *arg)
 {
     char *text = arg;
@@ -386,6 +399,7 @@ void _start(void)
             puts_("ls              list files\n");
             puts_("cat <name>      show a file\n");
             puts_("write <n> <t>   create a file with text\n");
+            puts_("rm <name>       remove a file\n");
             puts_("run <name> [..] run a program (args after the name)\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
@@ -397,6 +411,8 @@ void _start(void)
             cmd_cat(arg);
         } else if (streq(line, "write")) {
             cmd_write(arg);
+        } else if (streq(line, "rm")) {
+            cmd_rm(arg);
         } else if (streq(line, "run")) {
             cmd_run(arg);
         } else if (streq(line, "echo")) {

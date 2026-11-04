@@ -20,7 +20,7 @@
 #include "uart.h"
 #include "board.h"  /* arena の大きさはボード依存 */
 
-#define FS_MAX_FILES 16
+#define FS_MAX_FILES 64
 #define FS_ARENA_SIZE BOARD_FS_ARENA_SIZE
 
 #define FS_BLOCK_SIZE 4096ULL
@@ -29,7 +29,6 @@
 #define BLOCK_END  0xFFFFFFFEu  /* block_next の値: 鎖の終わり */
 
 static struct fs_file files[FS_MAX_FILES];
-static int file_count = 0;
 static unsigned char arena[FS_ARENA_SIZE];
 static uint32_t block_next[FS_BLOCK_COUNT];
 static uint64_t blocks_used = 0;
@@ -178,13 +177,19 @@ uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
 
 static struct fs_file *new_entry(const char *name)
 {
-    struct fs_file *f;
-    int n = 0;
+    struct fs_file *f = 0;
+    int i, n = 0;
 
-    if (file_count >= FS_MAX_FILES) {
-        return 0;
+    /* 空いている項を探す (削除で空いた項も再利用する) */
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) {
+            f = &files[i];
+            break;
+        }
     }
-    f = &files[file_count];
+    if (f == 0) {
+        return 0;  /* 表いっぱい */
+    }
     while (name[n] != '\0' && n < 31) {
         f->name[n] = name[n];
         n++;
@@ -192,8 +197,24 @@ static struct fs_file *new_entry(const char *name)
     f->name[n] = '\0';
     f->first_block = FS_NO_BLOCK;
     f->size = 0;
-    file_count++;
+    f->used = 1;
+    f->is_dir = 0;
     return f;
+}
+
+int fs_unlink(const char *name)
+{
+    struct fs_file *f = fs_find(name);
+
+    if (f == 0) {
+        return -1;
+    }
+    chain_free(f->first_block);  /* ブロックは全部 arena へ返す */
+    f->first_block = FS_NO_BLOCK;
+    f->size = 0;
+    f->name[0] = '\0';
+    f->used = 0;
+    return 0;
 }
 
 struct fs_file *fs_create(const char *name)
@@ -231,8 +252,8 @@ int fs_add(const char *name, const unsigned char *src, uint64_t size)
 struct fs_file *fs_find(const char *name)
 {
     int i;
-    for (i = 0; i < file_count; i++) {
-        if (name_eq(files[i].name, name)) {
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (files[i].used && name_eq(files[i].name, name)) {
             return &files[i];
         }
     }
@@ -261,7 +282,10 @@ void fs_list(void)
 {
     int i;
     uart_puts("[fs] files:\n");
-    for (i = 0; i < file_count; i++) {
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) {
+            continue;
+        }
         uart_puts("  ");
         uart_puts(files[i].name);
         uart_puts("  ");
@@ -293,7 +317,13 @@ void fs_init(void)
 
 int fs_count(void)
 {
-    return file_count;
+    int i, n = 0;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (files[i].used) {
+            n++;
+        }
+    }
+    return n;
 }
 
 uint64_t fs_used(void)
@@ -301,10 +331,23 @@ uint64_t fs_used(void)
     return blocks_used * FS_BLOCK_SIZE;
 }
 
+/* index 番目の「生きている」ファイルを返す (readdir 用)。
+ * fs_count と対で使う: 0 〜 fs_count()-1 が全部のファイルに
+ * 対応する (削除で空いた項は飛ばして数える) */
 struct fs_file *fs_at(int index)
 {
-    if (index < 0 || index >= file_count) {
+    int i;
+    if (index < 0) {
         return 0;
     }
-    return &files[index];
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) {
+            continue;
+        }
+        if (index == 0) {
+            return &files[i];
+        }
+        index--;
+    }
+    return 0;
 }
