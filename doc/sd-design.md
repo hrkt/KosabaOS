@@ -64,13 +64,16 @@ boards/virt/ramdisk.c (make_sd_image.py が作る FAT32
 
 ## SD ドライバ (boards/k210/sd.c)
 
-### 配線と FPIOA (段0 の裏取り済み)
+### 配線と FPIOA (2026-11-05、段1 スパイクで確定)
 
-TF スロットは SPI0 系のネット。FPIOA でこう載せる:
+TF スロットのネット名は回路図上 "SPI0_" だが、実際に
+MaixPy が使うのは **SPI1** で、信号の並びも当初の想定と
+違う (MaixPy の sdcard.h が正本。段1 でこれに気づくまで
+全滅した)。FPIOA でこう載せる:
 
-    IO26 ← SPI0_D1 (MISO / DAT0)
-    IO27 ← SPI0_SCLK (CLK)
-    IO28 ← SPI0_D0 (MOSI / CMD)
+    IO26 ← SPI1_D0 (MOSI / CMD)
+    IO27 ← SPI1_D1 (MISO / DAT0)
+    IO28 ← SPI1_SCLK (CLK)
     IO29 ← GPIOHS (CS / DAT3、手動制御)
 
 - CS をハードウェア SS ではなく GPIO にする: SD の SPI
@@ -78,13 +81,13 @@ TF スロットは SPI0 系のネット。FPIOA でこう載せる:
   「電源投入直後は CS を上げたまま 74 クロック以上」など
   CS の細かい作法が多く、手で握れる方が素直 (MaixPy も
   GPIOHS29 で CS を握っている)
-- SCLK/MOSI/MISO の IO 割り当ては資料で表記が揺れている
-  (段0 メモ参照)。段1 スパイクで CMD0 への応答を見て
-  この表を確定させる。本設計はこの表を前提に書く
+- 入力ピン (MISO) の FPIOA には IE_EN が必須。GPIOHS で
+  入力を読む場合は GPIOHS の INPUT_EN (+0x04) も要る
+  (どちらも段1 で実測して判明)
 
 ### SPI の設定
 
-- K210 の SPI0 を標準 (Motorola) モード、8 ビット、
+- K210 の SPI1 を標準 (Motorola) モード、8 ビット、
   モード 0 (CPOL=0, CPHA=0) で使う
 - クロックは初期化中 400kHz 以下、初期化後に上げる
   (目安 12.5MHz 起点で実測。MP3 の所要は最大 40KB/s
@@ -118,11 +121,9 @@ TF スロットは SPI0 系のネット。FPIOA でこう載せる:
 
 ### 実装時の確認点
 
-- K210 ボードの LCD ドライバ (boards/k210/lcd.c) が SPI の
-  何番をどう使っているか。コントローラを共有する場合は
-  「使い終わりで設定を戻す」取り決めが要る (協調モデル
-  なので同時使用は起きないが、FPIOA とクロック設定の
-  引き継ぎは決めておく)
+- LCD ドライバ (boards/k210/lcd.c) は SPI0 を使う。SD は
+  SPI1 なのでコントローラの共有は起きない (2026-11-05 に
+  確定)。FPIOA のピンも重ならない (LCD は IO36〜39)
 
 ## FAT32 ドライバ (fat.c / fat.h、共通コード)
 
