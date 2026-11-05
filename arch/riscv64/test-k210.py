@@ -169,6 +169,15 @@ def main():
     ok = command("cat memo.txt", "cat: no such file") and ok
     report("K5 write + cat + rm", ok)
 
+    print("== scenario K7: /sd failure is graceful ==")
+    # SD が読めない状態 (この基板は SCLK 線の物理故障で
+    # 常にこの経路) でも、ハングもクラッシュもせず
+    # 「無し」で返り、シェルが生き続けること。健全な基板
+    # でも存在しない名前なら同じ結果になる
+    ok = command("cat /sd/NOSUCH.TXT", "cat: no such file")
+    ok = command("ls", "nish\\.elf") and ok
+    report("K7 /sd failure keeps the shell alive", ok)
+
     print("== scenario K6: exit to kernel console ==")
     ok = command("exit", "back from user program")
     report("K6 exit to kernel console", ok)
