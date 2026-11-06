@@ -64,23 +64,44 @@ boards/virt/ramdisk.c (make_sd_image.py が作る FAT32
 
 ## SD ドライバ (boards/k210/sd.c)
 
-### 配線と FPIOA (2026-11-05、段1 スパイクで確定)
+### 配線と FPIOA (2026-11-06、本物ドライバとの二分探索で確定)
 
 TF スロットのネット名は回路図上 "SPI0_" だが、実際に
 MaixPy が使うのは **SPI1** で、信号の並びも当初の想定と
-違う (MaixPy の sdcard.h が正本。段1 でこれに気づくまで
-全滅した)。FPIOA でこう載せる:
+違う (2019 年版 MaixPy の sd_init が正本)。FPIOA で
+こう載せる:
 
-    IO26 ← SPI1_D0 (MOSI / CMD)
-    IO27 ← SPI1_D1 (MISO / DAT0)
-    IO28 ← SPI1_SCLK (CLK)
-    IO29 ← GPIOHS (CS / DAT3、手動制御)
+    IO26 ← SPI1_D1 (MISO / DAT0)
+    IO27 ← SPI1_SCLK (CLK)
+    IO28 ← SPI1_D0 (MOSI / CMD)
+    IO29 ← GPIOHS29 (CS / DAT3、手動制御)
+
+(2026-11-05 に「確定」とした並び IO26=MOSI / IO27=MISO /
+IO28=SCLK は誤りだった。当時のスパイク計測そのものが
+下記パッドフラグの毒で無効化されており、「基板の SCLK
+物理故障」という当時の結論も含めて撤回する。経緯の詳細は
+spike-k210/step5-sd/README.md の 2026-11-06 の記録。)
 
 - CS をハードウェア SS ではなく GPIO にする: SD の SPI
   モードは「CS を落としたままコマンドとデータを一続きに」
   「電源投入直後は CS を上げたまま 74 クロック以上」など
   CS の細かい作法が多く、手で握れる方が素直 (MaixPy も
   GPIOHS29 で CS を握っている)
+- **パッドフラグは機能ごとの SDK 正規値を使う。一律の
+  値を全ピンに書いてはいけない**:
+  - oe_inv (bit13) は信号ごとに違う。**SCLK と CS は
+    oe_inv=0**、D0/D1 は oe_inv=1 が正規。SCLK/CS に
+    oe_inv=1 を書くとパッド出力が反転し、カードが完全
+    無応答になる (これが長期化した無応答の真因)
+  - MISO にプルアップを足してはいけない (本物ドライバが
+    死ぬことを単独変異で確認済み)
+  - 実証済みの値: D0/D1 は機能番号 | 0xB03F00、SCLK と
+    GPIOHS29 は機能番号 | 0xB01F00
+- ROM/kflash 残りで IO45 にも GPIOHS29 が割り当たって
+  いるため、FPIOA(45) を中立化して競合を消す
+- spi_ctrlr0 (SPI1 + 0xF4) は ROM 残りで 0x200 になって
+  いる。本物 spi_init と同じく初期化時に 0 を書く
+- SER は本物の SD_SS (SPI_CHIP_SELECT_1) に合わせて 2
 - 入力ピン (MISO) の FPIOA には IE_EN が必須。GPIOHS で
   入力を読む場合は GPIOHS の INPUT_EN (+0x04) も要る
   (どちらも段1 で実測して判明)

@@ -1,14 +1,25 @@
 /* sd_hw.c -- SD カードのハードウェア層 (K210)
  *
- * 配線は段1 スパイク (spike-k210/step5-sd) で確定した値:
- *   コントローラは SPI1 (回路図のネット名は "SPI0_" だが
- *   MaixPy の実績はこちら)、MOSI=IO26 (SPI1_D0=70)、
- *   MISO=IO27 (SPI1_D1=71)、SCLK=IO28 (SPI1_SCLK=83)、
+ * 配線は 2026-11-06 の二分探索 (spike-k210/step5-sd、実機で
+ * 読み取り確認済みの最小スパイク sdspiW12 と本物ドライバ) で
+ * 確定した値:
+ *   コントローラは SPI1、MOSI=IO28 (SPI1_D0=70)、
+ *   MISO=IO26 (SPI1_D1=71)、SCLK=IO27 (SPI1_SCLK=83)、
  *   CS=IO29 (GPIOHS29、手動制御)
- * クロック: BAUDR だけで決める (sysctl の threshold は
- * 触らない)。SSI 入力の見積もり幅が広くても初期化中は
- * 400kHz 以下に収まるよう BAUDR を大きく取り、初期化後は
- * 実用十分な数 MHz に上げる (MP3 の所要は最大 40KB/s)
+ * パッドフラグの要点 (長い間 SD が無応答だった真因):
+ *   - SCLK と CS は oe_inv (bit13) = 0 でなければならない。
+ *     oe_inv=1 だとパッド出力が反転し、クロックと CS が
+ *     カードに正しく届かない。D0/D1 は oe_inv=1 が正規。
+ *   - MISO にプルアップを足してはいけない (本物ドライバが
+ *     死ぬことを単独変異で確認済み)。
+ *   - ROM/kflash 残りで IO45 にも GPIOHS29 が割り当たって
+ *     いるので、競合を消すために IO45 を中立化する。
+ *   - spi_ctrlr0 (0xF4) は ROM 残りで 0x200 になっている。
+ *     本物 spi_init と同じく 0 を書く。
+ * クロック: BAUDR と SPI1 の threshold (0 に固定) で決める。
+ * 初期化中は 400kHz 以下に収まるよう BAUDR を大きく取り、
+ * 初期化後は実用十分な数 MHz に上げる (MP3 の所要は
+ * 最大 40KB/s)
  */
 
 #include <stdint.h>
@@ -18,8 +29,11 @@
 
 /* ---- FPIOA / GPIOHS ---- */
 #define FPIOA(n) REG32(0x502B0000UL + (n) * 4)
-#define FPIOA_OUT 0x1F00      /* 出力用 (OE_EN + DS 最大) */
-#define FPIOA_IN 0x00900000   /* 入力用 (IE_EN + ST) */
+/* SDK 正規テーブル準拠のパッドフラグ (sdspiW12 で実証)。
+ * DATA 系 (D0/D1) は oe_inv=1 を含む 0xB03F00、SCLK と CS は
+ * oe_inv=0 の 0xB01F00。どちらも DS 最大・IE_EN・ST 付き */
+#define FPIOA_SD_DATA 0xB03F00
+#define FPIOA_SD_NOINV 0xB01F00
 #define FUNC_SPI1_D0 70
 #define FUNC_SPI1_D1 71
 #define FUNC_SPI1_SCLK 83
@@ -40,6 +54,7 @@
 #define SPI_IMR    REG32(SPI1 + 0x2C)
 #define SPI_DMACR  REG32(SPI1 + 0x4C)
 #define SPI_DR     REG32(SPI1 + 0x60)
+#define SPI_SPI_CTRLR0 REG32(SPI1 + 0xF4)
 
 /* 初期化中: 入力 390MHz としても約 95kHz、/2 が入っても
  * 約 48kHz。どちらでも SD の上限 400kHz 以下 */
@@ -56,12 +71,13 @@ static void spi_config(uint32_t baud)
      * モード 0 (CPOL=0, CPHA=0)。DFS の位置は lcd.c (SPI0)
      * で実績のある並びと同じ */
     SPI_CTRLR0 = (7u << 16);
+    SPI_SPI_CTRLR0 = 0;   /* ROM 残りの 0x200 を消す */
     SPI_BAUDR = baud;
     SPI_SSIENR = 1;
     /* 実物の CS は GPIOHS で握る。SER は転送を始めるための
      * 内部の選択印 (このピンは FPIOA で外に出していない)。
-     * lcd.c と同じく有効化の後に書く */
-    SPI_SER = 1;
+     * 本物ドライバの SD_SS (CHIP_SELECT_1) に合わせて 2 */
+    SPI_SER = 2;
 }
 
 void sd_hw_init(void)
@@ -70,11 +86,17 @@ void sd_hw_init(void)
      * (SPI1 の peri ビットはスパイクで使った bit7) */
     REG32(0x50440028) |= (1u << 5);              /* clk_en_cent.apb2 */
     REG32(0x5044002C) |= (1u << 6) | (1u << 7);  /* clk_en_peri spi0/1 */
+    /* SPI1 の threshold (clk_th1 の第2バイト) を 0 に固定
+     * (本物 spi_clk_init と同じ) */
+    REG32(0x5044003C) &= ~(0xFFu << 8);
 
-    FPIOA(26) = FUNC_SPI1_D0 | FPIOA_OUT;
-    FPIOA(27) = FUNC_SPI1_D1 | FPIOA_IN;
-    FPIOA(28) = FUNC_SPI1_SCLK | FPIOA_OUT;
-    FPIOA(29) = FUNC_GPIOHS29 | FPIOA_OUT;
+    /* 競合ピンの中立化: IO45 に残っている GPIOHS29 の割当を
+     * 消す (sdspiW12 と同じ値) */
+    FPIOA(45) = 0x00000078;
+    FPIOA(26) = FUNC_SPI1_D1 | FPIOA_SD_DATA;    /* MISO */
+    FPIOA(27) = FUNC_SPI1_SCLK | FPIOA_SD_NOINV; /* SCLK */
+    FPIOA(28) = FUNC_SPI1_D0 | FPIOA_SD_DATA;    /* MOSI */
+    FPIOA(29) = FUNC_GPIOHS29 | FPIOA_SD_NOINV;  /* CS */
     GPIOHS_OUTPUT_EN |= CS_BIT;
     sd_cs(1);
 
