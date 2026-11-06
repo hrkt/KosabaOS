@@ -154,6 +154,16 @@ uint64_t trap_tick_count(void)
     return ticks;
 }
 
+/* uptime (31) 用: 起動以来のミリ秒。秒 (ticks) に、現在の
+ * 秒の端数を足して組み立てる。端数は tick_divider が
+ * 100ms 単位で数えている (割り込み 10 回で ticks が 1 増
+ * える)。タイマ割り込みが 100ms 間隔なので実分解能は
+ * 100ms で、値は 100ms 刻みに進む (仕様にも明記) */
+uint64_t trap_uptime_ms(void)
+{
+    return ticks * 1000 + (uint64_t)tick_divider * 100;
+}
+
 /* fd テーブル (下の方で定義) の初期化: 根の段の表を指させる */
 static void fd_table_init(void);
 
@@ -205,6 +215,7 @@ void trap_init(void)
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
 #define SYS_KLOG_READ 30
+#define SYS_UPTIME 31
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -1020,6 +1031,12 @@ static int do_syscall(uint64_t *frame)
         }
         break;
     }
+    case SYS_UPTIME:
+        /* 引数なし。起動以来のミリ秒を a0 に返す。
+         * 実分解能は 100ms (タイマ割り込みの間隔)。
+         * 仕様は doc/syscalls.md の 31 番 */
+        frame[FRAME_A0] = trap_uptime_ms();
+        break;
     default:
         kputs("trap: unknown syscall ");
         put_dec(num);

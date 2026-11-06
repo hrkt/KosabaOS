@@ -30,3 +30,9 @@ chain_prog_end:
 eat_prog_start:
     .incbin "eat.elf"
 eat_prog_end:
+
+    .globl uptime_prog_start
+    .globl uptime_prog_end
+uptime_prog_start:
+    .incbin "uptime.elf"
+uptime_prog_end:
