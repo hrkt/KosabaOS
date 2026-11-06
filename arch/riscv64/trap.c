@@ -216,6 +216,9 @@ void trap_init(void)
 #define SYS_GETCWD 16
 #define SYS_KLOG_READ 30
 #define SYS_UPTIME 31
+#define SYS_AUDIO_OPEN 40
+#define SYS_AUDIO_WRITE 41
+#define SYS_AUDIO_CLOSE 42
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -620,6 +623,42 @@ static int do_exec(uint64_t *frame)
         w_sscratch(sp);
     }
     return 1;
+}
+
+/* --- オーディオ (デバイス、40〜42) ----------------------------------
+ * 仕様は doc/syscalls.md (Ikesu 段2の確定仕様。Ikesu 側の
+ * doc/audio-syscall.md が原案)。カーネルは「サンプルの流れを
+ * デバイスへ渡す」ことだけを知り、形式は符号付き 16bit
+ * リトルエンディアン、インターリーブ固定。同時に開ける
+ * 流れは 1 本だけ。
+ *
+ * 実機のドライバ (K210 の I2S) はまだ無いので、今は両ボード
+ * 共通のダミー実装: audio_write は待たずに全部受け付け、
+ * 受けたバイト列の FNV-1a 64bit ハッシュと総サンプル数を
+ * 貯めておき、audio_close のときにカーネルログへ 1 行残す。
+ * テストは Nish の dmesg 経由でこの行を照合する (テスト専用
+ * の syscall は作らない)。ダミーは rate の対応可否を検証
+ * しない (対応レートは本物のドライバが決めるものなので、
+ * 今は任意の rate を受ける)。 */
+
+#define FNV1A64_OFFSET 14695981039346656037ULL /* 0xcbf29ce484222325 */
+#define FNV1A64_PRIME 1099511628211ULL         /* 0x100000001b3 */
+
+static int audio_open_flag;      /* 1 = 開いている */
+static uint64_t audio_rate;      /* audio_open の a0 の保持 */
+static uint64_t audio_channels;  /* 1 または 2 */
+static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
+static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
+
+/* 16 進 16 桁 (小文字、ゼロ埋め、0x なし) をログへ出す。
+ * kput_hex は 0x 接頭辞が付くので fnv の表示には使えない */
+static void kput_hex16(uint64_t x)
+{
+    int i;
+    for (i = 60; i >= 0; i -= 4) {
+        int d = (int)((x >> i) & 0xF);
+        kputc((char)(d < 10 ? '0' + d : 'a' + (d - 10)));
+    }
 }
 
 static int do_syscall(uint64_t *frame)
@@ -1037,6 +1076,102 @@ static int do_syscall(uint64_t *frame)
          * 仕様は doc/syscalls.md の 31 番 */
         frame[FRAME_A0] = trap_uptime_ms();
         break;
+    case SYS_AUDIO_OPEN: {
+        /* a0 = サンプルレート (Hz)、a1 = チャンネル数
+         * (1 または 2)。同時に開けるのは 1 本だけ */
+        uint64_t channels = frame[FRAME_A1];
+        if (audio_open_flag || (channels != 1 && channels != 2)) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        audio_open_flag = 1;
+        audio_rate = frame[FRAME_A0];
+        audio_channels = channels;
+        audio_fnv = FNV1A64_OFFSET;
+        audio_samples = 0;
+        frame[FRAME_A0] = 0;
+        break;
+    }
+    case SYS_AUDIO_WRITE: {
+        /* a0 = サンプル列へのポインタ、a1 = サンプル数
+         * (int16 の個数)。ダミーは待たずに全部受け付け、
+         * 受けたバイト列で FNV-1a を更新する */
+        uint64_t nsamples = frame[FRAME_A1];
+        uint64_t nbytes;
+        unsigned char buf[256];
+        uint64_t done = 0;
+        if (!audio_open_flag || nsamples > (uint64_t)-1 / 2) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (nsamples == 0) {
+            frame[FRAME_A0] = 0;
+            break;
+        }
+        nbytes = nsamples * 2;
+        /* ポインタが範囲外なら -1 (仕様)。途中まで受けて
+         * から失敗するとハッシュが中途半端な状態になる
+         * ので、先に全範囲が触れることを確かめる */
+        {
+            uint64_t i;
+            int ok = 1;
+            for (i = 0; i < nbytes; i++) {
+                if (user_pa(frame[FRAME_A0] + i) == 0) {
+                    ok = 0;
+                    break;
+                }
+            }
+            if (!ok) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+        }
+        /* ユーザーメモリから小分けに運びながらハッシュする */
+        while (done < nbytes) {
+            uint64_t chunk = nbytes - done;
+            uint64_t i;
+            if (chunk > sizeof(buf)) {
+                chunk = sizeof(buf);
+            }
+            if (copy_from_user(buf, frame[FRAME_A0] + done,
+                               chunk) != 0) {
+                /* 全範囲を確認済みなので、ここへは来ないはず */
+                frame[FRAME_A0] = (uint64_t)-1;
+                done = (uint64_t)-1;
+                break;
+            }
+            for (i = 0; i < chunk; i++) {
+                audio_fnv ^= buf[i];
+                audio_fnv *= FNV1A64_PRIME;
+            }
+            done += chunk;
+        }
+        if (done != (uint64_t)-1) {
+            audio_samples += nsamples;
+            frame[FRAME_A0] = nsamples;
+        }
+        break;
+    }
+    case SYS_AUDIO_CLOSE: {
+        /* 閉じる。受けた流れの要約をカーネルログへ 1 行残す
+         * (テストは dmesg 経由でこの行を照合する) */
+        if (!audio_open_flag) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        audio_open_flag = 0;
+        kputs("audio: close rate=");
+        kput_dec(audio_rate);
+        kputs(" channels=");
+        kput_dec(audio_channels);
+        kputs(" samples=");
+        kput_dec(audio_samples);
+        kputs(" fnv=");
+        kput_hex16(audio_fnv);
+        kputc('\n');
+        frame[FRAME_A0] = 0;
+        break;
+    }
     default:
         kputs("trap: unknown syscall ");
         put_dec(num);
