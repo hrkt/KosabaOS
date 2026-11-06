@@ -253,7 +253,7 @@ def main():
     ok = command("exit", "back from user program")
     report("K6 exit to kernel console", ok)
 
-    print("== scenario K12: wall clock (K210 RTC) ==")
+    print("== scenario K13: wall clock (K210 RTC) ==")
     # カーネルコンソールの 't' キー (doc/time.md)。未設定時の
     # 表示を見てから、設定 → 数秒待って読み戻しの往復が
     # 数秒以内の誤差で一致することを見る。未設定時は
@@ -283,7 +283,7 @@ def main():
                 cursor=cur) and ok
     call_tool("serial_send", {"text": "", "newline": True})
     ok = expect("time: kept", 5000, cursor=cur) and ok
-    report("K12 wall clock (RTC set + read back)", ok)
+    report("K13 wall clock (RTC set + read back)", ok)
 
     print("== summary ==")
     if fails == 0:
