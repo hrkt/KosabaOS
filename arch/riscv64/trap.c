@@ -665,24 +665,63 @@ static int do_syscall(uint64_t *frame)
         break;
     }
     case SYS_READDIR: {
-        struct fs_file *f = fs_at((int)frame[FRAME_A0]);
+        /* a0 = 番号、a1 = 名前バッファ (32 バイト)、
+         * a2 = ディレクトリのパス (NULL なら cwd)。
+         * 戻り値: 1 = ファイル、2 = ディレクトリ、0 = 終わり、
+         * -1 = そのディレクトリは無い (段4 で拡張)。
+         * バッファには要素名だけが入る */
+        char dirbuf[PATH_MAX];
+        char abs[PATH_MAX];
         char namebuf[32];
-        int i;
-        if (f == 0) {
-            frame[FRAME_A0] = 0;
-            break;
-        }
-        for (i = 0; i < 31 && f->name[i] != '\0'; i++) {
-            namebuf[i] = f->name[i];
-        }
-        namebuf[i] = '\0';
-        if (copy_to_user(frame[FRAME_A1],
-                         (const unsigned char *)namebuf,
-                         (uint64_t)i + 1) != 0) {
+        uint64_t len = 0;
+        int is_dir = 0;
+        if (frame[FRAME_A2] != 0) {
+            if (copy_user_string(frame[FRAME_A2], dirbuf,
+                                 sizeof(dirbuf)) != 0 ||
+                resolve_path(dirbuf, abs) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+        } else if (resolve_path(".", abs) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
-        frame[FRAME_A0] = 1;
+        if (is_sd_abs(abs)) {
+            uint64_t sz;
+            int d = 0;
+            int r = fat_list(sd_rel(abs), (int)frame[FRAME_A0],
+                             namebuf, &sz, &d);
+            if (r < 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+            if (r == 0) {
+                frame[FRAME_A0] = 0;
+                break;
+            }
+            is_dir = d;
+        } else {
+            if (!fs_is_dir(abs + 1) ||
+                fs_child(abs + 1, (int)frame[FRAME_A0], namebuf,
+                         sizeof(namebuf), &is_dir) != 1) {
+                /* ディレクトリが無ければ -1、子が尽きたら 0。
+                 * fs_is_dir で区別する */
+                frame[FRAME_A0] = fs_is_dir(abs + 1)
+                                      ? 0
+                                      : (uint64_t)-1;
+                break;
+            }
+        }
+        while (namebuf[len] != '\0') {
+            len++;
+        }
+        if (copy_to_user(frame[FRAME_A1],
+                         (const unsigned char *)namebuf,
+                         len + 1) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        frame[FRAME_A0] = is_dir ? 2 : 1;
         break;
     }
     case SYS_EXEC:

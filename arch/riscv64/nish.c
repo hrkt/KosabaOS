@@ -9,10 +9,14 @@
  *
  * コマンド:
  *   help            この一覧
- *   ls              ファイル一覧
+ *   ls [ディレクトリ]  ファイル一覧 (省略時は cwd)
  *   cat <名前>      ファイルの中身を表示
  *   write <名前> <本文>  ファイルを作って本文を書く
  *   rm <名前>       ファイルを消す
+ *   mkdir <名前>    ディレクトリを作る
+ *   rmdir <名前>    空のディレクトリを消す
+ *   cd <名前>       ディレクトリを移る (省略時は /)
+ *   pwd             現在のディレクトリを表示
  *   run <名前>      プログラムを実行 (終わると戻ってくる)
  *   echo <本文>     本文をそのまま表示
  *   ps              カーネルタスクの一覧
@@ -35,6 +39,10 @@
 #define SYS_WRITE 10
 #define SYS_TASKS 11
 #define SYS_UNLINK 12
+#define SYS_MKDIR 13
+#define SYS_RMDIR 14
+#define SYS_CHDIR 15
+#define SYS_GETCWD 16
 
 static long syscall3(long num, long a0, long a1, long a2)
 {
@@ -254,18 +262,76 @@ static void readline(char *buf)
 
 /* --- コマンド ------------------------------------------------------- */
 
-static void cmd_ls(void)
+/* ls [dir]: dir の中身を 1 行 1 件で出す。ディレクトリには
+ * 末尾に '/' を付ける。dir を省略したら cwd を見る */
+static void cmd_ls(const char *arg)
 {
     char name[32];
     long i;
+    int shown = 0;
     for (i = 0;; i++) {
-        if (syscall3(SYS_READDIR, i, (long)name, 0) != 1) {
+        long r = syscall3(SYS_READDIR, i, (long)name,
+                          (*arg != '\0') ? (long)arg : 0);
+        if (r == 0) {
+            break;
+        }
+        if (r < 0) {
+            if (!shown) {
+                puts_("ls: no such directory\n");
+            }
             break;
         }
         puts_("  ");
         puts_(name);
+        if (r == 2) {
+            putc_('/');
+        }
         putc_('\n');
+        shown = 1;
     }
+}
+
+static void cmd_mkdir(const char *arg)
+{
+    if (syscall3(SYS_MKDIR, (long)arg, 0, 0) < 0) {
+        puts_("mkdir: cannot create\n");
+        return;
+    }
+    puts_("created ");
+    puts_(arg);
+    putc_('\n');
+}
+
+static void cmd_rmdir(const char *arg)
+{
+    if (syscall3(SYS_RMDIR, (long)arg, 0, 0) < 0) {
+        puts_("rmdir: cannot remove\n");
+        return;
+    }
+    puts_("removed ");
+    puts_(arg);
+    putc_('\n');
+}
+
+static void cmd_cd(const char *arg)
+{
+    if (*arg == '\0') {
+        arg = "/";
+    }
+    if (syscall3(SYS_CHDIR, (long)arg, 0, 0) < 0) {
+        puts_("cd: no such directory\n");
+    }
+}
+
+static void cmd_pwd(void)
+{
+    char buf[128];
+    if (syscall3(SYS_GETCWD, (long)buf, sizeof(buf), 0) < 0) {
+        puts_("pwd: unavailable\n");
+        return;
+    }
+    puts_(buf);
+    putc_('\n');
 }
 
 static void cmd_cat(const char *name)
@@ -330,11 +396,11 @@ static void cmd_write(char *arg)
  * 子は argv として受け取る (入口の約束、doc/syscalls.md) */
 static void cmd_run(char *arg)
 {
-    char name[32];
+    char name[128];
     int i = 0;
     long r;
 
-    while (arg[i] != '\0' && arg[i] != ' ' && i < 31) {
+    while (arg[i] != '\0' && arg[i] != ' ' && i < 127) {
         name[i] = arg[i];
         i++;
     }
@@ -396,17 +462,29 @@ void _start(void)
             continue;
         } else if (streq(line, "help")) {
             puts_("help            this list\n");
-            puts_("ls              list files\n");
+            puts_("ls [dir]        list files (default: cwd)\n");
             puts_("cat <name>      show a file\n");
             puts_("write <n> <t>   create a file with text\n");
             puts_("rm <name>       remove a file\n");
+            puts_("mkdir <name>    make a directory\n");
+            puts_("rmdir <name>    remove an empty directory\n");
+            puts_("cd <name>       change directory (default: /)\n");
+            puts_("pwd             print working directory\n");
             puts_("run <name> [..] run a program (args after the name)\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
             puts_("clear           clear the screen\n");
             puts_("exit            leave Nish (to the kernel console)\n");
         } else if (streq(line, "ls")) {
-            cmd_ls();
+            cmd_ls(arg);
+        } else if (streq(line, "mkdir")) {
+            cmd_mkdir(arg);
+        } else if (streq(line, "rmdir")) {
+            cmd_rmdir(arg);
+        } else if (streq(line, "cd")) {
+            cmd_cd(arg);
+        } else if (streq(line, "pwd")) {
+            cmd_pwd();
         } else if (streq(line, "cat")) {
             cmd_cat(arg);
         } else if (streq(line, "write")) {

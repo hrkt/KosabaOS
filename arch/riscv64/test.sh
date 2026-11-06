@@ -223,6 +223,34 @@ check_order "$out" "[kernel] back from user program" \
     "page: alloc 0x0000000082200000" "(reused)" "(back to start)"
 report "N page allocator (alloc / free / reuse, no leak)" $?
 
+echo "== scenario O: fs stage 4 (directories + cwd) =="
+{ sleep 3; printf 'mkdir work\n'; sleep 1; \
+  printf 'write work/memo.txt dir-test\n'; sleep 1; \
+  printf 'ls work\n'; sleep 1; \
+  printf 'cd work\n'; sleep 1; \
+  printf 'pwd\n'; sleep 1; \
+  printf 'cat memo.txt\n'; sleep 1; \
+  printf 'cat ../hello.txt\n'; sleep 1; \
+  printf 'cd ..\n'; sleep 1; \
+  printf 'ls\n'; sleep 1; \
+  printf 'ls /sd\n'; sleep 2; \
+  printf 'ls /sd/SUB\n'; sleep 1; \
+  printf 'rmdir work\n'; sleep 1; \
+  printf 'rm work/memo.txt\n'; sleep 1; \
+  printf 'rmdir work\n'; sleep 1; \
+  printf 'cd work\n'; sleep 1; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 35 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-o.log 2>&1 || true
+out=$(strip_ticks < test-o.log)
+check_order "$out" "Nish, the KosabaOS shell" "created work" \
+    "wrote work/memo.txt" "memo.txt" "/work" "dir-test" \
+    "Hello from the KosabaOS RAM filesystem." "work/" \
+    "HELLO.TXT" "SUB/" "INNER.TXT" "rmdir: cannot remove" \
+    "removed work/memo.txt" "removed work" \
+    "cd: no such directory" "[kernel] back from user program"
+report "O fs stage 4 (mkdir/cd/pwd, relative paths, ls /sd)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

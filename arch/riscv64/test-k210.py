@@ -170,13 +170,28 @@ def main():
     report("K5 write + cat + rm", ok)
 
     print("== scenario K7: /sd failure is graceful ==")
-    # SD が読めない状態 (この基板は SCLK 線の物理故障で
-    # 常にこの経路) でも、ハングもクラッシュもせず
-    # 「無し」で返り、シェルが生き続けること。健全な基板
-    # でも存在しない名前なら同じ結果になる
+    # 存在しない名前では、ハングもクラッシュもせず
+    # 「無し」で返り、シェルが生き続けること
+    # (SD が読めない状態でも同じ経路で -1 になる)
     ok = command("cat /sd/NOSUCH.TXT", "cat: no such file")
     ok = command("ls", "nish\\.elf") and ok
     report("K7 /sd failure keeps the shell alive", ok)
+
+    print("== scenario K8: fs stage 4 (directories + cwd) ==")
+    # 実カードのルート一覧 (DCIM / MISC / BOOT.PY) が
+    # ls /sd で出ること、/sd へ cd して相対パスで
+    # BOOT.PY が読めること、RAM 側の mkdir / cd / pwd
+    ok = command("ls /sd", "BOOT\\.PY")
+    ok = command("ls /sd", "DCIM") and ok
+    ok = command("cd /sd", "nish>") and ok
+    ok = command("cat BOOT.PY", "fpioa_manager") and ok
+    ok = command("cd /", "nish>") and ok
+    ok = command("mkdir hw4", "created hw4") and ok
+    ok = command("cd hw4", "nish>") and ok
+    ok = command("pwd", "/hw4") and ok
+    ok = command("cd /", "nish>") and ok
+    ok = command("rmdir hw4", "removed hw4") and ok
+    report("K8 fs stage 4 (ls /sd, cd, relative cat)", ok)
 
     print("== scenario K6: exit to kernel console ==")
     ok = command("exit", "back from user program")
