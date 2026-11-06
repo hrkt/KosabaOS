@@ -301,6 +301,27 @@ case "$out" in
 esac
 report "Q kernel log (dmesg: boot records + exec denial)" $rc
 
+echo "== scenario R: uptime syscall =="
+# uptime.elf が syscall 31 (起動以来のミリ秒) を呼んで、
+# (1) 2 回の読みが単調 (減らない)、(2) 500ms の待ちで値が
+# その分進む、(3) 起動直後の値が大まかな範囲 (120 秒未満)
+# に収まる、ことをプログラム側で判定して "uptime ok" と
+# 出す。QEMU の時間は揺れるので絶対値の一致は見ず、
+# マーカーの順序と "uptime FAIL" の不在で判定する
+{ sleep 3; printf 'run uptime.elf\n'; sleep 4; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-r.log 2>&1 || true
+out=$(strip_ticks < test-r.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "uptime t0=" "uptime t1=" "uptime ok" \
+    "[kernel] back from user program" || rc=1
+case "$out" in
+    *"uptime FAIL"*) echo "  unexpected: uptime FAIL"; rc=1 ;;
+esac
+report "R uptime (monotonic / advances / sane range)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

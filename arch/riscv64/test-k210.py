@@ -234,6 +234,21 @@ def main():
     ok = command("dmesg", "out of pages.*pool free 0") and ok
     report("K11 pool exhaustion logged (eat.elf + dmesg)", ok)
 
+    print("== scenario K12: uptime syscall ==")
+    # uptime.elf が syscall 31 (起動以来のミリ秒) を呼んで、
+    # 単調 (減らない)・500ms の待ちでの進み・起動直後の
+    # 値の範囲をプログラム側で判定し "uptime ok" と出す
+    # (詳細は uptime.c)。実機のタイマは実時間なので、
+    # 待ちは実時間の 500ms 分になる。FAIL のときは
+    # "uptime ok" が出ないので、そちらの一致で判定する
+    cur = log_total()
+    send_chunked("run uptime.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("uptime t0=", 10000, cursor=cur)
+    ok = expect("uptime t1=", 8000, cursor=cur) and ok
+    ok = expect("uptime ok", 5000, cursor=cur) and ok
+    report("K12 uptime (monotonic / advances / sane range)", ok)
+
     print("== scenario K6: exit to kernel console ==")
     ok = command("exit", "back from user program")
     report("K6 exit to kernel console", ok)
