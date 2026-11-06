@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include "board.h"  /* 物理配置はボード層が決める */
 
+/* exec の深さの sanity 上限 (暴走防止のための打ち止め)。
+ * 実際の深さはページプールの残量で決まる (doc/exec-multilevel.md)。
+ * trap.c の退避スタックと fd テーブル、ここの段ごとのページ台帳は
+ * この上限で大きさを決める */
+#define EXEC_MAX_DEPTH 16
+
 /* ページングの初期化 (kernel.c から起動時に 1 回呼ぶ) */
 void vm_init(void);
 

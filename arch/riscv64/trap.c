@@ -148,6 +148,9 @@ static void put_dec(uint64_t x)
 static uint64_t next_deadline;  /* 次の割り込みの時刻 */
 static uint64_t ticks;          /* 割り込みの回数 */
 
+/* fd テーブル (下の方で定義) の初期化: 根の段の表を指させる */
+static void fd_table_init(void);
+
 void trap_init(void)
 {
     extern void trap_entry(void);  /* trap.S の入口 */
@@ -156,6 +159,8 @@ void trap_init(void)
                                     * (住所の下 2 ビット 0 = 全てここへ) */
     s_sie(SIE_STIE);               /* タイマ割り込みを許可 (sie) */
     s_sstatus(SSTATUS_SIE);        /* 全体の割り込み許可 (sstatus) */
+
+    fd_table_init();  /* fd_table を根のプログラムの表に */
 
     next_deadline = r_time() + TIMER_INTERVAL;
     if (sbi_set_timer(next_deadline) != 0) {  /* 最初の 1 回を予約 */
@@ -258,18 +263,29 @@ static int copy_from_user(unsigned char *dst, uint64_t va, uint64_t n)
 }
 
 /* --- ファイルディスクリプタ (ステップ 6) ------------------------------
- * 同時に動くユーザープログラムは 1 つなので、表は全体で 1 つ。
- * exec を呼ぶと全部閉じられる (仕様 v1 の決まり)。 */
+ * fd テーブルは exec の段ごとに持つ (exec 多段化、doc/
+ * exec-multilevel.md)。子は空のテーブルで始まり、親のテーブルは
+ * 親の段にそのまま残るので、子が終わっても親が開いたファイルは
+ * 生きている。fd_table は「今の段」のテーブルを指すポインタで、
+ * exec と子の終了 (resume_parent) のたびに切り替わる。 */
 
 #define MAX_FD 8
-static struct {
+struct fd_entry {
     struct fs_file *file;  /* RAM FS のファイル (is_sd でないとき) */
     struct fat_file fat;   /* SD 側のファイル (is_sd のとき) */
     uint64_t pos;
     int used;
     int writable;  /* 1 = create で開いた書き込み用 */
     int is_sd;     /* 1 = /sd の向こう (FAT) のファイル */
-} fd_table[MAX_FD];
+};
+
+static struct fd_entry fd_tables[EXEC_MAX_DEPTH + 1][MAX_FD];
+static struct fd_entry *fd_table;  /* trap_init で fd_tables[0] を指す */
+
+static void fd_table_init(void)
+{
+    fd_table = fd_tables[0];
+}
 
 /* パスが固定マウント /sd の配下かどうか (doc/sd-design.md) */
 static int is_sd_path(const char *name)
@@ -389,22 +405,26 @@ static const char *sd_rel(const char *abs)
     return abs[3] == '\0' ? abs + 3 : abs + 4;
 }
 
-static void close_all_fds(void)
+static void clear_fds(struct fd_entry *t)
 {
     int i;
     for (i = 0; i < MAX_FD; i++) {
-        fd_table[i].used = 0;
+        t[i].used = 0;
     }
 }
 
-/* --- exec の親子 (ステップ 6) -----------------------------------------
- * 親が exec を呼んだら、親の trapframe・sepc・sp・領域の割り当てを
- * ここへ退避し、同じ仮想アドレスに子の領域を差し替えて子を
- * 起動する。子が exit / 保護違反で終わったら、退避した親の状態を
- * 現在の trapframe に書き戻し、親は exec から戻った形で再開する。 */
+/* --- exec の積み重ね (ステップ 6 → exec 多段化) -----------------------
+ * 親が exec を呼んだら、親の trapframe・sepc・sp・領域の割り当て・
+ * cwd を exec_stack へ退避し、同じ仮想アドレスに子の領域を
+ * 差し替えて子を起動する。子が exit / 保護違反で終わったら、
+ * 退避した親の状態を現在の trapframe に書き戻し、親は exec から
+ * 戻った形で再開する。exec_depth が「今動いているプログラムの段」
+ * で、0 がカーネルから直接起動された根のプログラム。
+ * 段A (現段階) では退避を積み重ねる構造と段ごとの fd テーブルだけ
+ * を入れ、領域は従来どおり親子 2 セットなので深さ 1 で打ち止める。
+ * 領域のプール化は段B で行う (doc/exec-multilevel.md)。 */
 
 static struct {
-    int active;
     uint64_t frame[32];
     uint64_t sepc;
     uint64_t sp;
@@ -412,22 +432,25 @@ static struct {
     uint64_t data_pa;
     uint64_t stack_pa;
     char cwd[PATH_MAX];  /* 親の cwd (子が chdir しても戻せるように) */
-} exec_parent;
+} exec_stack[EXEC_MAX_DEPTH];
+
+static int exec_depth = 0;  /* 今動いているプログラムの段 */
 
 static void resume_parent(uint64_t *frame, uint64_t result)
 {
     int i;
+    exec_depth--;
     for (i = 0; i < 32; i++) {
-        frame[i] = exec_parent.frame[i];
+        frame[i] = exec_stack[exec_depth].frame[i];
     }
     frame[FRAME_A0] = result;
-    w_sepc(exec_parent.sepc + 4);
-    w_sscratch(exec_parent.sp);
-    vm_switch_user_region(exec_parent.code_pa, exec_parent.data_pa,
-                          exec_parent.stack_pa);
-    proc_set_cwd(exec_parent.cwd);
-    exec_parent.active = 0;
-    close_all_fds();
+    w_sepc(exec_stack[exec_depth].sepc + 4);
+    w_sscratch(exec_stack[exec_depth].sp);
+    vm_switch_user_region(exec_stack[exec_depth].code_pa,
+                          exec_stack[exec_depth].data_pa,
+                          exec_stack[exec_depth].stack_pa);
+    proc_set_cwd(exec_stack[exec_depth].cwd);
+    fd_table = fd_tables[exec_depth];  /* 親の fd テーブルに戻す */
 }
 
 /* exec の引数 (a1 で渡される空白区切りの文字列) の上限 */
@@ -446,8 +469,11 @@ static int do_exec(uint64_t *frame)
     uint64_t entry;
     int i;
 
-    if (exec_parent.active) {
-        frame[FRAME_A0] = (uint64_t)-1;  /* exec は 1 段まで */
+    if (exec_depth >= 1) {
+        /* 段A では領域セットが親子 2 組だけなので深さ 1 で
+         * 打ち止める。段B でプール化したら EXEC_MAX_DEPTH
+         * (sanity 上限) まで開ける */
+        frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
     if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
@@ -497,28 +523,31 @@ static int do_exec(uint64_t *frame)
         return 0;
     }
 
-    /* 親の状態を退避する */
+    /* 親の状態を退避スタックへ積む */
     for (i = 0; i < 32; i++) {
-        exec_parent.frame[i] = frame[i];
+        exec_stack[exec_depth].frame[i] = frame[i];
     }
-    exec_parent.sepc = r_sepc();
-    exec_parent.sp = r_sscratch();
-    exec_parent.code_pa = vm_current_code_pa();
-    exec_parent.data_pa = vm_current_data_pa();
-    exec_parent.stack_pa = vm_current_stack_pa();
+    exec_stack[exec_depth].sepc = r_sepc();
+    exec_stack[exec_depth].sp = r_sscratch();
+    exec_stack[exec_depth].code_pa = vm_current_code_pa();
+    exec_stack[exec_depth].data_pa = vm_current_data_pa();
+    exec_stack[exec_depth].stack_pa = vm_current_stack_pa();
     /* cwd は子へ引き継ぐ (そのまま)。親の分は退避しておき、
      * 子が chdir しても resume_parent で戻す */
     {
         const char *cwd = proc_cwd();
         int i2 = 0;
         while (cwd[i2] != '\0' && i2 < PATH_MAX - 1) {
-            exec_parent.cwd[i2] = cwd[i2];
+            exec_stack[exec_depth].cwd[i2] = cwd[i2];
             i2++;
         }
-        exec_parent.cwd[i2] = '\0';
+        exec_stack[exec_depth].cwd[i2] = '\0';
     }
-    exec_parent.active = 1;
-    close_all_fds();
+    exec_depth++;
+    /* 子は空の fd テーブルで始める。親のテーブルは親の段に
+     * 残るので、子の終了後に親の fd がそのまま使える */
+    fd_table = fd_tables[exec_depth];
+    clear_fds(fd_table);
 
     /* 子の領域に差し替えて、子の入口から開始させる。
      * レジスタは汚れたまま渡さないようゼロにしておく。
@@ -554,7 +583,7 @@ static int do_syscall(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)uart_getc();
         break;
     case SYS_EXIT:
-        if (exec_parent.active) {
+        if (exec_depth > 0) {
             /* a0 = 終了ステータス。そのまま親の exec の戻り値に
              * なる (0 が正常。-1 / -2 は exec 自身の失敗と
              * 保護違反用に予約されているので、ステータスは
@@ -758,15 +787,24 @@ static int do_syscall(uint64_t *frame)
             break;
         }
         /* 開いているファイルは消せない (段2 の割り切り)。
-         * 消すと fd の先が宙に浮くため */
-        for (i = 0; i < MAX_FD; i++) {
-            if (fd_table[i].used && fd_table[i].file == f) {
+         * 消すと fd の先が宙に浮くため。fd テーブルは段ごとに
+         * あるので、どの段で開いていても対象にする (SD の fd は
+         * file が 0 なので一致しない) */
+        {
+            int l, open_found = 0;
+            for (l = 0; l <= exec_depth && !open_found; l++) {
+                for (i = 0; i < MAX_FD; i++) {
+                    if (fd_tables[l][i].used &&
+                        fd_tables[l][i].file == f) {
+                        open_found = 1;
+                        break;
+                    }
+                }
+            }
+            if (open_found) {
                 frame[FRAME_A0] = (uint64_t)-1;
                 break;
             }
-        }
-        if (i != MAX_FD) {
-            break;
         }
         frame[FRAME_A0] = (uint64_t)fs_unlink(abs + 1);
         break;
@@ -860,6 +898,7 @@ static int do_syscall(uint64_t *frame)
                 fd_table[i].pos = 0;
                 fd_table[i].used = 1;
                 fd_table[i].writable = 1;
+                fd_table[i].is_sd = 0;
                 frame[FRAME_A0] = (uint64_t)i;
                 break;
             }
@@ -981,7 +1020,7 @@ void trap_handler(uint64_t *frame, int from_user)
         uart_puts(" stval=");
         put_hex(r_stval());
         uart_putc('\n');
-        if (exec_parent.active) {
+        if (exec_depth > 0) {
             resume_parent(frame, (uint64_t)-2);
             return;
         }
