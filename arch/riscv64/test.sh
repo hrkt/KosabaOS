@@ -304,7 +304,7 @@ report "Q kernel log (dmesg: boot records + exec denial)" $rc
 echo "== scenario R: uptime syscall =="
 # uptime.elf が syscall 31 (起動以来のミリ秒) を呼んで、
 # (1) 2 回の読みが単調 (減らない)、(2) 500ms の待ちで値が
-# その分進む、(3) 起動直後の値が大まかな範囲 (120 秒未満)
+# その分進む、(3) 起動直後の値が大まかな範囲 (1 時間未満)
 # に収まる、ことをプログラム側で判定して "uptime ok" と
 # 出す。QEMU の時間は揺れるので絶対値の一致は見ず、
 # マーカーの順序と "uptime FAIL" の不在で判定する
