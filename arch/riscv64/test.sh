@@ -360,6 +360,40 @@ if [ "$rc" -eq 0 ]; then
 fi
 report "S wall clock (Goldfish RTC: read / advance / read-only)" $rc
 
+echo "== scenario T: audio syscalls (dummy device) =="
+# atest.elf が audio_open(44100, 1) → 既知の列を分けて
+# audio_write (300 + 300 + 400 = 1000 サンプル) → audio_close
+# し、Nish の dmesg に出る "audio: close" 行の samples と
+# fnv がホスト側の期待値と一致すること。開く前の write /
+# close、変なチャンネル数、再 open、範囲外ポインタなどの
+# -1 系は atest 側が確かめて "atest: ... ok" を出す
+# (カーネルのメッセージは起きた瞬間にコンソールにも出る
+# ので、"audio: close" 行は atest: done より後 = dmesg での
+# 読み返しに当たる出現で照合する)
+expected_fnv=$(python3 -c '
+h = 0xcbf29ce484222325
+for i in range(1000):
+    v = (i * 37 + 11) & 0xFFFF
+    for b in (v & 0xFF, v >> 8):
+        h ^= b
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+print("%016x" % h)')
+{ sleep 3; printf 'run atest.elf\n'; sleep 3; \
+  printf 'dmesg\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-t.log 2>&1 || true
+out=$(strip_ticks < test-t.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "atest: errors ok" "atest: open ok" "atest: writes ok" \
+    "atest: close ok" "atest: done" \
+    "audio: close rate=44100 channels=1 samples=1000 fnv=$expected_fnv" || rc=1
+case "$out" in
+    *"atest: FAIL"*) echo "  unexpected: atest reported FAIL"; rc=1 ;;
+esac
+report "T audio syscalls (open/write/close, fnv via dmesg)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
