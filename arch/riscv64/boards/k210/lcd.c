@@ -14,6 +14,8 @@
 
 #include <stdint.h>
 #include "lcd.h"
+#include "time.h"
+#include "klog.h"
 
 #define REG32(addr) (*(volatile uint32_t *)(addr))
 
@@ -318,11 +320,18 @@ uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
     return (uint32_t)n * 6 * scale;
 }
 
-/* ---- tick 表示 (割り込みハンドラから毎秒呼ばれる) ---- */
+/* ---- tick 表示 (割り込みハンドラから毎秒呼ばれる) ----
+ * 描く中身には 2 つの顔がある:
+ *   - RTC が有効な日時を返す間は壁時計 "HH:MM:SS" (UTC)
+ *   - それ以外 (未設定) は従来どおり起動秒数
+ * 起動 → コンソールの 't' で合わせる → 次の秒から壁時計に
+ * 切り替わる。切り替わった事実は 1 回だけ klog に残す
+ * (毎秒は残さない) */
 static int tick_armed;
 static uint32_t tick_x, tick_y, tick_scale;
 static uint16_t tick_fg, tick_bg;
-static int tick_digits;   /* 前回描いた桁数 (消去幅の計算用) */
+static int tick_digits;   /* 前回描いた文字数 (消去幅の計算用) */
+static int tick_wall;     /* 壁時計表示に切り替わったか */
 
 void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
                     uint16_t fg, uint16_t bg) {
@@ -335,23 +344,50 @@ void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
     tick_armed = 1;
 }
 
+static void tick_two_digits(char *p, int v)
+{
+    p[0] = (char)('0' + (v / 10) % 10);
+    p[1] = (char)('0' + v % 10);
+}
+
 void lcd_tick_draw(uint64_t seconds) {
     if (!tick_armed) return;
-    /* 10 進の文字列化 (このファイルの中で完結させる) */
     char buf[24];
     int n = 0;
-    if (seconds == 0) {
-        buf[n++] = '0';
-    } else {
-        char rev[24];
-        int m = 0;
-        while (seconds > 0) {
-            rev[m++] = (char)('0' + (seconds % 10));
-            seconds /= 10;
+    struct datetime dt;
+    if (time_read(&dt) == 0) {
+        /* 壁時計 "HH:MM:SS" */
+        tick_two_digits(buf + 0, dt.hour);
+        buf[2] = ':';
+        tick_two_digits(buf + 3, dt.minute);
+        buf[5] = ':';
+        tick_two_digits(buf + 6, dt.second);
+        n = 8;
+        buf[n] = '\0';
+        if (!tick_wall) {
+            /* 切り替わりの節目だけ、描いた値を記録に残す */
+            char fbuf[20];
+            tick_wall = 1;
+            time_format(&dt, fbuf);
+            kputs("lcd: wall clock ");
+            kputs(fbuf);
+            kputs(" UTC\n");
         }
-        while (m > 0) buf[n++] = rev[--m];
+    } else {
+        /* 10 進の文字列化 (このファイルの中で完結させる) */
+        if (seconds == 0) {
+            buf[n++] = '0';
+        } else {
+            char rev[24];
+            int m = 0;
+            while (seconds > 0) {
+                rev[m++] = (char)('0' + (seconds % 10));
+                seconds /= 10;
+            }
+            while (m > 0) buf[n++] = rev[--m];
+        }
+        buf[n] = '\0';
     }
-    buf[n] = '\0';
     /* 前回の数字を丸ごと背景で消してから描く。lcd_draw_text は
      * 点の部分しか塗らないので、消さずに重ねると前の数字が
      * 残って数秒で真っ平らな四角になってしまう */

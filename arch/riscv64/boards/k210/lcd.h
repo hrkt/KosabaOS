@@ -9,7 +9,8 @@
  *   - 基本描画: lcd_init / lcd_fill_rect / lcd_draw_text
  *   - 色は LCD_RGB で作る (RGB565 への変換はここだけ)
  *   - tick 表示: lcd_tick_setup で場所と色を覚えさせると、
- *     以後は lcd_tick_draw(秒数) でその場所だけを描き直す。
+ *     以後は lcd_tick_draw でその場所だけを描き直す (中身は
+ *     壁時計か起動秒数。lcd.c の tick 表示の節を参照)。
  *     setup 前の tick_draw は何もしない (起動中の描画と
  *     割り込みからの描画がぶつからないための番人でもある)
  */
@@ -52,8 +53,10 @@ uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
 void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
                     uint16_t fg, uint16_t bg);
 
-/* 覚えた場所に秒数 (10 進) を描き直す。setup 前は何もしない。
- * 割り込みハンドラから呼ばれる想定で、描画はこの 1 箇所だけ */
+/* 覚えた場所の表示を描き直す。RTC が有効な日時を返す間は
+ * 壁時計 "HH:MM:SS" (UTC)、それ以外は引数の秒数 (10 進)。
+ * setup 前は何もしない。割り込みハンドラから呼ばれる想定で、
+ * 描画はこの 1 箇所だけ */
 void lcd_tick_draw(uint64_t seconds);
 
 #endif
