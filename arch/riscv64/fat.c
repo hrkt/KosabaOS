@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "fat.h"
 #include "blkdev.h"
+#include "klog.h"
 
 #define SECTOR 512
 
@@ -190,6 +191,9 @@ static int fat_mount(struct blkdev *d)
     total_clusters =
         (total32 - (data_start - bpb_lba)) / sec_per_cluster;
     mounted = 1;
+    /* マウントは遅延 (最初の /sd アクセス時) なので、起きた
+     * ことをログに残す (コンソールにも出る) */
+    kputs("[fat] /sd mounted\n");
     return 0;
 }
 

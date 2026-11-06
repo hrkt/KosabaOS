@@ -35,6 +35,7 @@
 #include "vm.h"
 #include "page.h"
 #include "uart.h"
+#include "klog.h"
 
 #define PTE_V (1ULL << 0)
 #define PTE_R (1ULL << 1)
@@ -208,6 +209,11 @@ int vm_stack_prepare(struct user_pages *up, uint64_t nbytes)
         if (up->stack[idx] == 0) {
             uint64_t pa = page_alloc();
             if (pa == 0) {
+                /* プール枯渇。呼び出し側は -1 でしか知れない
+                 * ので、理由はログに残す */
+                kputs("vm: out of pages (stack prepare, pool free ");
+                kput_dec(page_free_count());
+                kputs(")\n");
                 return -1;
             }
             up->stack[idx] = pa;
@@ -233,7 +239,10 @@ int vm_stack_grow(uint64_t va)
     }
     pa = page_alloc();
     if (pa == 0) {
-        return 0;  /* プール枯渇: 伸ばせない */
+        /* プール枯渇: 伸ばせない。このあとプログラムは
+         * 保護違反として終わるので、真の理由をログに残す */
+        kputs("vm: out of pages (stack grow)\n");
+        return 0;
     }
     up->stack[idx] = pa;
     set_user_pte(USER_STACK_VA + idx * 4096, pa, USER_DATA_FLAGS);
@@ -294,7 +303,7 @@ void vm_init(void)
     w_satp(satp);
     BOARD_SFENCE_VMA();
 
-    uart_puts("vm: Sv39 paging on (identity map)\n");
+    kputs("vm: Sv39 paging on (identity map)\n");
 }
 
 /* デモ用: マップされていない住所 (0x60000000: ユーザー領域の

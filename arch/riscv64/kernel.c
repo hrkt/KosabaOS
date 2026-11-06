@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include "board.h"
 #include "uart.h"
+#include "klog.h"
 #include "trap.h"
 #include "vm.h"
 #include "page.h"
@@ -49,7 +50,7 @@ static void start_user_named(const char *name)
     uint64_t entry;
 
     if (f == 0) {
-        uart_puts("\n[kernel] file not found\n");
+        kputs("\n[kernel] file not found\n");
         return;
     }
     /* 前のプログラムのページが残っていれば返してから、
@@ -58,12 +59,12 @@ static void start_user_named(const char *name)
     entry = elf_load_to(f, up);
     if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
         vm_pages_release(0);
-        uart_puts("\n[kernel] failed to load user program\n");
+        kputs("\n[kernel] failed to load user program\n");
         return;
     }
-    uart_puts("\n[kernel] starting ");
-    uart_puts(name);
-    uart_putc('\n');
+    kputs("\n[kernel] starting ");
+    kputs(name);
+    kputc('\n');
     proc_set_cwd("/");  /* 直接起動はルートから始める (段4) */
     /* カーネルから直接起動する場合の引数は {プログラム名} のみ */
     {
@@ -73,14 +74,14 @@ static void start_user_named(const char *name)
         sp = user_stack_setup_argv(up, 1, tokens, &argv_va);
         if (sp == 0) {
             vm_pages_release(0);
-            uart_puts("\n[kernel] failed to load user program\n");
+            kputs("\n[kernel] failed to load user program\n");
             return;
         }
         vm_apply_pages(0);  /* 台帳をページ表へ反映してから降りる */
         user_launch(entry, sp, 1, argv_va);
     }
     vm_pages_release(0);  /* 終わったらページをプールへ返す */
-    uart_puts("\n[kernel] back from user program\n");
+    kputs("\n[kernel] back from user program\n");
 }
 #endif /* BOARD_FEATURE_SMODE_PATH */
 
@@ -109,6 +110,12 @@ void kmain(void)
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
     page_init();  /* ページアロケータ (プールはボード依存) */
+    /* 起動時の基本情報をログに残す (dmesg で読み返せる) */
+    kputs("page: pool total ");
+    kput_dec(page_total_count());
+    kputs(", free ");
+    kput_dec(page_free_count());
+    kputc('\n');
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
 #endif
 #if BOARD_FEATURE_MMODE_TRAP
@@ -129,15 +136,15 @@ void kmain(void)
         lcd_draw_text(196 + w + 6, 198, "FILES", 2, LCD_RGB(150, 150, 150));
     }
 #endif
-    uart_puts("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
+    kputs("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
 #if BOARD_FEATURE_SMODE_PATH
     /* シェル Nish を最初に起動する (主役化)。
      * Nish で exit すると下のカーネルコンソールに落ちる */
     start_user_named("nish.elf");
-    uart_puts("[kernel] kernel console "
-              "(u: uprog, s: Nish, m: multitask, l: files, "
-              "x: fault, p: pages)\n");
+    kputs("[kernel] kernel console "
+          "(u: uprog, s: Nish, m: multitask, l: files, "
+          "x: fault, p: pages)\n");
 #endif
 
 #if BOARD_FEATURE_LCD

@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include "trap.h"
 #include "uart.h"
+#include "klog.h"
+#include "page.h"
 #include "proc.h"
 #include "vm.h"
 #include "elf.h"
@@ -114,19 +116,17 @@ static long sbi_set_timer(uint64_t when)
     return (long)a0;
 }
 
-/* --- 小さな表示部品 ------------------------------------------------ */
+/* --- 小さな表示部品 ------------------------------------------------
+ * カーネルのメッセージは klog 経由 (klog.h) で出し、コンソール
+ * に出ると同時にログにも残る。数値の表示は klog 側の部品を
+ * そのまま使う (put_hex / put_dec はその別名)。 */
 
-static void put_hex(uint64_t x)
-{
-    int i;
-    uart_puts("0x");
-    for (i = 60; i >= 0; i -= 4) {
-        int d = (int)((x >> i) & 0xF);
-        uart_putc((char)(d < 10 ? '0' + d : 'a' + (d - 10)));
-    }
-}
+#define put_hex kput_hex
+#define put_dec kput_dec
 
-static void put_dec(uint64_t x)
+/* tick の表示専用 (10 進)。tick は毎秒出るのでログには残さず、
+ * コンソールにだけ出す (klog.c の方針) */
+static void con_dec(uint64_t x)
 {
     char buf[20];
     int n = 0;
@@ -146,7 +146,13 @@ static void put_dec(uint64_t x)
 /* --- タイマ -------------------------------------------------------- */
 
 static uint64_t next_deadline;  /* 次の割り込みの時刻 */
-static uint64_t ticks;          /* 割り込みの回数 */
+static uint64_t ticks;          /* 起動以来の秒数 (1 秒に 1 回増える) */
+
+/* klog の接頭辞 [秒] 用: 起動以来の秒数を返す */
+uint64_t trap_tick_count(void)
+{
+    return ticks;
+}
 
 /* fd テーブル (下の方で定義) の初期化: 根の段の表を指させる */
 static void fd_table_init(void);
@@ -164,7 +170,7 @@ void trap_init(void)
 
     next_deadline = r_time() + TIMER_INTERVAL;
     if (sbi_set_timer(next_deadline) != 0) {  /* 最初の 1 回を予約 */
-        uart_puts("trap: sbi_set_timer failed\n");
+        kputs("trap: sbi_set_timer failed\n");
     }
 }
 
@@ -198,6 +204,7 @@ void trap_init(void)
 #define SYS_RMDIR 14
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
+#define SYS_KLOG_READ 30
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -482,14 +489,21 @@ static int do_exec(uint64_t *frame)
     uint64_t entry;
     int i;
 
-    if (exec_depth >= EXEC_MAX_DEPTH) {
-        /* sanity 上限。これ以上は積み重ねない (仕様として
-         * syscalls.md に明記) */
+    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
-    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-        resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+    if (exec_depth >= EXEC_MAX_DEPTH) {
+        /* sanity 上限。これ以上は積み重ねない (仕様として
+         * syscalls.md に明記)。戻り値の -1 だけでは理由が
+         * 分からないので、ログに理由を残す (klog) */
+        kputs("exec: denied, depth limit: ");
+        kputs(name);
+        kputc('\n');
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+    if (resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
         /* SD からの exec は v1 の対象外 (sd-design.md) */
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
@@ -536,6 +550,11 @@ static int do_exec(uint64_t *frame)
     vm_pages_release(exec_depth + 1);  /* 前の残りがあれば返す */
     entry = elf_load_to(f, up);
     if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
+        /* 失敗の具体的な理由 (プール枯渇、ELF の形など) は
+         * elf.c / vm.c 側がログに残す。ここでは対象だけ残す */
+        kputs("exec: cannot load: ");
+        kputs(name);
+        kputc('\n');
         vm_pages_release(exec_depth + 1);
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
@@ -572,6 +591,10 @@ static int do_exec(uint64_t *frame)
         uint64_t argv_va;
         uint64_t sp = user_stack_setup_argv(up, argc, tokens, &argv_va);
         if (sp == 0) {
+            /* 実質プール枯渇のときだけ到達する経路 */
+            kputs("exec: cannot place argv: ");
+            kputs(name);
+            kputc('\n');
             resume_parent(frame, (uint64_t)-1);
             return 1;  /* sepc は resume_parent が親側に設定済み */
         }
@@ -958,10 +981,49 @@ static int do_syscall(uint64_t *frame)
         }
         break;
     }
+    case SYS_KLOG_READ: {
+        /* a0 = バッファ、a1 = 大きさ、a2 = 読み出し開始
+         * オフセット (起動以来の通し位置)。fs_read_at 的な
+         * 位置指定読みで、Nish の dmesg が 0 から順に読む。
+         * 開始位置が最古の残存位置より前なら最古に丸めて
+         * から読み始める (丸めた位置を起点に数える) */
+        char kbuf[256];
+        uint64_t off = frame[FRAME_A2];
+        uint64_t max = frame[FRAME_A1];
+        uint64_t done = 0;
+        if (off < klog_oldest()) {
+            off = klog_oldest();
+        }
+        while (done < max) {
+            uint64_t chunk = max - done;
+            uint64_t got;
+            if (chunk > sizeof(kbuf)) {
+                chunk = sizeof(kbuf);
+            }
+            got = klog_read(off + done, kbuf, chunk);
+            if (got == 0) {
+                break;  /* 最新まで読んだ */
+            }
+            if (copy_to_user(frame[FRAME_A0] + done,
+                             (const unsigned char *)kbuf, got) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                done = (uint64_t)-1;
+                break;
+            }
+            done += got;
+            if (got < chunk) {
+                break;  /* 末尾まで読み切った */
+            }
+        }
+        if (done != (uint64_t)-1) {
+            frame[FRAME_A0] = done;
+        }
+        break;
+    }
     default:
-        uart_puts("trap: unknown syscall ");
+        kputs("trap: unknown syscall ");
         put_dec(num);
-        uart_putc('\n');
+        kputc('\n');
         frame[FRAME_A0] = (uint64_t)-1;
         break;
     }
@@ -995,8 +1057,9 @@ void trap_handler(uint64_t *frame, int from_user)
         if (++tick_divider >= 10) {
             tick_divider = 0;
             ticks++;
+            /* tick はコンソールだけ (ログには残さない) */
             uart_puts("tick ");
-            put_dec(ticks);
+            con_dec(ticks);
             uart_putc('\n');
         }
         if (sched_active && preempt_enabled) {
@@ -1014,9 +1077,9 @@ void trap_handler(uint64_t *frame, int from_user)
     }
 
     if (is_interrupt) {
-        uart_puts("trap: unexpected interrupt, code=");
+        kputs("trap: unexpected interrupt, code=");
         put_dec(code);
-        uart_putc('\n');
+        kputc('\n');
         return;
     }
 
@@ -1046,13 +1109,13 @@ void trap_handler(uint64_t *frame, int from_user)
         /* ユーザープログラムの例外 (メモリ保護違反など):
          * そのプログラムだけを終わらせる。exec の子なら
          * 親に戻して exec の結果として -2 を返す */
-        uart_puts("trap: user program fault scause=");
+        kputs("trap: user program fault scause=");
         put_hex(scause);
-        uart_puts(" sepc=");
+        kputs(" sepc=");
         put_hex(r_sepc());
-        uart_puts(" stval=");
+        kputs(" stval=");
         put_hex(r_stval());
-        uart_putc('\n');
+        kputc('\n');
         if (exec_depth > 0) {
             resume_parent(frame, (uint64_t)-2);
             return;
@@ -1068,17 +1131,17 @@ void trap_handler(uint64_t *frame, int from_user)
         || code == 1 || code == 5 || code == 7
 #endif
         ) {
-        uart_puts("trap: page fault (code=");
+        kputs("trap: page fault (code=");
         put_dec(code);
-        uart_puts(") ");
+        kputs(") ");
     }
-    uart_puts("trap: exception scause=");
+    kputs("trap: exception scause=");
     put_hex(scause);
-    uart_puts(" sepc=");
+    kputs(" sepc=");
     put_hex(r_sepc());
-    uart_puts(" stval=");
+    kputs(" stval=");
     put_hex(r_stval());
-    uart_putc('\n');
+    kputc('\n');
     for (;;) {
         asm volatile("wfi");
     }

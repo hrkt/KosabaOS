@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 #include "elf.h"
-#include "uart.h"
+#include "klog.h"
 #include "vm.h"
 #include "page.h"
 #include "fs.h"
@@ -75,7 +75,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
 
     /* ヘッダを読む。短ければ ELF ではない */
     if (fs_read_at(f, 0, (unsigned char *)&h, sizeof(h)) != sizeof(h)) {
-        uart_puts("[elf] bad magic\n");
+        kputs("[elf] bad magic\n");
         return 0;
     }
 
@@ -83,15 +83,15 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
      * リトルエンディアン、実行形式、RISC-V */
     if (!(h.e_ident[0] == 0x7F && h.e_ident[1] == 'E' &&
           h.e_ident[2] == 'L' && h.e_ident[3] == 'F')) {
-        uart_puts("[elf] bad magic\n");
+        kputs("[elf] bad magic\n");
         return 0;
     }
     if (h.e_ident[4] != 2 || h.e_ident[5] != 1) {
-        uart_puts("[elf] not a 64-bit little-endian ELF\n");
+        kputs("[elf] not a 64-bit little-endian ELF\n");
         return 0;
     }
     if (h.e_type != ET_EXEC || h.e_machine != EM_RISCV) {
-        uart_puts("[elf] not a RISC-V executable\n");
+        kputs("[elf] not a RISC-V executable\n");
         return 0;
     }
 
@@ -105,7 +105,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
 
         if (fs_read_at(f, h.e_phoff + (uint64_t)i * h.e_phentsize,
                        (unsigned char *)&p, sizeof(p)) != sizeof(p)) {
-            uart_puts("[elf] truncated program header\n");
+            kputs("[elf] truncated program header\n");
             return 0;
         }
         if (p.p_type != PT_LOAD) {
@@ -123,7 +123,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
             pages = up->data;
             base = USER_DATA_VA;
         } else {
-            uart_puts("[elf] segment out of user range\n");
+            kputs("[elf] segment out of user range\n");
             return 0;
         }
         /* セグメントが触るページをプールから取る。既に取って
@@ -138,7 +138,12 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
                 if (pages[idx] == 0) {
                     uint64_t pa = page_alloc();
                     if (pa == 0) {
-                        uart_puts("[elf] out of pages\n");
+                        /* プール枯渇。exec の戻り値 (-1) では
+                         * 理由が伝わらないので、残量つきで
+                         * ログに残す (dmesg で追える) */
+                        kputs("[elf] out of pages (pool free ");
+                        kput_dec(page_free_count());
+                        kputs(")\n");
                         return 0;
                     }
                     pages[idx] = pa;
@@ -156,7 +161,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
             uint64_t room = 4096 - (va & 4095);
             uint64_t got, k;
             if (pa == 0) {
-                uart_puts("[elf] segment page missing\n");
+                kputs("[elf] segment page missing\n");
                 return 0;
             }
             if (chunk > room) {
@@ -167,7 +172,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
             }
             got = fs_read_at(f, p.p_offset + done, buf, chunk);
             if (got == 0) {
-                uart_puts("[elf] truncated segment\n");
+                kputs("[elf] truncated segment\n");
                 return 0;
             }
             for (k = 0; k < got; k++) {
