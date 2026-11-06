@@ -20,6 +20,7 @@
  *   run <名前>      プログラムを実行 (終わると戻ってくる)
  *   echo <本文>     本文をそのまま表示
  *   ps              カーネルタスクの一覧
+ *   dmesg           カーネルログを表示
  *   clear           画面を消す
  *   exit            シェルを終わってカーネルに帰る
  *
@@ -43,6 +44,7 @@
 #define SYS_RMDIR 14
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
+#define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
 {
@@ -418,6 +420,29 @@ static void cmd_run(char *arg)
     }
 }
 
+/* dmesg: カーネルログを古い順に全部出す。klog_read (30) で
+ * オフセットを進めながら読み切る (0 が返ったら最新まで
+ * 読んだということ) */
+static void cmd_dmesg(void)
+{
+    char buf[256];
+    long off = 0;
+    for (;;) {
+        long n = syscall3(SYS_KLOG_READ, (long)buf, sizeof(buf), off);
+        long i;
+        if (n <= 0) {
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            putc_(buf[i]);
+        }
+        off += n;
+        if (n < (long)sizeof(buf)) {
+            break;
+        }
+    }
+}
+
 static void cmd_ps(void)
 {
     char buf[256];
@@ -473,6 +498,7 @@ void _start(void)
             puts_("run <name> [..] run a program (args after the name)\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
+            puts_("dmesg           show the kernel log\n");
             puts_("clear           clear the screen\n");
             puts_("exit            leave Nish (to the kernel console)\n");
         } else if (streq(line, "ls")) {
@@ -498,6 +524,8 @@ void _start(void)
             putc_('\n');
         } else if (streq(line, "ps")) {
             cmd_ps();
+        } else if (streq(line, "dmesg")) {
+            cmd_dmesg();
         } else if (streq(line, "clear")) {
             puts_("\033[2J\033[H");
         } else if (streq(line, "exit")) {

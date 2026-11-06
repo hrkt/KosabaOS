@@ -40,6 +40,8 @@ extern unsigned char nish_prog_start[];
 extern unsigned char nish_prog_end[];
 extern unsigned char chain_prog_start[];
 extern unsigned char chain_prog_end[];
+extern unsigned char eat_prog_start[];
+extern unsigned char eat_prog_end[];
 
 static int name_eq(const char *a, const char *b)
 {
@@ -448,6 +450,8 @@ void fs_init(void)
            (uint64_t)(nish_prog_end - nish_prog_start));
     fs_add("chain.elf", chain_prog_start,
            (uint64_t)(chain_prog_end - chain_prog_start));
+    fs_add("eat.elf", eat_prog_start,
+           (uint64_t)(eat_prog_end - eat_prog_start));
 }
 
 int fs_count(void)

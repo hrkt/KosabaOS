@@ -24,3 +24,9 @@ nish_prog_end:
 chain_prog_start:
     .incbin "chain.elf"
 chain_prog_end:
+
+    .globl eat_prog_start
+    .globl eat_prog_end
+eat_prog_start:
+    .incbin "eat.elf"
+eat_prog_end:

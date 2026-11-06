@@ -276,6 +276,31 @@ case "$out" in
 esac
 report "P exec multilevel (chain: depth / status / fd survival / limit)" $rc
 
+echo "== scenario Q: kernel log (dmesg) =="
+# Nish の dmesg で起動時の記録 (プールの総数など) が読み
+# 返せることと、chain の deep 25 (深さ上限の拒否) のあとに
+# 拒否の理由がログに残っていること。カーネルのメッセージは
+# 起きた瞬間にコンソールにも出るので、2 回目の dmesg では
+# 「run: exit status 9 よりあとに、もう一度その行が出る」
+# ことで読み返しを確認する (check_order は順序どおりの
+# 出現を見るので、2 回目の出現に当たる)
+{ sleep 3; printf 'dmesg\n'; sleep 2; \
+  printf 'run chain.elf deep 25\n'; sleep 3; \
+  printf 'dmesg\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-q.log 2>&1 || true
+out=$(strip_ticks < test-q.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "page: pool total 24064, free 24064" \
+    "deep denied" "run: exit status 9" \
+    "exec: denied, depth limit: chain.elf" || rc=1
+case "$out" in
+    *"deep bottom"*) echo "  unexpected: deep bottom (sanity limit not enforced)"; rc=1 ;;
+esac
+report "Q kernel log (dmesg: boot records + exec denial)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
