@@ -285,6 +285,28 @@ def main():
     ok = expect("time: kept", 5000, cursor=cur) and ok
     report("K13 wall clock (RTC set + read back)", ok)
 
+    print("== scenario K14: FP smoke (fptest.elf, lp64d) ==")
+    # カーネルコンソールから Nish に戻り ('s' キー)、
+    # fptest.elf を実行する。fptest は、プログラム開始時に
+    # FS が Initial 化されている前提で float / double の
+    # 四則と変換を実命令で確かめ、段階ごとに ok を出す。
+    # K210 では違法命令 (例外 2) が medeleg で S へ委譲
+    # されず M シムの扱いになるので、FS が効いていなければ
+    # ok は出ない (異常終了するか M シムで止まる)。逆に
+    # ここが通れば、mshim の mstatus.FS 設定込みで実機の
+    # FP が実際に動いたことの実測になる
+    cur = log_total()
+    send_chunked("s")
+    ok = expect("Nish, the KosabaOS shell", 10000, cursor=cur)
+    cur = log_total()
+    send_chunked("run fptest.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("fptest: float ok", 10000, cursor=cur) and ok
+    ok = expect("fptest: double ok", 5000, cursor=cur) and ok
+    ok = expect("fptest: conv ok", 5000, cursor=cur) and ok
+    ok = expect("fptest: done", 5000, cursor=cur) and ok
+    report("K14 FP smoke (float/double ops on K210)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
