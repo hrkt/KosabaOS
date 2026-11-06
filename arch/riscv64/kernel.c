@@ -23,6 +23,7 @@
 #include "proc.h"
 #include "elf.h"
 #include "fs.h"
+#include "time.h"
 #if BOARD_FEATURE_LCD
 #include "lcd.h"  /* ボード付属 LCD へのステータス表示 (k210 のみ) */
 
@@ -85,6 +86,82 @@ static void start_user_named(const char *name)
 }
 #endif /* BOARD_FEATURE_SMODE_PATH */
 
+/* カーネルコンソールの行入力: エコーと BS だけの最小実装。
+ * 入った文字数を返す (buf は NUL 終端される) */
+static int console_read_line(char *buf, int cap)
+{
+    int n = 0;
+
+    for (;;) {
+        char c = uart_getc();
+        if (c == '\n' || c == '\r') {
+            uart_puts("\r\n");
+            break;
+        }
+        if ((c == '\b' || c == 0x7F) && n > 0) {
+            n--;
+            uart_puts("\b \b");
+            continue;
+        }
+        if (c >= ' ' && c < 0x7F && n < cap - 1) {
+            buf[n++] = c;
+            uart_putc(c);
+        }
+    }
+    buf[n] = 0;
+    return n;
+}
+
+/* 壁時計を 1 行出す (コンソール + ログ、doc/time.md)。
+ * 形は "wall: 2026-11-06 14:05:22 UTC (epoch ...)"、
+ * 未設定なら "wall: (RTC not set)" */
+static void print_wall_clock(void)
+{
+    struct datetime dt;
+    char buf[20];
+
+    if (time_read(&dt) != 0) {
+        kputs("wall: (RTC not set)\n");
+        return;
+    }
+    time_format(&dt, buf);
+    kputs("wall: ");
+    kputs(buf);
+    kputs(" UTC (epoch ");
+    kput_dec(time_to_epoch(&dt));
+    kputs(")\n");
+}
+
+/* 't' キー: 壁時計を出して、設定の行入力に入る。
+ * プロンプトと入力のエコーは UART にだけ出し、結果の
+ * 行は kputs で出す (コンソールと klog の両方に残る) */
+static void console_wall_clock(void)
+{
+    char line[32];
+    struct datetime dt;
+
+    uart_putc('\n');
+    print_wall_clock();
+    uart_puts("set time? (YYYY-MM-DD hh:mm:ss, empty = keep): ");
+    if (console_read_line(line, (int)sizeof(line)) == 0) {
+        kputs("time: kept\n");
+        return;
+    }
+    if (time_parse(line, &dt) != 0) {
+        kputs("time: bad format (want YYYY-MM-DD hh:mm:ss)\n");
+        return;
+    }
+    if (time_set(&dt) != 0) {
+        kputs("time: cannot set on this board\n");
+        return;
+    }
+    time_format(&dt, line);
+    kputs("time set: ");
+    kputs(line);
+    kputs(" UTC\n");
+    print_wall_clock();  /* 読み戻して確かめる */
+}
+
 void kmain(void)
 {
     uart_init();
@@ -138,13 +215,28 @@ void kmain(void)
 #endif
     kputs("hello from KosabaOS " BOARD_HELLO_SUFFIX "\n");
 
+    /* 壁時計の状態を 1 行残す (doc/time.md)。
+     * k210 ではこの最初の読みが RTC の遅延初期化を兼ねる */
+    {
+        struct datetime dt;
+        char tbuf[20];
+        if (time_read(&dt) == 0) {
+            time_format(&dt, tbuf);
+            kputs("time: wall clock ");
+            kputs(tbuf);
+            kputs(" UTC\n");
+        } else {
+            kputs("time: no wall clock (RTC not set or absent)\n");
+        }
+    }
+
 #if BOARD_FEATURE_SMODE_PATH
     /* シェル Nish を最初に起動する (主役化)。
      * Nish で exit すると下のカーネルコンソールに落ちる */
     start_user_named("nish.elf");
     kputs("[kernel] kernel console "
           "(u: uprog, s: Nish, m: multitask, l: files, "
-          "x: fault, p: pages)\n");
+          "x: fault, p: pages, t: time)\n");
 #endif
 
 #if BOARD_FEATURE_LCD
@@ -180,6 +272,10 @@ void kmain(void)
         if (c == 'l') {
             uart_putc('\n');
             fs_list();         /* 'l' キーでファイル一覧 */
+            continue;
+        }
+        if (c == 't') {
+            console_wall_clock();  /* 't' キーで壁時計の表示と設定 */
             continue;
         }
         uart_putc(c);          /* そのまま打ち返す */
