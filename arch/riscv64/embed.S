@@ -48,3 +48,26 @@ atest_prog_end:
 fptest_prog_start:
     .incbin "fptest.elf"
 fptest_prog_end:
+
+/* Ikesu 合流テストの素材 (test.sh シナリオ U)。リポジトリの
+ * 外にある Ikesu のビルド成果物を build.sh が写してきた
+ * ときだけ (-DIKESU_EMBED)、virt 向けに取り込む */
+#ifdef IKESU_EMBED
+    .globl ikesu_prog_start
+    .globl ikesu_prog_end
+ikesu_prog_start:
+    .incbin "ikesu.elf"
+ikesu_prog_end:
+
+    .globl player_wasm_start
+    .globl player_wasm_end
+player_wasm_start:
+    .incbin "player.wasm"
+player_wasm_end:
+
+    .globl test_mp3_start
+    .globl test_mp3_end
+test_mp3_start:
+    .incbin "test.mp3"
+test_mp3_end:
+#endif

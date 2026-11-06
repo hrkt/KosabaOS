@@ -56,12 +56,34 @@ echo "build: BOARD=$BOARD"
 # fptest だけは浮動小数点の検証用に lp64d (FP レジスタ渡しの ABI)
 "$CC" -march=rv64gc -mabi=lp64d -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o fptest.elf fptest.c
 
+# Ikesu 合流テスト (test.sh シナリオ U) の素材は、Ikesu 側の
+# ビルド成果物を借りてくる。OS リポジトリにはバイナリを
+# 持ち込まない方針なので、ビルド時にここへコピーして
+# embed.S / fs.c が -DIKESU_EMBED のときだけ取り込む。
+# 素材が無いときは従来と完全に同じビルドになる (写しが
+# 残っていると前回の素材が紛れるので、毎回まず消す)。
+# 埋め込みは virt 向けだけ (ikesu.elf は K210 のデータ
+# 領域には収まらない)。場所は IKESU_DIR で差し替え可能。
+IKESU_DIR=${IKESU_DIR:-../../../../ikesu}
+IKESU_DEFINE=""
+rm -f ikesu.elf player.wasm test.mp3
+if [ "$BOARD" = virt ] \
+    && [ -f "$IKESU_DIR/build/ikesu.elf" ] \
+    && [ -f "$IKESU_DIR/build/player.wasm" ] \
+    && [ -f "$IKESU_DIR/testdata/test.mp3" ]; then
+    cp "$IKESU_DIR/build/ikesu.elf" ikesu.elf
+    cp "$IKESU_DIR/build/player.wasm" player.wasm
+    cp "$IKESU_DIR/testdata/test.mp3" test.mp3
+    IKESU_DEFINE=-DIKESU_EMBED
+    echo "build: ikesu materials embedded (IKESU_DIR=$IKESU_DIR)"
+fi
+
 if [ "$BOARD" = virt ]; then
     # FAT ドライバのテスト相手 (boards/virt/ramdisk.c が埋め込む)
     python3 make_sd_image.py sd.img
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

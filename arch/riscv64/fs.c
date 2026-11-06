@@ -48,6 +48,15 @@ extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
 extern unsigned char fptest_prog_end[];
+#ifdef IKESU_EMBED
+/* Ikesu 合流テストの素材 (build.sh が写してきたときだけ) */
+extern unsigned char ikesu_prog_start[];
+extern unsigned char ikesu_prog_end[];
+extern unsigned char player_wasm_start[];
+extern unsigned char player_wasm_end[];
+extern unsigned char test_mp3_start[];
+extern unsigned char test_mp3_end[];
+#endif
 
 static int name_eq(const char *a, const char *b)
 {
@@ -464,6 +473,14 @@ void fs_init(void)
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,
            (uint64_t)(fptest_prog_end - fptest_prog_start));
+#ifdef IKESU_EMBED
+    fs_add("ikesu.elf", ikesu_prog_start,
+           (uint64_t)(ikesu_prog_end - ikesu_prog_start));
+    fs_add("player.wasm", player_wasm_start,
+           (uint64_t)(player_wasm_end - player_wasm_start));
+    fs_add("test.mp3", test_mp3_start,
+           (uint64_t)(test_mp3_end - test_mp3_start));
+#endif
 }
 
 int fs_count(void)
