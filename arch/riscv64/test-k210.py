@@ -253,6 +253,38 @@ def main():
     ok = command("exit", "back from user program")
     report("K6 exit to kernel console", ok)
 
+    print("== scenario K12: wall clock (K210 RTC) ==")
+    # カーネルコンソールの 't' キー (doc/time.md)。未設定時の
+    # 表示を見てから、設定 → 数秒待って読み戻しの往復が
+    # 数秒以内の誤差で一致することを見る。未設定時は
+    # "(RTC not set)" になるのが実測だが、以前の設定が
+    # 残っている場合もありうるので、最初の表示はどちら
+    # でもよい形で確認する (値そのものは dev-notes に記録)
+    cur = log_total()
+    send_chunked("t")
+    ok = expect(r"wall: (\(RTC not set\)|20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ UTC)",
+                10000, cursor=cur)
+    ok = expect(r"set time\?", 5000, cursor=cur) and ok
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("time: kept", 5000, cursor=cur) and ok
+    # 設定する ('t' → プロンプト → 日時の行)
+    cur = log_total()
+    send_chunked("t")
+    ok = expect(r"set time\?", 8000, cursor=cur) and ok
+    send_chunked("2032-03-04 05:06:07")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("time set: 2032-03-04 05:06:07", 10000, cursor=cur) and ok
+    # 3 秒待って読み直す。秒が 08〜19 の範囲に進んでいる
+    # こと (設定値 +1〜+12 秒) で往復の一致とする
+    time.sleep(3)
+    cur = log_total()
+    send_chunked("t")
+    ok = expect(r"wall: 2032-03-04 05:06:(0[89]|1[0-9])", 10000,
+                cursor=cur) and ok
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("time: kept", 5000, cursor=cur) and ok
+    report("K12 wall clock (RTC set + read back)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
