@@ -360,7 +360,7 @@ if [ "$rc" -eq 0 ]; then
 fi
 report "S wall clock (Goldfish RTC: read / advance / read-only)" $rc
 
-echo "== scenario T: audio syscalls (dummy device) =="
+echo "== scenario T: audio syscalls (dummy device) + FP =="
 # atest.elf が audio_open(44100, 1) → 既知の列を分けて
 # audio_write (300 + 300 + 400 = 1000 サンプル) → audio_close
 # し、Nish の dmesg に出る "audio: close" 行の samples と
@@ -370,6 +370,9 @@ echo "== scenario T: audio syscalls (dummy device) =="
 # (カーネルのメッセージは起きた瞬間にコンソールにも出る
 # ので、"audio: close" 行は atest: done より後 = dmesg での
 # 読み返しに当たる出現で照合する)
+# あわせて fptest.elf (lp64d) で、ユーザープログラム開始時に
+# FPU が有効化されており float / double の四則と変換が
+# 実行時の命令として正しく動くことを確認する
 expected_fnv=$(python3 -c '
 h = 0xcbf29ce484222325
 for i in range(1000):
@@ -379,20 +382,24 @@ for i in range(1000):
         h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
 print("%016x" % h)')
 { sleep 3; printf 'run atest.elf\n'; sleep 3; \
+  printf 'run fptest.elf\n'; sleep 2; \
   printf 'dmesg\n'; sleep 3; \
   printf 'exit\n'; sleep 2; } \
-    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    | timeout 22 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-t.log 2>&1 || true
 out=$(strip_ticks < test-t.log)
 rc=0
 check_order "$out" "Nish, the KosabaOS shell" \
     "atest: errors ok" "atest: open ok" "atest: writes ok" \
     "atest: close ok" "atest: done" \
+    "fptest: float ok" "fptest: double ok" "fptest: conv ok" \
+    "fptest: done" \
     "audio: close rate=44100 channels=1 samples=1000 fnv=$expected_fnv" || rc=1
 case "$out" in
     *"atest: FAIL"*) echo "  unexpected: atest reported FAIL"; rc=1 ;;
+    *"fptest: FAIL"*) echo "  unexpected: fptest reported FAIL"; rc=1 ;;
 esac
-report "T audio syscalls (open/write/close, fnv via dmesg)" $rc
+report "T audio syscalls (fnv via dmesg) + FP arithmetic" $rc
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then

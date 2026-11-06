@@ -46,6 +46,8 @@ extern unsigned char uptime_prog_start[];
 extern unsigned char uptime_prog_end[];
 extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
+extern unsigned char fptest_prog_start[];
+extern unsigned char fptest_prog_end[];
 
 static int name_eq(const char *a, const char *b)
 {
@@ -460,6 +462,8 @@ void fs_init(void)
            (uint64_t)(uptime_prog_end - uptime_prog_start));
     fs_add("atest.elf", atest_prog_start,
            (uint64_t)(atest_prog_end - atest_prog_start));
+    fs_add("fptest.elf", fptest_prog_start,
+           (uint64_t)(fptest_prog_end - fptest_prog_start));
 }
 
 int fs_count(void)

@@ -42,3 +42,9 @@ uptime_prog_end:
 atest_prog_start:
     .incbin "atest.elf"
 atest_prog_end:
+
+    .globl fptest_prog_start
+    .globl fptest_prog_end
+fptest_prog_start:
+    .incbin "fptest.elf"
+fptest_prog_end:
