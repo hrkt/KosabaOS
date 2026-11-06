@@ -100,6 +100,31 @@ static inline void s_sstatus(uint64_t bits)
     asm volatile("csrs sstatus, %0" : : "r"(bits));
 }
 
+/* --- 浮動小数点の初期化 (プログラム開始時) --------------------------
+ * sstatus.FS (bits 14:13) は FPU の状態: 0 = Off (FP 命令は
+ * 違法命令)、1 = Initial、2 = Clean、3 = Dirty。ブートチェーン
+ * の残した値に任せず、ユーザープログラムへ入る前に必ず
+ * Initial にして「FPU が使える」ことを保証する (カーネルから
+ * の直接起動は user.S の user_launch 側で同じことをする)。
+ * あわせて fcsr (丸めモード等) を 0 に戻す: K210 では ROM が
+ * frm に予約値 (111) を残すことが実測されており、そのままだと
+ * 浮動小数点演算が違法命令になる。fcsr へのアクセス自体、
+ * FS が Off だとできないので FS を先に立てる。
+ * FP レジスタの中身は exec をまたいで保存しない (同時に走る
+ * ユーザープログラムは 1 本という現行モデルの割り切り。
+ * doc/syscalls.md の入口の約束に明記)。 */
+
+#define SSTATUS_FS_MASK (3ULL << 13)
+#define SSTATUS_FS_INITIAL (1ULL << 13)
+
+static void user_fp_init(void)
+{
+    uint64_t s = r_sstatus();
+    s = (s & ~SSTATUS_FS_MASK) | SSTATUS_FS_INITIAL;
+    w_sstatus(s);
+    asm volatile("csrw fcsr, zero");
+}
+
 /* OpenSBI の Timer 拡張: 「この時刻になったらタイマ割り込みを
  * ください」とファームウェアに頼む。ecall の約束は a7 = 拡張の
  * ID、a6 = その中の機能の番号 (set_timer は 0)、a0 = 引数。
@@ -619,6 +644,7 @@ static int do_exec(uint64_t *frame)
         }
         frame[FRAME_A0] = (uint64_t)argc;
         frame[FRAME_A1] = argv_va;
+        user_fp_init();  /* 子も FPU が使える状態で始める */
         w_sepc(entry);
         w_sscratch(sp);
     }

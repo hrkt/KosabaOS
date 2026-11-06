@@ -13,7 +13,8 @@
 #   sscratch = トラップ専用スタックの末尾 (trap.S の入口で使う)
 #   stvec    = trap_entry_user (ユーザーからのトラップ専用入口)
 #   sstatus  : SPP = 0 (降り先は U モード)、SPIE = 1
-#              (sret 後に割り込み許可になる)
+#              (sret 後に割り込み許可になる)、FS = Initial
+#              (FPU 使用可。fcsr も初期値に戻す)
 #   sepc     = ユーザープログラムの入口
 
     .section .bss
@@ -57,6 +58,19 @@ user_launch:
     csrc sstatus, t1
     li t1, 0x20
     csrs sstatus, t1
+
+    # sstatus: FS (bits 14:13) を Initial (01) にして、FPU が
+    # 使える状態でプログラムを始める。ブートチェーンの残した
+    # 状態に依存しないための明示設定。あわせて fcsr (丸め
+    # モード等) も初期値に戻す (K210 では ROM が frm に予約値
+    # 111 を残すことが実測されており、そのままだと浮動小数点
+    # 演算が違法命令になる)。fcsr へのアクセス自体 FS が有効
+    # でないとできないので、この順番で
+    li t1, 0x6000
+    csrc sstatus, t1
+    li t1, 0x2000
+    csrs sstatus, t1
+    csrw fcsr, zero
 
     csrw sepc, a0           # 降り先はプログラムの入口
     mv sp, a1               # スタックはユーザー側のものに

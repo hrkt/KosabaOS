@@ -12,6 +12,9 @@
  *      (mideleg で STI を S に委譲してある)
  *   4. rdtime のエミュレーション: S では csrr time が違法命令に
  *      なるので、命令を読んで mtime を返す (probe4 で確認)
+ *   5. 浮動小数点の土台: mstatus.FS を Initial にし、fcsr を
+ *      初期化する (違法命令は S へ委譲されないので、土台は
+ *      M 側で用意しないと FP 命令がここで止まる)
  * それ以外の例外は S へ委譲 (medeleg) し、カーネルの仕事は
  * すべて S 側に任せる。実験の記録は spike-k210/step4-usermode/。
  *
@@ -164,7 +167,20 @@ void mshim_boot(void)
     ms &= ~(3ULL << 11);
     ms |= (1ULL << 11);              /* MPP = S */
     ms &= ~(1ULL << 7);              /* MPIE = 0 */
+    /* FS (bits 14:13) = Initial: S / U の浮動小数点を有効に
+     * する。例外 2 (違法命令) は medeleg で S へ委譲されて
+     * いないので、FS = Off のまま FP 命令が来るとここの
+     * fatal 行きになる。S 側の sstatus.FS の設定 (user.S /
+     * trap.c) だけでは土台の mstatus.FS が立っていないと
+     * 効かないため、ここでも明示する */
+    ms &= ~(3ULL << 13);
+    ms |= (1ULL << 13);              /* FS = Initial */
     __asm__ volatile("csrw mstatus, %0" :: "r"(ms));
+    /* ROM の残りで fcsr の丸めモード (frm) が予約値 111 に
+     * なっていることがあり、そのままだと浮動小数点演算が
+     * 違法命令になる (実測済み。SDK の start も fcsr = 0 で
+     * 始める)。FS を有効にした直後に初期値へ戻す */
+    __asm__ volatile("csrw fcsr, zero");
     __asm__ volatile(".word 0x10400073");  /* sfence.vm x0 */
     w_mepc((uint64_t)kmain);
     __asm__ volatile("mret");
