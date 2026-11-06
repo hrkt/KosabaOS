@@ -41,6 +41,7 @@ struct task {
     char letter;             /* デモで出す文字 */
     uint64_t trap_sepc;      /* トラップをまたぐ切り替え用 */
     uint64_t trap_sstatus;
+    char cwd[PROC_CWD_MAX];  /* 正規化済み絶対パス (段4) */
 };
 
 static struct task tasks[NTASK];
@@ -104,6 +105,27 @@ void sched_restore_trapstate(uint64_t *sepc, uint64_t *sstatus)
 {
     *sepc = tasks[current].trap_sepc;
     *sstatus = tasks[current].trap_sstatus;
+}
+
+/* --- cwd (タスクごと) ---------------------------------------------- */
+
+/* 未設定 (BSS のゼロ) ならルートとして扱う */
+const char *proc_cwd(void)
+{
+    if (tasks[current].cwd[0] == '\0') {
+        return "/";
+    }
+    return tasks[current].cwd;
+}
+
+void proc_set_cwd(const char *abs)
+{
+    int i = 0;
+    while (abs[i] != '\0' && i < PROC_CWD_MAX - 1) {
+        tasks[current].cwd[i] = abs[i];
+        i++;
+    }
+    tasks[current].cwd[i] = '\0';
 }
 
 /* --- タスクの生成と起動 ------------------------------------------- */

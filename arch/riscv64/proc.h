@@ -13,6 +13,14 @@ struct context {
 void proc_demo(void);   /* 'm' キーで起動するマルチタスクのデモ */
 int proc_list(char *buf, unsigned long max);  /* タスク一覧 (ps 用) */
 
+/* cwd (カレントディレクトリ)。タスクごとに、正規化済みの
+ * 絶対パス文字列で持つ (FS 再設計 段4)。ユーザープログラムは
+ * タスク 0 (kmain の文脈) で動くので、シェルの cd がここに
+ * 効き、exec では trap.c が親の分を退避・復元する */
+#define PROC_CWD_MAX 128
+const char *proc_cwd(void);             /* 現在タスクの cwd */
+void proc_set_cwd(const char *abs);     /* 正規化済みの絶対パスを設定 */
+
 /* スケジューラ (proc.c)。trap.c のタイマ処理からも使う */
 extern int sched_active;
 extern int preempt_enabled;

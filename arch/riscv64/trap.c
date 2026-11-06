@@ -189,6 +189,10 @@ void trap_init(void)
 #define SYS_WRITE 10
 #define SYS_TASKS 11
 #define SYS_UNLINK 12
+#define SYS_MKDIR 13
+#define SYS_RMDIR 14
+#define SYS_CHDIR 15
+#define SYS_GETCWD 16
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -274,6 +278,117 @@ static int is_sd_path(const char *name)
            name[3] == '/';
 }
 
+/* --- パスの解決と正規化 (FS 再設計 段4) -------------------------------
+ * ユーザーから渡されたパス (相対でも絶対でも) を、現在の
+ * タスクの cwd から解決して正規化済みの絶対パスにする。
+ * '//' と '.' は畳み、'..' は親へ (ルートの親はルート)。
+ * 要素 1 つの上限は 31 文字、パス全体の上限は PATH_MAX。
+ * 失敗したら -1 (長すぎる、要素が長すぎる)。 */
+
+#define PATH_MAX 128
+
+static int str_eq(const char *a, const char *b)
+{
+    int i = 0;
+    while (a[i] != '\0' && b[i] != '\0') {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return a[i] == b[i];
+}
+
+static int resolve_path(const char *in, char *out)
+{
+    char combined[PATH_MAX * 2 + 2];
+    const char *comp[PATH_MAX / 2];
+    int lens[PATH_MAX / 2];
+    int ncomp = 0;
+    int i = 0, n = 0;
+    const char *cwd = proc_cwd();
+
+    /* 相対パスは cwd を前に付けて 1 本にする */
+    if (in[0] != '/') {
+        while (cwd[i] != '\0' && i < (int)sizeof(combined) - 1) {
+            combined[i] = cwd[i];
+            i++;
+        }
+        if (i < (int)sizeof(combined) - 1) {
+            combined[i++] = '/';
+        }
+    }
+    {
+        int j = 0;
+        while (in[j] != '\0' && i < (int)sizeof(combined) - 1) {
+            combined[i++] = in[j++];
+        }
+    }
+    combined[i] = '\0';
+
+    /* 要素に割りながら '.' と '..' を処理する */
+    i = 0;
+    while (combined[i] != '\0') {
+        int start, len;
+        while (combined[i] == '/') {
+            i++;
+        }
+        if (combined[i] == '\0') {
+            break;
+        }
+        start = i;
+        while (combined[i] != '\0' && combined[i] != '/') {
+            i++;
+        }
+        len = i - start;
+        if (len == 1 && combined[start] == '.') {
+            continue;
+        }
+        if (len == 2 && combined[start] == '.' &&
+            combined[start + 1] == '.') {
+            if (ncomp > 0) {
+                ncomp--;  /* 親へ (ルートではそのまま) */
+            }
+            continue;
+        }
+        if (len > 31 || ncomp >= PATH_MAX / 2) {
+            return -1;
+        }
+        comp[ncomp] = combined + start;
+        lens[ncomp] = len;
+        ncomp++;
+    }
+
+    /* '/a/b/c' の形に組み直す (要素が無ければ "/") */
+    out[n++] = '/';
+    for (i = 0; i < ncomp; i++) {
+        int j;
+        if (i > 0) {
+            out[n++] = '/';
+        }
+        if (n + lens[i] >= PATH_MAX) {
+            return -1;
+        }
+        for (j = 0; j < lens[i]; j++) {
+            out[n++] = comp[i][j];
+        }
+    }
+    out[n] = '\0';
+    return 0;
+}
+
+/* 解決済み絶対パスが /sd の配下か ("/sd" 自身を含む) */
+static int is_sd_abs(const char *abs)
+{
+    return str_eq(abs, "/sd") || is_sd_path(abs);
+}
+
+/* /sd を外した FAT 側の相対パス ("/sd" → ""、"/sd/X" → "X") */
+static const char *sd_rel(const char *abs)
+{
+    return abs[3] == '\0' ? abs + 3 : abs + 4;
+}
+
 static void close_all_fds(void)
 {
     int i;
@@ -296,6 +411,7 @@ static struct {
     uint64_t code_pa;
     uint64_t data_pa;
     uint64_t stack_pa;
+    char cwd[PATH_MAX];  /* 親の cwd (子が chdir しても戻せるように) */
 } exec_parent;
 
 static void resume_parent(uint64_t *frame, uint64_t result)
@@ -309,6 +425,7 @@ static void resume_parent(uint64_t *frame, uint64_t result)
     w_sscratch(exec_parent.sp);
     vm_switch_user_region(exec_parent.code_pa, exec_parent.data_pa,
                           exec_parent.stack_pa);
+    proc_set_cwd(exec_parent.cwd);
     exec_parent.active = 0;
     close_all_fds();
 }
@@ -320,7 +437,8 @@ static void resume_parent(uint64_t *frame, uint64_t result)
 /* 戻り値: 1 = sepc は処理済みなので進めない、0 = 通常どおり進める */
 static int do_exec(uint64_t *frame)
 {
-    char name[32];
+    char name[PATH_MAX];
+    char abs[PATH_MAX];
     char argsbuf[EXEC_ARGS_MAX];
     const char *tokens[EXEC_ARGC_MAX];
     int argc = 0;
@@ -332,7 +450,9 @@ static int do_exec(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)-1;  /* exec は 1 段まで */
         return 0;
     }
-    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+        resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+        /* SD からの exec は v1 の対象外 (sd-design.md) */
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
@@ -366,8 +486,8 @@ static int do_exec(uint64_t *frame)
         tokens[0] = name;  /* 引数が無ければ argv[0] = プログラム名 */
         argc = 1;
     }
-    f = fs_find(name);
-    if (f == 0) {
+    f = fs_find(abs + 1);
+    if (f == 0 || f->is_dir) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
@@ -386,6 +506,17 @@ static int do_exec(uint64_t *frame)
     exec_parent.code_pa = vm_current_code_pa();
     exec_parent.data_pa = vm_current_data_pa();
     exec_parent.stack_pa = vm_current_stack_pa();
+    /* cwd は子へ引き継ぐ (そのまま)。親の分は退避しておき、
+     * 子が chdir しても resume_parent で戻す */
+    {
+        const char *cwd = proc_cwd();
+        int i2 = 0;
+        while (cwd[i2] != '\0' && i2 < PATH_MAX - 1) {
+            exec_parent.cwd[i2] = cwd[i2];
+            i2++;
+        }
+        exec_parent.cwd[i2] = '\0';
+    }
     exec_parent.active = 1;
     close_all_fds();
 
@@ -435,28 +566,30 @@ static int do_syscall(uint64_t *frame)
         user_exit_jump();  /* ここからは戻ってこない */
         break;
     case SYS_OPEN: {
-        char name[32];
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
         int i;
         struct fs_file *f = 0;
         struct fat_file fat;
         int is_sd = 0;
         fat.first_cluster = 0;
         fat.size = 0;
-        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
-        if (is_sd_path(name)) {
+        if (is_sd_abs(abs)) {
             /* /sd は固定マウント。mount 点を外して FAT 側へ */
             if (fat_ensure_mounted() != 0 ||
-                fat_find(name + 4, &fat) != 0) {
+                fat_find(sd_rel(abs), &fat) != 0) {
                 frame[FRAME_A0] = (uint64_t)-1;
                 break;
             }
             is_sd = 1;
         } else {
-            f = fs_find(name);
-            if (f == 0) {
+            f = fs_find(abs + 1);
+            if (f == 0 || f->is_dir) {
                 frame[FRAME_A0] = (uint64_t)-1;
                 break;
             }
@@ -570,15 +703,18 @@ static int do_syscall(uint64_t *frame)
         break;
     }
     case SYS_UNLINK: {
-        char name[32];
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
         int i;
         struct fs_file *f;
-        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+            /* SD は読み取り専用なので unlink は常に失敗 */
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
-        f = fs_find(name);
-        if (f == 0) {
+        f = fs_find(abs + 1);
+        if (f == 0 || f->is_dir) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
@@ -593,22 +729,88 @@ static int do_syscall(uint64_t *frame)
         if (i != MAX_FD) {
             break;
         }
-        frame[FRAME_A0] = (uint64_t)fs_unlink(name);
+        frame[FRAME_A0] = (uint64_t)fs_unlink(abs + 1);
         break;
     }
-    case SYS_CREATE: {
-        char name[32];
-        int i;
-        struct fs_file *f;
-        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0) {
-            frame[FRAME_A0] = (uint64_t)-1;
-            break;
-        }
-        if (is_sd_path(name)) {
+    case SYS_MKDIR: {
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
             frame[FRAME_A0] = (uint64_t)-1;  /* SD は読み取り専用 */
             break;
         }
-        f = fs_create(name);
+        frame[FRAME_A0] = (uint64_t)fs_mkdir(abs + 1);
+        break;
+    }
+    case SYS_RMDIR: {
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (str_eq(abs, proc_cwd())) {
+            frame[FRAME_A0] = (uint64_t)-1;  /* 自分の cwd は消せない */
+            break;
+        }
+        frame[FRAME_A0] = (uint64_t)fs_rmdir(abs + 1);
+        break;
+    }
+    case SYS_CHDIR: {
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (is_sd_abs(abs)) {
+            /* /sd の中へも入れる (読み取り専用でも居場所には
+             * なれる)。実在するディレクトリかを FAT 側で見る */
+            char nm[16];
+            uint64_t sz;
+            int d;
+            if (fat_list(sd_rel(abs), 0, nm, &sz, &d) < 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+        } else if (!fs_is_dir(abs + 1)) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        proc_set_cwd(abs);
+        frame[FRAME_A0] = 0;
+        break;
+    }
+    case SYS_GETCWD: {
+        const char *cwd = proc_cwd();
+        uint64_t len = 0;
+        while (cwd[len] != '\0') {
+            len++;
+        }
+        len++;  /* NUL まで含めた長さ */
+        if (frame[FRAME_A1] < len ||
+            copy_to_user(frame[FRAME_A0],
+                         (const unsigned char *)cwd, len) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        frame[FRAME_A0] = len;
+        break;
+    }
+    case SYS_CREATE: {
+        char name[PATH_MAX];
+        char abs[PATH_MAX];
+        int i;
+        struct fs_file *f;
+        if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+            frame[FRAME_A0] = (uint64_t)-1;  /* SD は読み取り専用 */
+            break;
+        }
+        f = fs_create(abs + 1);
         if (f == 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;

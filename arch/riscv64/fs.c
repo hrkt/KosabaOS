@@ -190,7 +190,7 @@ static struct fs_file *new_entry(const char *name)
     if (f == 0) {
         return 0;  /* 表いっぱい */
     }
-    while (name[n] != '\0' && n < 31) {
+    while (name[n] != '\0' && n < FS_NAME_MAX - 1) {
         f->name[n] = name[n];
         n++;
     }
@@ -202,12 +202,47 @@ static struct fs_file *new_entry(const char *name)
     return f;
 }
 
+/* 正規化済み名前の親ディレクトリ部分を out に書く。
+ * "work/memo.txt" → "work"、"memo.txt" → "" (ルート) */
+static void parent_of(const char *name, char *out)
+{
+    const char *slash = 0;
+    const char *p;
+    int n = 0;
+
+    for (p = name; *p != '\0'; p++) {
+        if (*p == '/') {
+            slash = p;
+        }
+    }
+    if (slash == 0) {
+        out[0] = '\0';
+        return;
+    }
+    while (name + n < slash) {
+        out[n] = name[n];
+        n++;
+    }
+    out[n] = '\0';
+}
+
+int fs_is_dir(const char *name)
+{
+    struct fs_file *f;
+
+    if (name[0] == '\0') {
+        return 1;  /* ルートは常にディレクトリ */
+    }
+    f = fs_find(name);
+    return f != 0 && f->is_dir;
+}
+
 int fs_unlink(const char *name)
 {
     struct fs_file *f = fs_find(name);
 
-    if (f == 0) {
-        return -1;
+    if (f == 0 || f->is_dir) {
+        return -1;  /* ディレクトリは rmdir で消す */
     }
     chain_free(f->first_block);  /* ブロックは全部 arena へ返す */
     f->first_block = FS_NO_BLOCK;
@@ -217,16 +252,112 @@ int fs_unlink(const char *name)
     return 0;
 }
 
+int fs_mkdir(const char *name)
+{
+    char parent[FS_NAME_MAX];
+    struct fs_file *f;
+
+    if (name[0] == '\0' || fs_find(name) != 0) {
+        return -1;  /* ルート自身、または既にある名前 */
+    }
+    parent_of(name, parent);
+    if (!fs_is_dir(parent)) {
+        return -1;  /* 親が無い (または親がファイル) */
+    }
+    f = new_entry(name);
+    if (f == 0) {
+        return -1;
+    }
+    f->is_dir = 1;
+    return 0;
+}
+
+int fs_rmdir(const char *name)
+{
+    struct fs_file *f = fs_find(name);
+    char parent[FS_NAME_MAX];
+    int i;
+
+    if (f == 0 || !f->is_dir) {
+        return -1;
+    }
+    /* 子が 1 つでもあれば消せない (空のときだけ) */
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used || &files[i] == f) {
+            continue;
+        }
+        parent_of(files[i].name, parent);
+        if (name_eq(parent, name)) {
+            return -1;
+        }
+    }
+    f->name[0] = '\0';
+    f->used = 0;
+    f->is_dir = 0;
+    return 0;
+}
+
+/* dir の子を表の順に数え、index 番目の要素名 (名前の最後の
+ * 要素だけ) を base に返す。readdir (trap.c) から使う */
+int fs_child(const char *dir, int index, char *base, int base_max,
+             int *is_dir_out)
+{
+    char parent[FS_NAME_MAX];
+    int i, n = 0;
+
+    if (index < 0) {
+        return 0;
+    }
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        const char *b;
+        int j;
+        if (!files[i].used) {
+            continue;
+        }
+        parent_of(files[i].name, parent);
+        if (!name_eq(parent, dir)) {
+            continue;
+        }
+        if (n != index) {
+            n++;
+            continue;
+        }
+        /* 最後の '/' の後ろが要素名 */
+        b = files[i].name;
+        for (j = 0; files[i].name[j] != '\0'; j++) {
+            if (files[i].name[j] == '/') {
+                b = files[i].name + j + 1;
+            }
+        }
+        for (j = 0; b[j] != '\0' && j < base_max - 1; j++) {
+            base[j] = b[j];
+        }
+        base[j] = '\0';
+        *is_dir_out = files[i].is_dir;
+        return 1;
+    }
+    return 0;
+}
+
 struct fs_file *fs_create(const char *name)
 {
     struct fs_file *f = fs_find(name);
+    char parent[FS_NAME_MAX];
 
     if (f != 0) {
+        if (f->is_dir) {
+            return 0;  /* ディレクトリは作り直せない */
+        }
         /* 同名があれば空にする (ブロックは全部返す) */
         chain_free(f->first_block);
         f->first_block = FS_NO_BLOCK;
         f->size = 0;
         return f;
+    }
+    /* 親ディレクトリが実在する場合だけ作る (段4) */
+    parent_of(name, parent);
+    if (!fs_is_dir(parent)) {
+        return 0;
     }
     return new_entry(name);  /* 予約はしない。書くたびに育つ */
 }

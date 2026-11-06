@@ -60,6 +60,7 @@ static void start_user_named(const char *name)
     uart_puts("\n[kernel] starting ");
     uart_puts(name);
     uart_putc('\n');
+    proc_set_cwd("/");  /* 直接起動はルートから始める (段4) */
     /* カーネルから直接起動する場合の引数は {プログラム名} のみ */
     {
         const char *tokens[1];
