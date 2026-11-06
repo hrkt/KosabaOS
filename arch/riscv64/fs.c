@@ -38,6 +38,8 @@ extern unsigned char user_prog_start[];
 extern unsigned char user_prog_end[];
 extern unsigned char nish_prog_start[];
 extern unsigned char nish_prog_end[];
+extern unsigned char chain_prog_start[];
+extern unsigned char chain_prog_end[];
 
 static int name_eq(const char *a, const char *b)
 {
@@ -444,6 +446,8 @@ void fs_init(void)
     fs_add("uprog.elf", user_prog_start, elf_size);
     fs_add("nish.elf", nish_prog_start,
            (uint64_t)(nish_prog_end - nish_prog_start));
+    fs_add("chain.elf", chain_prog_start,
+           (uint64_t)(chain_prog_end - chain_prog_start));
 }
 
 int fs_count(void)

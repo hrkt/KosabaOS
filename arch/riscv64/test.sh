@@ -251,6 +251,31 @@ check_order "$out" "Nish, the KosabaOS shell" "created work" \
     "cd: no such directory" "[kernel] back from user program"
 report "O fs stage 4 (mkdir/cd/pwd, relative paths, ls /sd)" $?
 
+echo "== scenario P: exec multilevel (chain) =="
+# chain.elf が自分を 3 段まで exec し、終了ステータスが 1 段
+# ごとに +1 されて戻ること。一番上は fd を開いたまま子へ行き、
+# 戻った後に続きが読めること (親の fd とメモリの生存)。
+# スタックは再帰で初期分を超えて使い、fault 伸長も見る。
+# deep 25 は sanity 上限 (16) で exec が -1 になり、底には
+# 届かないこと ("deep bottom" が出ないことも確認する)
+{ sleep 3; printf 'run chain.elf 3\n'; sleep 3; \
+  printf 'run chain.elf deep 25\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-p.log 2>&1 || true
+out=$(strip_ticks < test-p.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "chain 3 start" "burn=4160" "chain 2 start" "chain 1 start" \
+    "chain 0 start" "chain 1 child=3" "chain 2 child=4" \
+    "chain 3 child=5" "fdok= fro" "mem=Hello" \
+    "run: exit status 6" "deep denied" "run: exit status 9" \
+    "[kernel] back from user program" || rc=1
+case "$out" in
+    *"deep bottom"*) echo "  unexpected: deep bottom (sanity limit not enforced)"; rc=1 ;;
+esac
+report "P exec multilevel (chain: depth / status / fd survival / limit)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

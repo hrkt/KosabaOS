@@ -45,15 +45,19 @@ extern void user_launch(unsigned long entry, unsigned long user_stack_top,
 static void start_user_named(const char *name)
 {
     struct fs_file *f = fs_find(name);
+    struct user_pages *up = vm_pages(0);  /* 根のプログラムは段 0 */
     uint64_t entry;
 
     if (f == 0) {
         uart_puts("\n[kernel] file not found\n");
         return;
     }
-    entry = elf_load(f);
-
-    if (entry == 0) {
+    /* 前のプログラムのページが残っていれば返してから、
+     * 段 0 の台帳へ読み直す (ページは実需割り当て) */
+    vm_pages_release(0);
+    entry = elf_load_to(f, up);
+    if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
+        vm_pages_release(0);
         uart_puts("\n[kernel] failed to load user program\n");
         return;
     }
@@ -66,9 +70,16 @@ static void start_user_named(const char *name)
         const char *tokens[1];
         uint64_t argv_va, sp;
         tokens[0] = name;
-        sp = user_stack_setup_argv(USER_STACK_PA, 1, tokens, &argv_va);
+        sp = user_stack_setup_argv(up, 1, tokens, &argv_va);
+        if (sp == 0) {
+            vm_pages_release(0);
+            uart_puts("\n[kernel] failed to load user program\n");
+            return;
+        }
+        vm_apply_pages(0);  /* 台帳をページ表へ反映してから降りる */
         user_launch(entry, sp, 1, argv_va);
     }
+    vm_pages_release(0);  /* 終わったらページをプールへ返す */
     uart_puts("\n[kernel] back from user program\n");
 }
 #endif /* BOARD_FEATURE_SMODE_PATH */

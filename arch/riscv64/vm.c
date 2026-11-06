@@ -33,6 +33,7 @@
 
 #include <stdint.h>
 #include "vm.h"
+#include "page.h"
 #include "uart.h"
 
 #define PTE_V (1ULL << 0)
@@ -55,7 +56,8 @@ static uint64_t user_l1_table[512] __attribute__((aligned(4096)));
 
 /* 下段 (4KB ページ用) テーブルの置き場所。ユーザー領域は
  * VA の並びが固定なので、必要になるのはコード / データ /
- * スタックの 3 枚だけ。再割り当て (exec) では使い回す */
+ * スタックの下段テーブルだけ (virt で 4 枚、K210 で 3 枚)。
+ * exec のたびに中身を書き換えて使い回す */
 #define PT_POOL_TABLES 8
 static uint64_t pt_pool[PT_POOL_TABLES][512] __attribute__((aligned(4096)));
 static int pt_pool_used = 0;
@@ -74,41 +76,35 @@ static uint64_t *pt_new_table(void)
     return t;
 }
 
-/* ユーザー領域が今向いている物理メモリ (exec で差し替わる) */
-static uint64_t cur_code_pa = USER_CODE_PA;
-static uint64_t cur_data_pa = USER_DATA_PA;
-static uint64_t cur_stack_pa = USER_STACK_PA;
-
 static uint64_t make_leaf_pte(uint64_t pa, uint64_t flags);
 
-/* 4KB ページを 1 枚割り当てる (既存の割り当ては上書きする)。
- * 下段テーブルが無ければプールから作る。ギガページの葉が
- * ある場所 (カーネルと低位デバイスの恒等マップ) は触らない */
-static void map_4k(uint64_t va, uint64_t pa, uint64_t flags)
+/* --- 段ごとのページ台帳 (exec 多段化) --------------------------------
+ * 物理メモリは「段ごとに固定の領域セット」ではなく、プール
+ * (page.c) からページ単位で借りて台帳に記録する形になった。
+ * ページ表への反映は vm_apply_pages が台帳どおりに下段テーブルを
+ * 書き換えることで行う (段の切り替え = 書き換え + TLB flush)。
+ * ページ表自体は全段で共有の 1 組で、同時に表に出ているのは
+ * 現在の段だけ (走るプログラムは常に最上段の 1 つ)。 */
+
+#define USER_CODE_FLAGS  (PTE_V | PTE_R | PTE_X | PTE_U | PTE_A | PTE_D)
+#define USER_DATA_FLAGS  (PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D)
+/* スタックの旗はデータと同じ (読み書き可・実行不可) */
+
+static struct user_pages levels[EXEC_MAX_DEPTH + 1];
+static int cur_level = 0;  /* ページ表に今出ている段 */
+
+/* ユーザー領域の 4KB ページ 1 枚分の PTE を書く (pa = 0 なら
+ * 無効化)。下段テーブルが無ければプールから作る。ボード固有の
+ * デバイス割り当て (中段の葉) の場所は触らない */
+static void set_user_pte(uint64_t va, uint64_t pa, uint64_t flags)
 {
-    uint64_t vpn2 = (va >> 30) & 0x1FF;
     uint64_t vpn1 = (va >> 21) & 0x1FF;
     uint64_t vpn0 = (va >> 12) & 0x1FF;
-    uint64_t root_pte = root_table[vpn2];
-    uint64_t *l1;
-    uint64_t l1_pte;
+    uint64_t l1_pte = user_l1_table[vpn1];
     uint64_t *l0;
 
-    if (root_pte & (PTE_R | PTE_W | PTE_X)) {
-        return;  /* ギガページの葉 = 割り当て済み */
-    }
-    if (root_pte & PTE_V) {
-        l1 = (uint64_t *)((root_pte >> 10) << 12);
-    } else {
-        l1 = pt_new_table();
-        if (l1 == 0) {
-            return;
-        }
-        root_table[vpn2] = ((uint64_t)l1 >> 12 << 10) | PTE_V;
-    }
-    l1_pte = l1[vpn1];
     if (l1_pte & (PTE_R | PTE_W | PTE_X)) {
-        return;  /* メガページの葉 = 割り当て済み */
+        return;  /* メガページの葉 = デバイス割り当ての場所 */
     }
     if (l1_pte & PTE_V) {
         l0 = (uint64_t *)((l1_pte >> 10) << 12);
@@ -117,33 +113,132 @@ static void map_4k(uint64_t va, uint64_t pa, uint64_t flags)
         if (l0 == 0) {
             return;
         }
-        l1[vpn1] = ((uint64_t)l0 >> 12 << 10) | PTE_V;
+        user_l1_table[vpn1] = ((uint64_t)l0 >> 12 << 10) | PTE_V;
     }
-    l0[vpn0] = make_leaf_pte(pa, flags);
+    l0[vpn0] = pa != 0 ? make_leaf_pte(pa, flags) : 0;
 }
 
-static void map_range(uint64_t va, uint64_t pa, uint64_t size,
-                      uint64_t flags)
+struct user_pages *vm_pages(int level)
 {
-    uint64_t off;
-    for (off = 0; off < size; off += 4096) {
-        map_4k(va + off, pa + off, flags);
+    return &levels[level];
+}
+
+/* 台帳のページを全部プールへ返して台帳を空にする。
+ * ページ表の方は次の vm_apply_pages で書き換わるので、
+ * ここでは触らない (返した直後にユーザーモードへ降りない
+ * 前提で、呼び出し側が exec / 終了の区切りで使う) */
+void vm_pages_release(int level)
+{
+    struct user_pages *up = &levels[level];
+    uint64_t i;
+
+    for (i = 0; i < USER_CODE_PAGES; i++) {
+        if (up->code[i] != 0) {
+            page_free(up->code[i]);
+            up->code[i] = 0;
+        }
+    }
+    for (i = 0; i < USER_DATA_PAGES; i++) {
+        if (up->data[i] != 0) {
+            page_free(up->data[i]);
+            up->data[i] = 0;
+        }
+    }
+    for (i = 0; i < USER_STACK_PAGES; i++) {
+        if (up->stack[i] != 0) {
+            page_free(up->stack[i]);
+            up->stack[i] = 0;
+        }
     }
 }
 
-/* ユーザー領域の割り当て。大きさはボード依存 (board.h):
- * virt は各 2MB、K210 は SRAM 6MB に収まるよう詰めた大きさ。
- * スタックは領域の末尾 (USER_STACK_TOP_VA) に寄せて割り当てる
- * (下向きに伸びるので、実際に使うのは末尾側) */
-static void apply_user_region(void)
+/* 台帳をページ表へ反映して、その段を「現在」にする */
+void vm_apply_pages(int level)
 {
-    map_range(USER_CODE_VA, cur_code_pa, BOARD_CODE_SIZE,
-              PTE_V | PTE_R | PTE_X | PTE_U | PTE_A | PTE_D);
-    map_range(USER_DATA_VA, cur_data_pa, BOARD_DATA_SIZE,
-              PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
-    map_range(USER_STACK_TOP_VA - BOARD_STACK_SIZE, cur_stack_pa,
-              BOARD_STACK_SIZE,
-              PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
+    struct user_pages *up = &levels[level];
+    uint64_t i;
+
+    cur_level = level;
+    for (i = 0; i < USER_CODE_PAGES; i++) {
+        set_user_pte(USER_CODE_VA + i * 4096, up->code[i],
+                     USER_CODE_FLAGS);
+    }
+    for (i = 0; i < USER_DATA_PAGES; i++) {
+        set_user_pte(USER_DATA_VA + i * 4096, up->data[i],
+                     USER_DATA_FLAGS);
+    }
+    for (i = 0; i < USER_STACK_PAGES; i++) {
+        set_user_pte(USER_STACK_VA + i * 4096, up->stack[i],
+                     USER_DATA_FLAGS);
+    }
+    BOARD_SFENCE_VMA();
+}
+
+uint64_t vm_pages_va_to_pa(const struct user_pages *up, uint64_t va)
+{
+    uint64_t pa;
+
+    if (va >= USER_CODE_VA && va < USER_CODE_VA + BOARD_CODE_SIZE) {
+        pa = up->code[(va - USER_CODE_VA) / 4096];
+        return pa != 0 ? pa + (va & 4095) : 0;
+    }
+    if (va >= USER_DATA_VA && va < USER_DATA_VA + BOARD_DATA_SIZE) {
+        pa = up->data[(va - USER_DATA_VA) / 4096];
+        return pa != 0 ? pa + (va & 4095) : 0;
+    }
+    if (va >= USER_STACK_VA && va < USER_STACK_TOP_VA) {
+        pa = up->stack[(va - USER_STACK_VA) / 4096];
+        return pa != 0 ? pa + (va & 4095) : 0;
+    }
+    return 0;
+}
+
+/* スタックの末尾側 nbytes 分のページを用意する。
+ * 既に割り当ててあるページはそのまま使う */
+int vm_stack_prepare(struct user_pages *up, uint64_t nbytes)
+{
+    uint64_t need = (nbytes + 4095) / 4096;
+    uint64_t i;
+
+    if (need > USER_STACK_PAGES) {
+        need = USER_STACK_PAGES;
+    }
+    for (i = 0; i < need; i++) {
+        uint64_t idx = USER_STACK_PAGES - 1 - i;
+        if (up->stack[idx] == 0) {
+            uint64_t pa = page_alloc();
+            if (pa == 0) {
+                return -1;
+            }
+            up->stack[idx] = pa;
+        }
+    }
+    return 0;
+}
+
+/* fault をきっかけにスタックを 1 ページ伸ばす (現在の段)。
+ * スタック領域の中の未割り当てページだけが対象で、それ以外は
+ * 「伸ばせない = 本物の違反」として 0 を返す */
+int vm_stack_grow(uint64_t va)
+{
+    struct user_pages *up = &levels[cur_level];
+    uint64_t idx, pa;
+
+    if (va < USER_STACK_VA || va >= USER_STACK_TOP_VA) {
+        return 0;
+    }
+    idx = (va - USER_STACK_VA) / 4096;
+    if (up->stack[idx] != 0) {
+        return 0;  /* 既に写してあるのに fault した = 違反 */
+    }
+    pa = page_alloc();
+    if (pa == 0) {
+        return 0;  /* プール枯渇: 伸ばせない */
+    }
+    up->stack[idx] = pa;
+    set_user_pte(USER_STACK_VA + idx * 4096, pa, USER_DATA_FLAGS);
+    BOARD_SFENCE_VMA();  /* 無効な PTE が TLB に残っている場合に備える */
+    return 1;
 }
 
 /* ボード固有のデバイス割り当て: pa を含む 2MB ブロックを
@@ -185,10 +280,7 @@ void vm_init(void)
      * カーネルのページには U が無いので、ユーザーモードからは
      * カーネルのメモリに届かない。 */
     root_table[1] = ((uint64_t)user_l1_table >> 12 << 10) | PTE_V;
-    cur_code_pa = USER_CODE_PA;
-    cur_data_pa = USER_DATA_PA;
-    cur_stack_pa = USER_STACK_PA;
-    apply_user_region();
+    vm_apply_pages(0);  /* 最初は段 0 の空の台帳 = ユーザー領域は空 */
 #if BOARD_FEATURE_VM_HOOK
     board_vm_hook();  /* ボード固有の追加割り当て (k210: LCD 用 MMIO) */
 #endif
@@ -220,48 +312,38 @@ void vm_fault_demo(void)
     uart_putc((char)c);  /* 届くはずがない行 */
 }
 
-/* --- exec のための領域差し替えとアドレス変換 (ステップ 6) -------- */
+/* --- exec のためのアドレス変換と引数の配置 ------------------------- */
 
-void vm_switch_user_region(uint64_t code_pa, uint64_t data_pa,
-                           uint64_t stack_pa)
-{
-    cur_code_pa = code_pa;
-    cur_data_pa = data_pa;
-    cur_stack_pa = stack_pa;
-    apply_user_region();
-    BOARD_SFENCE_VMA();
-}
-
-uint64_t vm_current_code_pa(void)
-{
-    return cur_code_pa;
-}
-
-uint64_t vm_current_data_pa(void)
-{
-    return cur_data_pa;
-}
-
-uint64_t vm_current_stack_pa(void)
-{
-    return cur_stack_pa;
-}
-
-/* スタック末尾への引数の配置 (vm.h の説明参照)。物理アドレスと
- * 仮想アドレスは領域の大きさ分だけずれて対応するので、物理側で
- * 書きながら仮想アドレスを数える */
+/* スタック末尾への引数の配置 (vm.h の説明参照)。置き先は台帳の
+ * ページで、書き込みは台帳経由の物理アドレスで行う */
 #define ARGV_MAX_TOKENS 16
 
-uint64_t user_stack_setup_argv(uint64_t stack_pa, int argc,
+uint64_t user_stack_setup_argv(struct user_pages *up, int argc,
                                const char *const *tokens,
                                uint64_t *argv_va)
 {
     uint64_t str_va[ARGV_MAX_TOKENS];
-    uint64_t pa = stack_pa + BOARD_STACK_SIZE;  /* 末尾 (排他的) */
+    uint64_t cursor = USER_STACK_TOP_VA;  /* 末尾 (排他的) */
     int i;
 
     if (argc > ARGV_MAX_TOKENS) {
         argc = ARGV_MAX_TOKENS;
+    }
+    /* 文字列と argv 配列と整列の余りが収まる分だけ、末尾側の
+     * スタックページを用意しておく */
+    {
+        uint64_t need = (uint64_t)(argc + 1) * 8 + 16;
+        int j;
+        for (j = 0; j < argc; j++) {
+            uint64_t len = 0;
+            while (tokens[j][len] != '\0') {
+                len++;
+            }
+            need += len + 1;
+        }
+        if (vm_stack_prepare(up, need) != 0) {
+            return 0;
+        }
     }
     /* 文字列を末尾から積む (最後の引数から置く) */
     for (i = argc - 1; i >= 0; i--) {
@@ -270,36 +352,32 @@ uint64_t user_stack_setup_argv(uint64_t stack_pa, int argc,
             len++;
         }
         len++;  /* NUL の分 */
-        pa -= len;
+        cursor -= len;
         for (j = 0; j < len; j++) {
-            *(char *)(pa + j) = tokens[i][j];
+            uint64_t pa = vm_pages_va_to_pa(up, cursor + j);
+            if (pa == 0) {
+                return 0;
+            }
+            *(char *)pa = tokens[i][j];
         }
-        str_va[i] = USER_STACK_VA + (pa - stack_pa);
+        str_va[i] = cursor;
     }
     /* その下に argv 配列。16 バイト境界に揃え、そこが新しい sp */
-    pa -= (uint64_t)(argc + 1) * 8;
-    pa &= ~15ULL;
-    for (i = 0; i < argc; i++) {
-        *(uint64_t *)(pa + (uint64_t)i * 8) = str_va[i];
+    cursor -= (uint64_t)(argc + 1) * 8;
+    cursor &= ~15ULL;
+    for (i = 0; i <= argc; i++) {
+        uint64_t pa = vm_pages_va_to_pa(up, cursor + (uint64_t)i * 8);
+        if (pa == 0) {
+            return 0;
+        }
+        *(uint64_t *)pa = i < argc ? str_va[i] : 0;
     }
-    *(uint64_t *)(pa + (uint64_t)argc * 8) = 0;
-    *argv_va = USER_STACK_VA + (pa - stack_pa);
-    return *argv_va;
+    *argv_va = cursor;
+    return cursor;
 }
 
-/* 仮想アドレスの範囲は固定 (大きさはボード依存) で、
- * 中身の物理メモリだけが差し替わる。スタックは末尾寄せ */
+/* 現在の段の台帳で訳す (trap.c のユーザーメモリコピー用) */
 uint64_t user_va_to_pa(uint64_t va)
 {
-    if (va >= USER_CODE_VA && va < USER_CODE_VA + BOARD_CODE_SIZE) {
-        return cur_code_pa + (va - USER_CODE_VA);
-    }
-    if (va >= USER_DATA_VA && va < USER_DATA_VA + BOARD_DATA_SIZE) {
-        return cur_data_pa + (va - USER_DATA_VA);
-    }
-    if (va >= USER_STACK_TOP_VA - BOARD_STACK_SIZE &&
-        va < USER_STACK_TOP_VA) {
-        return cur_stack_pa + (va - (USER_STACK_TOP_VA - BOARD_STACK_SIZE));
-    }
-    return 0;
+    return vm_pages_va_to_pa(&levels[cur_level], va);
 }

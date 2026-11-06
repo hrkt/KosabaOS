@@ -16,12 +16,19 @@
  * ファイルからの読み出しは fs_read_at (位置指定) 経由。
  * FS のブロックチェーン化 (doc/fs-design.md 段1) で、
  * ファイルのデータは連続とは限らなくなったため。
+ *
+ * 置き先は「段のページ台帳」(vm.h) で、物理メモリは連続とは
+ * 限らない。セグメントが触るページだけをプール (page.c) から
+ * 取って台帳に記録し、コピーはページ境界で区切りながら行う
+ * (exec 多段化、doc/exec-multilevel.md)。page_alloc がゼロ埋め
+ * して渡すので、ファイルに無い分 (.bss) は自動でゼロになる。
  */
 
 #include <stdint.h>
 #include "elf.h"
 #include "uart.h"
 #include "vm.h"
+#include "page.h"
 #include "fs.h"
 
 struct elf64_header {
@@ -58,11 +65,10 @@ struct elf64_phdr {
 
 /* ユーザープログラムの各領域の大きさはボード依存 (board.h の
  * BOARD_CODE_SIZE / BOARD_DATA_SIZE)。コードとデータで大きさが
- * 違うボード (virt はデータ 4MB) があるため、範囲チェックは
- * 領域ごとに分ける */
+ * 違うボード (virt はデータ 4MB) があるため、範囲チェックと
+ * 台帳の列は領域ごとに分ける */
 
-uint64_t elf_load_to(struct fs_file *f, uint64_t code_pa,
-                     uint64_t data_pa)
+uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
 {
     struct elf64_header h;
     int i;
@@ -92,8 +98,10 @@ uint64_t elf_load_to(struct fs_file *f, uint64_t code_pa,
     /* プログラムヘッダ表をたどり、PT_LOAD を置いていく */
     for (i = 0; i < h.e_phnum; i++) {
         struct elf64_phdr p;
-        unsigned char *dst;
-        uint64_t done, j;
+        uint64_t *pages;   /* この領域の台帳の列 */
+        uint64_t base;     /* 領域の先頭 VA */
+        uint64_t extent;   /* セグメントが触る長さ (memsz と filesz の大きい方) */
+        uint64_t done;
 
         if (fs_read_at(f, h.e_phoff + (uint64_t)i * h.e_phentsize,
                        (unsigned char *)&p, sizeof(p)) != sizeof(p)) {
@@ -104,23 +112,56 @@ uint64_t elf_load_to(struct fs_file *f, uint64_t code_pa,
             continue;
         }
         /* 行き先はコード領域かデータ領域の中だけに限る。
-         * どちらに入るかで置く物理メモリが変わる */
+         * どちらに入るかで台帳の列が変わる */
+        extent = p.p_memsz > p.p_filesz ? p.p_memsz : p.p_filesz;
         if (p.p_vaddr >= USER_CODE_VA &&
-            p.p_vaddr + p.p_memsz <= USER_CODE_VA + BOARD_CODE_SIZE) {
-            dst = (unsigned char *)(code_pa + (p.p_vaddr - USER_CODE_VA));
+            p.p_vaddr + extent <= USER_CODE_VA + BOARD_CODE_SIZE) {
+            pages = up->code;
+            base = USER_CODE_VA;
         } else if (p.p_vaddr >= USER_DATA_VA &&
-                   p.p_vaddr + p.p_memsz <= USER_DATA_VA + BOARD_DATA_SIZE) {
-            dst = (unsigned char *)(data_pa + (p.p_vaddr - USER_DATA_VA));
+                   p.p_vaddr + extent <= USER_DATA_VA + BOARD_DATA_SIZE) {
+            pages = up->data;
+            base = USER_DATA_VA;
         } else {
             uart_puts("[elf] segment out of user range\n");
             return 0;
         }
-        /* ファイルにある分を小分けに運ぶ */
+        /* セグメントが触るページをプールから取る。既に取って
+         * あるページはそのまま使う (セグメント同士でページを
+         * 共有する場合)。取るページはゼロ埋め済みなので、
+         * ファイルに無い分 (.bss) は改めて触らなくてよい */
+        if (extent > 0) {
+            uint64_t first = (p.p_vaddr - base) / 4096;
+            uint64_t last = (p.p_vaddr + extent - 1 - base) / 4096;
+            uint64_t idx;
+            for (idx = first; idx <= last; idx++) {
+                if (pages[idx] == 0) {
+                    uint64_t pa = page_alloc();
+                    if (pa == 0) {
+                        uart_puts("[elf] out of pages\n");
+                        return 0;
+                    }
+                    pages[idx] = pa;
+                }
+            }
+        }
+        /* ファイルにある分を、ページ境界で区切りながら運ぶ
+         * (物理ページは連続とは限らないため) */
         done = 0;
         while (done < p.p_filesz) {
             unsigned char buf[512];
+            uint64_t va = p.p_vaddr + done;
+            uint64_t pa = vm_pages_va_to_pa(up, va);
             uint64_t chunk = p.p_filesz - done;
+            uint64_t room = 4096 - (va & 4095);
             uint64_t got, k;
+            if (pa == 0) {
+                uart_puts("[elf] segment page missing\n");
+                return 0;
+            }
+            if (chunk > room) {
+                chunk = room;
+            }
             if (chunk > sizeof(buf)) {
                 chunk = sizeof(buf);
             }
@@ -130,21 +171,13 @@ uint64_t elf_load_to(struct fs_file *f, uint64_t code_pa,
                 return 0;
             }
             for (k = 0; k < got; k++) {
-                dst[done + k] = buf[k];
+                *(unsigned char *)(pa + k) = buf[k];
             }
             done += got;
-        }
-        for (j = p.p_filesz; j < p.p_memsz; j++) {
-            dst[j] = 0;  /* ファイルに無い分はゼロ埋め (.bss) */
         }
     }
 
     /* 書いた命令を命令キャッシュ側へ反映させる */
     asm volatile("fence.i");
     return h.e_entry;
-}
-
-uint64_t elf_load(struct fs_file *f)
-{
-    return elf_load_to(f, USER_CODE_PA, USER_DATA_PA);
 }

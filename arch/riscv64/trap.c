@@ -214,14 +214,26 @@ static inline void w_sscratch(uint64_t x)
 }
 
 /* --- ユーザーメモリの読み書き ---------------------------------------
- * ポインタはユーザーの仮想アドレスで渡される。現在の割り当て
- * (vm.c の user_va_to_pa) で訳せる範囲だけを触る。 */
+ * ポインタはユーザーの仮想アドレスで渡される。現在の段の
+ * 割り当て (vm.c の user_va_to_pa) で訳せる範囲だけを触る。
+ * スタックの未割り当てページは、カーネル経由のコピーでも
+ * demand paging が効くよう、伸ばしてから訳し直す (プログラムが
+ * まだ触っていないスタック上のバッファを渡されても動くように) */
+
+static uint64_t user_pa(uint64_t va)
+{
+    uint64_t pa = user_va_to_pa(va);
+    if (pa == 0 && vm_stack_grow(va)) {
+        pa = user_va_to_pa(va);
+    }
+    return pa;
+}
 
 static int copy_user_string(uint64_t va, char *buf, int max)
 {
     int i;
     for (i = 0; i < max - 1; i++) {
-        uint64_t pa = user_va_to_pa(va + (uint64_t)i);
+        uint64_t pa = user_pa(va + (uint64_t)i);
         char c;
         if (pa == 0) {
             return -1;
@@ -240,7 +252,7 @@ static int copy_to_user(uint64_t va, const unsigned char *src, uint64_t n)
 {
     uint64_t i;
     for (i = 0; i < n; i++) {
-        uint64_t pa = user_va_to_pa(va + i);
+        uint64_t pa = user_pa(va + i);
         if (pa == 0) {
             return -1;
         }
@@ -253,7 +265,7 @@ static int copy_from_user(unsigned char *dst, uint64_t va, uint64_t n)
 {
     uint64_t i;
     for (i = 0; i < n; i++) {
-        uint64_t pa = user_va_to_pa(va + i);
+        uint64_t pa = user_pa(va + i);
         if (pa == 0) {
             return -1;
         }
@@ -414,31 +426,33 @@ static void clear_fds(struct fd_entry *t)
 }
 
 /* --- exec の積み重ね (ステップ 6 → exec 多段化) -----------------------
- * 親が exec を呼んだら、親の trapframe・sepc・sp・領域の割り当て・
- * cwd を exec_stack へ退避し、同じ仮想アドレスに子の領域を
- * 差し替えて子を起動する。子が exit / 保護違反で終わったら、
- * 退避した親の状態を現在の trapframe に書き戻し、親は exec から
- * 戻った形で再開する。exec_depth が「今動いているプログラムの段」
- * で、0 がカーネルから直接起動された根のプログラム。
- * 段A (現段階) では退避を積み重ねる構造と段ごとの fd テーブルだけ
- * を入れ、領域は従来どおり親子 2 セットなので深さ 1 で打ち止める。
- * 領域のプール化は段B で行う (doc/exec-multilevel.md)。 */
+ * 親が exec を呼んだら、親の trapframe・sepc・sp・cwd を
+ * exec_stack へ退避し、子のページ台帳をページ表へ反映して子を
+ * 起動する。物理メモリは段ごとにページ単位で割り当てるので
+ * (vm.c の台帳)、親のメモリはプールに残ったまま凍結される。
+ * 子が exit / 保護違反で終わったら、子のページをプールへ返し、
+ * 退避した親の状態を現在の trapframe に書き戻して、親は exec
+ * から戻った形で再開する。exec_depth が「今動いている
+ * プログラムの段」で、0 がカーネルから直接起動された根の
+ * プログラム。深さの上限は sanity の EXEC_MAX_DEPTH で、
+ * それより先はプールの残量が実質の上限になる。 */
 
 static struct {
     uint64_t frame[32];
     uint64_t sepc;
     uint64_t sp;
-    uint64_t code_pa;
-    uint64_t data_pa;
-    uint64_t stack_pa;
     char cwd[PATH_MAX];  /* 親の cwd (子が chdir しても戻せるように) */
 } exec_stack[EXEC_MAX_DEPTH];
 
 static int exec_depth = 0;  /* 今動いているプログラムの段 */
 
+/* 子のプログラムから親へ戻る共通処理: 子のページを返し、
+ * 1 段降りて親の状態 (レジスタ・写像・cwd・fd テーブル) を
+ * 復元する。result は親の exec の戻り値になる */
 static void resume_parent(uint64_t *frame, uint64_t result)
 {
     int i;
+    vm_pages_release(exec_depth);  /* 子のページをプールへ返す */
     exec_depth--;
     for (i = 0; i < 32; i++) {
         frame[i] = exec_stack[exec_depth].frame[i];
@@ -446,9 +460,7 @@ static void resume_parent(uint64_t *frame, uint64_t result)
     frame[FRAME_A0] = result;
     w_sepc(exec_stack[exec_depth].sepc + 4);
     w_sscratch(exec_stack[exec_depth].sp);
-    vm_switch_user_region(exec_stack[exec_depth].code_pa,
-                          exec_stack[exec_depth].data_pa,
-                          exec_stack[exec_depth].stack_pa);
+    vm_apply_pages(exec_depth);  /* 親の台帳をページ表へ戻す */
     proc_set_cwd(exec_stack[exec_depth].cwd);
     fd_table = fd_tables[exec_depth];  /* 親の fd テーブルに戻す */
 }
@@ -466,13 +478,13 @@ static int do_exec(uint64_t *frame)
     const char *tokens[EXEC_ARGC_MAX];
     int argc = 0;
     struct fs_file *f;
+    struct user_pages *up;
     uint64_t entry;
     int i;
 
-    if (exec_depth >= 1) {
-        /* 段A では領域セットが親子 2 組だけなので深さ 1 で
-         * 打ち止める。段B でプール化したら EXEC_MAX_DEPTH
-         * (sanity 上限) まで開ける */
+    if (exec_depth >= EXEC_MAX_DEPTH) {
+        /* sanity 上限。これ以上は積み重ねない (仕様として
+         * syscalls.md に明記) */
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
@@ -517,8 +529,14 @@ static int do_exec(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
-    entry = elf_load_to(f, CHILD_CODE_PA, CHILD_DATA_PA);
-    if (entry == 0) {
+    /* 子の段の台帳へ ELF を読み、スタックの初期分 (16KB) を
+     * 用意する。どちらか失敗したら、取ったページを返して
+     * 起動失敗 (-1) にする */
+    up = vm_pages(exec_depth + 1);
+    vm_pages_release(exec_depth + 1);  /* 前の残りがあれば返す */
+    entry = elf_load_to(f, up);
+    if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
+        vm_pages_release(exec_depth + 1);
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
@@ -529,9 +547,6 @@ static int do_exec(uint64_t *frame)
     }
     exec_stack[exec_depth].sepc = r_sepc();
     exec_stack[exec_depth].sp = r_sscratch();
-    exec_stack[exec_depth].code_pa = vm_current_code_pa();
-    exec_stack[exec_depth].data_pa = vm_current_data_pa();
-    exec_stack[exec_depth].stack_pa = vm_current_stack_pa();
     /* cwd は子へ引き継ぐ (そのまま)。親の分は退避しておき、
      * 子が chdir しても resume_parent で戻す */
     {
@@ -548,20 +563,23 @@ static int do_exec(uint64_t *frame)
      * 残るので、子の終了後に親の fd がそのまま使える */
     fd_table = fd_tables[exec_depth];
     clear_fds(fd_table);
+    vm_apply_pages(exec_depth);  /* 子の台帳をページ表へ反映 */
 
-    /* 子の領域に差し替えて、子の入口から開始させる。
-     * レジスタは汚れたまま渡さないようゼロにしておく。
-     * 引数は子のスタック末尾に置き、入口の約束どおり
-     * a0 = argc、a1 = argv で渡す */
-    vm_switch_user_region(CHILD_CODE_PA, CHILD_DATA_PA,
-                          CHILD_STACK_PA);
-    for (i = 0; i < 32; i++) {
-        frame[i] = 0;
-    }
+    /* 引数は子のスタック末尾に置く (台帳経由の書き込みなので
+     * ページ表の切り替え前後どちらでもよい)。置けなければ
+     * 積んだものを巻き戻して起動失敗にする */
     {
         uint64_t argv_va;
-        uint64_t sp = user_stack_setup_argv(CHILD_STACK_PA, argc,
-                                            tokens, &argv_va);
+        uint64_t sp = user_stack_setup_argv(up, argc, tokens, &argv_va);
+        if (sp == 0) {
+            resume_parent(frame, (uint64_t)-1);
+            return 1;  /* sepc は resume_parent が親側に設定済み */
+        }
+        /* レジスタは汚れたまま渡さないようゼロにしておく。
+         * 入口の約束どおり a0 = argc、a1 = argv で渡す */
+        for (i = 0; i < 32; i++) {
+            frame[i] = 0;
+        }
         frame[FRAME_A0] = (uint64_t)argc;
         frame[FRAME_A1] = argv_va;
         w_sepc(entry);
@@ -1006,6 +1024,21 @@ void trap_handler(uint64_t *frame, int from_user)
     if (from_user && code == 8) {
         /* ユーザーモードからの ecall = システムコール */
         do_syscall(frame);
+        return;
+    }
+
+    /* スタックの伸長 (demand paging): ユーザーの load / store が
+     * スタック領域の未割り当てページに触れたら、ページを足して
+     * 命令をそのままやり直させる。対象は load / store のフォルト
+     * だけ (標準の 13/15、ドラフト仕様の 5/7)。実行のフォルトや
+     * データ領域の未割り当ては違反として下へ流す */
+    if (from_user &&
+        (code == 13 || code == 15
+#if BOARD_DRAFT_FAULT_CODES
+         || code == 5 || code == 7
+#endif
+         ) &&
+        vm_stack_grow(r_stval())) {
         return;
     }
 

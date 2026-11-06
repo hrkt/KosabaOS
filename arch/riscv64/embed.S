@@ -18,3 +18,9 @@ user_prog_end:
 nish_prog_start:
     .incbin "nish.elf"
 nish_prog_end:
+
+    .globl chain_prog_start
+    .globl chain_prog_end
+chain_prog_start:
+    .incbin "chain.elf"
+chain_prog_end:

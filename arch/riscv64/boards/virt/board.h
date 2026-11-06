@@ -37,28 +37,24 @@
 /* trap.c のタイマ: QEMU virt の CLINT は 10MHz */
 #define BOARD_TIMER_HZ 10000000ULL
 
-/* ユーザープログラムの物理配置 (vm.h が参照する)。
- * virt の RAM は 0x80000000 から 128MB あるので余裕がある。
+/* ユーザープログラムの領域の大きさ (vm.h が参照する)。
+ * 物理メモリは固定配置ではなく、下のプールからページ単位で
+ * 実需割り当てする (exec 多段化)。virt の RAM は 0x80000000
+ * から 128MB あるので余裕がある。
  * カーネル (0x80200000〜) には 16MB 空けてある: FS の arena を
  * 8MB に広げたので、カーネルの BSS が大きくなるため。
  * データ領域は 4MB: IwaC のセルフホスト (コンパイル済み iwac の
  * 静的データ約 2.9MB) を載せるため (2026-11-03 に案A として決定)。
  * スタックの仮想アドレス末尾も合わせて 0x40800000 に移る。 */
-#define BOARD_USER_CODE_PA   0x81200000UL
-#define BOARD_USER_DATA_PA   0x81400000UL
-#define BOARD_USER_STACK_PA  0x81800000UL
-#define BOARD_CHILD_CODE_PA  0x81A00000UL
-#define BOARD_CHILD_DATA_PA  0x81C00000UL
-#define BOARD_CHILD_STACK_PA 0x82000000UL
 #define BOARD_CODE_SIZE      (2ULL * 1024 * 1024)
 #define BOARD_DATA_SIZE      (4ULL * 1024 * 1024)
 #define BOARD_STACK_SIZE     (2ULL * 1024 * 1024)
 /* スタック領域の仮想アドレス末尾 (データ領域の直後) */
 #define BOARD_STACK_TOP_VA   0x40800000UL
 
-/* ページアロケータ (page.c) のプール範囲。子領域の末尾
- * (0x82000000 + 2MB) から RAM の末尾まで。今の固定配置では
- * 誰も使っていない範囲で、将来 exec の実需割り当てが使う */
+/* ページアロケータ (page.c) のプール範囲。RAM の末尾側を広く
+ * 取る。ユーザープログラムのページは全部ここから出る
+ * (旧来の固定の親子セットは廃止した) */
 #define BOARD_PAGE_POOL_BASE 0x82200000UL
 #define BOARD_PAGE_POOL_END  0x88000000UL
 
