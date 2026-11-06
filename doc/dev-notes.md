@@ -460,3 +460,16 @@ rebase してから fast-forward で入れた。
 - 検証は virt 全 20 シナリオ (A〜T)・実機
   全 14 シナリオ (K1〜K14) とも ALL PASS。
   画面のピクセル自体の最終確認は目視に残る
+- Ikesu との合流テストを、公式テスト (test.sh) に
+  任意シナリオ U として取り込んだ。素材は Ikesu 側の
+  ビルド成果物 (ikesu.elf / player.wasm / test.mp3)
+  で、リポジトリには持ち込まない。build.sh が
+  IKESU_DIR (デフォルトは隣の ikesu ツリー) から
+  写し、-DIKESU_EMBED のときだけ virt 向けに
+  埋め込む。素材が 1 つでも欠ければ U は SKIP になり、
+  スイートは従来どおり ALL PASS で終わる
+- 検証: 素材ありで全 21 シナリオ (A〜U) ALL PASS
+  (U は dmesg の audio: close 行が samples=170496 /
+  fnv=8aa3e97dbcb30c11 で参照 PCM と一致)、
+  素材なしで U が SKIP になり残り全 PASS。
+  BOARD=k210 のビルドも従来どおり成功
