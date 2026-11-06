@@ -409,3 +409,32 @@ RTC から壁時計を読む機能をブランチ `rtc` で足した
   実機の K5 が一度だけ落ちたのは tick 表示が応答の
   真ん中に入ったハーネス側のフレークで、再実行で
   通過した
+
+### 夜 (続き): 2 ブランチの統合と、実機で FP が動いた日
+
+並行して育てていた branch `rtc` と branch
+`audio-syscall` を、ユーザーの承認した順で main へ
+統合した。どちらも main (uptime マージ後) へ
+rebase してから fast-forward で入れた。
+
+- rtc: 衝突は test.sh (シナリオ) と dev-notes
+  (隣同士の節) だけ。番号は壁時計が test.sh で
+  R → S、実機で K12 → K13 に振り直し (uptime の
+  R / K12 と重なるため)
+- audio-syscall: syscalls.md の頭書き、trap.c の
+  番号定義と振り分け、build.sh / embed.S / fs.c の
+  埋め込み追加がそれぞれ uptime 分と重なったが、
+  いずれも「両方残す」で解消。シナリオは S → T に
+  振り直し (S は壁時計が使った)
+- 眼目だった実機の FP 確認は、test-k210.py に
+  K14 (FP スモーク) を足して実施。fptest.elf
+  (lp64d) が Nish から完走し、float / double の
+  四則と変換が全部一致した。**K210 実機で FP が
+  実際に動くことが確定**。プログラム開始時の
+  FS = Initial 化 (K210 は mshim の mstatus.FS を
+  含む) と fcsr = 0 初期化のレシピが実機でも
+  効いている。mstatus.FS 単体の要否の切り分け
+  (外したら落ちるか) まではしていない
+- 最終 main の検証: virt は全 20 シナリオ
+  (A〜T)、実機は全 14 シナリオ (K1〜K14)、
+  どちらも ALL PASS
