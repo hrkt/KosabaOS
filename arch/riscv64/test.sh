@@ -27,6 +27,16 @@ if [ -z "${QEMU:-}" ] && [ -n "$TOOLS_DIR" ] && [ -x "$TOOLS_DIR/qemu/qemu-syste
 fi
 QEMU=${QEMU:-qemu-system-riscv64}
 
+# Ikesu 合流テスト (シナリオ U) の素材。build.sh と同じ解決
+# 方法で、3 点そろっているときだけ U が有効になる
+IKESU_DIR=${IKESU_DIR:-../../../../ikesu}
+ikesu_have=1
+for f in build/ikesu.elf build/player.wasm testdata/test.mp3; do
+    if [ ! -f "$IKESU_DIR/$f" ]; then
+        ikesu_have=0
+    fi
+done
+
 echo "== build == (takes a few seconds; QEMU runs make Ctrl-C"
 echo "   ineffective while they run -- Ctrl-A x ends that QEMU)"
 if ! (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1; then
@@ -400,6 +410,27 @@ case "$out" in
     *"fptest: FAIL"*) echo "  unexpected: fptest reported FAIL"; rc=1 ;;
 esac
 report "T audio syscalls (fnv via dmesg) + FP arithmetic" $rc
+
+echo "== scenario U: ikesu join test (optional) =="
+# Ikesu との合流テスト。素材 (Ikesu 側のビルド成果物) が
+# あるときだけ有効で、無いときは SKIP (数えない)。
+# Nish から ikesu.elf で player.wasm を実行し、test.mp3 の
+# デコード結果が参照 PCM と一致すること (dmesg の
+# audio: close 行の samples と fnv) を見る。デコードには
+# QEMU 上で十数秒かかるので待ちは長めに取る
+if [ "$ikesu_have" -eq 0 ]; then
+    echo "SKIP: U ikesu join test (materials not found: IKESU_DIR=$IKESU_DIR)"
+else
+    { sleep 3; printf 'run ikesu.elf player.wasm test.mp3\n'; sleep 60; \
+      printf 'dmesg\n'; sleep 3; \
+      printf 'exit\n'; sleep 2; } \
+        | timeout 85 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+        > test-u.log 2>&1 || true
+    out=$(strip_ticks < test-u.log)
+    check_order "$out" "Nish, the KosabaOS shell" \
+        "audio: close rate=44100 channels=1 samples=170496 fnv=8aa3e97dbcb30c11"
+    report "U ikesu join test (mp3 decode, audio close fnv)" $?
+fi
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
