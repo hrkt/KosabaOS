@@ -322,6 +322,44 @@ case "$out" in
 esac
 report "R uptime (monotonic / advances / sane range)" $rc
 
+echo "== scenario S: wall clock (Goldfish RTC) =="
+# カーネルコンソールの 't' キーで壁時計を読む (doc/time.md)。
+# Goldfish RTC はホストの時刻 (UTC) を返すので、epoch が
+# ホストの現在時刻と大きくずれていないこと、2 回読むと
+# 進んでいること、設定は read-only で断られることを見る
+host_epoch=$(date -u +%s)
+{ sleep 3; printf 'exit\n'; sleep 2; printf 't'; sleep 1; \
+  printf '\n'; sleep 3; printf 't'; sleep 1; \
+  printf '2031-02-03 04:05:06\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-s.log 2>&1 || true
+out=$(strip_ticks < test-s.log)
+rc=0
+# epoch の抽出は check_order より先 (check_order は out を
+# 消費してしまうため)
+epochs=$(printf '%s' "$out" | grep -o 'epoch [0-9][0-9]*' | awk '{print $2}')
+check_order "$out" "time: wall clock 20" "wall: 20" \
+    "time: kept" "time: cannot set on this board" || rc=1
+e1=$(printf '%s\n' "$epochs" | sed -n 1p)
+e2=$(printf '%s\n' "$epochs" | sed -n 2p)
+if [ -z "$e1" ] || [ -z "$e2" ]; then
+    echo "  missing epoch values (e1=$e1 e2=$e2)"
+    rc=1
+fi
+if [ "$rc" -eq 0 ]; then
+    if [ "$e2" -le "$e1" ]; then
+        echo "  epoch not advancing: $e1 -> $e2"
+        rc=1
+    fi
+    d=$((e1 - host_epoch))
+    [ "$d" -lt 0 ] && d=$((-d))
+    if [ "$d" -gt 300 ]; then
+        echo "  epoch off host by ${d}s: $e1 vs host $host_epoch"
+        rc=1
+    fi
+fi
+report "S wall clock (Goldfish RTC: read / advance / read-only)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
