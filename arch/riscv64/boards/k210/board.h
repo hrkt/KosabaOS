@@ -45,29 +45,22 @@
  * (390MHz 時 約 7.8MHz、step 3 で実測) */
 #define BOARD_TIMER_HZ 7800000ULL
 
-/* ユーザープログラムの物理配置 (vm.h が参照する)。
- * 汎用 SRAM は 0x80000000 から 6MB。カーネル (約 0.6MB) の
- * 後ろに、ユーザー領域と exec 用の子領域を 4KB ページ単位で
- * 詰める (メガページ配置では 6MB に収まらないため):
- *   コード 1MB / データ 1MB / スタック 512KB × 2 組で
- *   0x80100000 から 0x80600000 までちょうど使い切る。 */
-#define BOARD_USER_CODE_PA   0x80100000UL
-#define BOARD_USER_DATA_PA   0x80200000UL
-#define BOARD_USER_STACK_PA  0x80300000UL
-#define BOARD_CHILD_CODE_PA  0x80380000UL
-#define BOARD_CHILD_DATA_PA  0x80480000UL
-#define BOARD_CHILD_STACK_PA 0x80580000UL
+/* ユーザープログラムの領域の大きさ (vm.h が参照する)。
+ * 汎用 SRAM は 0x80000000 から 6MB。カーネル (1MB) の後ろは
+ * 固定の領域セットではなく、下のページプールとして exec
+ * 多段化の実需割り当てに回す。小さいプログラムの連鎖なら
+ * 数段いける計算 (Nish 約 0.1MB + 子は数十 KB 級)。
+ * iwac 本体級 (データ 1MB 超) は従来どおり入らない */
 #define BOARD_CODE_SIZE      (1ULL * 1024 * 1024)
 #define BOARD_DATA_SIZE      (1ULL * 1024 * 1024)
 #define BOARD_STACK_SIZE     (512ULL * 1024)
 /* スタック領域の仮想アドレス末尾 (virt と違い、こちらは従来どおり) */
 #define BOARD_STACK_TOP_VA   0x40600000UL
 
-/* ページアロケータ (page.c) のプール範囲。汎用 SRAM 6MB は
- * 上の配置で使い切っているため、当面プールは空 (BASE = END)。
- * exec 多段化のプール化の段で、子領域のセットを解体して
- * ここへ回す想定 */
-#define BOARD_PAGE_POOL_BASE 0x80600000UL
+/* ページアロケータ (page.c) のプール範囲。カーネルの後ろ
+ * 0x80100000 から汎用 SRAM の末尾 0x80600000 まで (5MB)。
+ * 旧来の親子 2 セット (各 2.5MB) を解体してプール化した */
+#define BOARD_PAGE_POOL_BASE 0x80100000UL
 #define BOARD_PAGE_POOL_END  0x80600000UL
 
 /* RAM FS の大きさ (fs.c が参照する)。K210 は SRAM の都合で

@@ -193,6 +193,20 @@ def main():
     ok = command("rmdir hw4", "removed hw4") and ok
     report("K8 fs stage 4 (ls /sd, cd, relative cat)", ok)
 
+    print("== scenario K9: exec multilevel (chain) ==")
+    # 実機でも多段 exec が動くこと: chain.elf が 3 段まで自分を
+    # exec し、ステータスが伝わり (最終 6)、親の fd が子の後も
+    # 読めること。burn はスタックの fault 伸長 (ドラフト仕様の
+    # アクセスフォルト経由) の確認も兼ねる
+    cur = log_total()
+    send_chunked("run chain.elf 3")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("chain 0 start", 10000, cursor=cur)
+    ok = expect("burn=4160", 5000, cursor=cur) and ok
+    ok = expect("fdok= fro", 5000, cursor=cur) and ok
+    ok = expect("run: exit status 6", 5000, cursor=cur) and ok
+    report("K9 exec multilevel (chain: depth / status / fd)", ok)
+
     print("== scenario K6: exit to kernel console ==")
     ok = command("exit", "back from user program")
     report("K6 exit to kernel console", ok)
