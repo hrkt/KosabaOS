@@ -81,3 +81,37 @@ doc/sd-design.md、全体の段取りは doc/sd-roadmap.md。
   （RAM FS 側の既存の意味づけに合わせるのが第一候補）。
 - 大きなカードでの空きクラスタ走査の速度（実測してから、
   必要なら探索開始位置のヒントを持つ）。
+
+## 実装の記録 (2026-11-07、branch `sd-write`)
+
+段1〜段4 を実装し終えた。状態の要約:
+
+- 段1 (53f0d9b): blkdev に write。virt ramdisk はイメージの
+  RAM 写し (8MiB) に対して読み書き、K210 は CMD24 +
+  busy 待ち。FAT キャッシュは dirty 管理と全 FAT 面への
+  書き戻し、起動時に FSInfo を読む。イメージ検査用に独立
+  チェッカ arch/riscv64/check_sd_image.py を追加
+  (fsck.fat がこの環境では使えなかったため)。
+- 段2 (cd98ef6): fat_create / fat_write_data (末尾追記) /
+  fat_close_write (FAT → 目録 → FSInfo の順に書き戻し) /
+  fat_unlink / fat_mkdir。ホスト検証 (fat.c を実ファイル
+  blkdev で駆動) で作成・追記・切り捨て・削除・mkdir・
+  目録鎖の延長まで確かめ、独立チェッカでバイト一致と
+  FSInfo の空き数の一致を確認した。
+- 段3 (c4665e4): trap.c の /sd で create / write / unlink /
+  mkdir を生かした (rmdir の SD 対応は見送り、-1 のまま)。
+  exec 切替・終了・フォルト復帰の手前で開きっぱなしの
+  SD 書き込み fd を締める。test.sh にシナリオ V を追加し
+  全22シナリオ ALL PASS。途中、ramdisk の写し 16MiB で
+  カーネル BSS がページプールに食い込み ikesu (シナリオ U)
+  が静かに壊れる回帰を踏み、写しを 8MiB に縮小 +
+  boards/virt/kernel.ld に ASSERT を追加して直した。
+- 段4: test-k210.py にシナリオ K15 を追加し、基板1の
+  カメラカード (中身退避済み) で SRAM ブート確認。
+  K1〜K15 ALL PASS。書き込み後に既存の BOOT.PY が無傷に
+  読めることも K15 の中で確かめている。フラッシュは
+  触っていない。
+- 未決の1点目は、RAM FS の契約どおり「create = 同名
+  切り捨て、write = 末尾追記」で解決した (open の形は
+  変えていない)。空き走査は FSInfo のヒント起点にして
+  あるが、大きなカードでの速度は未実測のまま残る。

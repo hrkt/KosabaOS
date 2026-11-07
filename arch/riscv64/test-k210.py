@@ -307,6 +307,23 @@ def main():
     ok = expect("fptest: done", 5000, cursor=cur) and ok
     report("K14 FP smoke (float/double ops on K210)", ok)
 
+    print("== scenario K15: SD write ==")
+    # /sd への書き込み対応の実機確認 (doc/sd-write-design.md
+    # 段4)。カードは中身を退避済みのカメラカードで、触るのは
+    # テストファイルの作成と削除だけ (既存ファイルは変更
+    # しない)。書き込みの前後で既存の BOOT.PY が無傷に
+    # 読めることもあわせて見る。Nish には K14 の流れで
+    # 入ったままの状態から始める
+    ok = command("write /sd/K15TEST.TXT k210-sd-write",
+                 "wrote /sd/K15TEST\\.TXT")
+    ok = command("cat /sd/K15TEST.TXT", "k210-sd-write") and ok
+    ok = command("cat /sd/BOOT.PY", "fpioa_manager") and ok
+    ok = command("rm /sd/K15TEST.TXT",
+                 "removed /sd/K15TEST\\.TXT") and ok
+    ok = command("cat /sd/K15TEST.TXT", "cat: no such file") and ok
+    report("K15 SD write (create/write/read-back/unlink, "
+           "existing files intact)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
