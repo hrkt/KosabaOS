@@ -263,6 +263,7 @@ spike-k210/step5-sd/README.md の 2026-11-06 の記録。)
   RAM FS のファイルを相手にしている)。要るようになったら
   「read_at を関数として渡せる形にローダを一般化する」
   が筋、とだけメモしておく
+  (→ 2026-11-08、その形で実装した。doc/sd-exec-design.md)
 - 新しい syscall は増やさない (sd-roadmap どおり)
 
 ## テストの設計 (virt)
@@ -295,6 +296,7 @@ spike-k210/step5-sd/README.md の 2026-11-06 の記録。)
    たどれる (2026-11-04 改訂で追加。深さ上限 8、
    '..' は扱わない)
 5. SD からの exec は v1 対象外
+   (2026-11-08 に解禁。doc/sd-exec-design.md)
 6. 名前空間は単一の木で、SD の mount 点は `/sd`
    (`sd:` 接頭辞は使わない。fs-design.md 段4 と対)
 
