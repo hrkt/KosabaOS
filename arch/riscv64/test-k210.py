@@ -369,16 +369,22 @@ def main():
     # bg で走らせるとプロンプトが戻り、走っている間に
     # 別のコマンドが打て、jobs に running と見え、fg が
     # 完了まで待つ。crash.elf のフォルトはそのジョブだけを
-    # 終わらせ、Nish は無事 (fg が faulted を報告する)
-    ok = command("run slow.elf 12 &", "job 1: slow\\.elf started",
-                 15000)
-    ok = command("echo during", "during") and ok
-    ok = command("jobs", "job 1: slow\\.elf running") and ok
-    ok = command("fg", "slow done", 20000) and ok
+    # 終わらせ、Nish は無事 (fg が faulted を報告する)。
+    # 実機はコマンド 1 本の往復に数秒かかる (デーモン経由の
+    # 刻み送信) ので、slow は 80 回 (約 24 秒) と長めにし、
+    # echo と jobs の 2 往復を終えてもまだ走っている長さに
+    # する。fg の照合は「fg を送った後に slow done が出る」
+    # 形になるよう、完了が fg の待ち窓の中に入る計算
+    ok = command("run slow.elf 80 &", "job 1: slow\\.elf started",
+                 20000)
+    ok = command("echo during", "during", 20000) and ok
+    ok = command("jobs", "job 1: slow\\.elf running", 20000) and ok
+    ok = command("fg", "slow done", 60000) and ok
+    ok = command("jobs", "no jobs", 20000) and ok
     ok = command("run crash.elf &", "job 1: crash\\.elf started",
-                 15000) and ok
-    ok = command("echo alive", "alive") and ok
-    ok = command("fg", "fg: program faulted", 15000) and ok
+                 20000) and ok
+    ok = command("echo alive", "alive", 20000) and ok
+    ok = command("fg", "fg: program faulted", 20000) and ok
     report("K17 job control (bg / jobs / fg / fault isolation)", ok)
 
     print("== summary ==")
