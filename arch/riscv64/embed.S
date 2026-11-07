@@ -61,6 +61,18 @@ crash_prog_start:
     .incbin "crash.elf"
 crash_prog_end:
 
+    .globl gdemo_prog_start
+    .globl gdemo_prog_end
+gdemo_prog_start:
+    .incbin "gdemo.elf"
+gdemo_prog_end:
+
+    .globl gjob_prog_start
+    .globl gjob_prog_end
+gjob_prog_start:
+    .incbin "gjob.elf"
+gjob_prog_end:
+
 /* Ikesu 合流テストの素材 (test.sh シナリオ U)。リポジトリの
  * 外にある Ikesu のビルド成果物を build.sh が写してきた
  * ときだけ (-DIKESU_EMBED)、virt 向けに取り込む */

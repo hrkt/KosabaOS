@@ -522,6 +522,30 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "[kernel] back from user program"
 report "X job control (bg / jobs / fg / notice / fault isolation)" $?
 
+echo "== scenario Y: gfx syscalls (drawing, stage A) =="
+# 画面表示の段A (doc/gfx-design.md): gdemo.elf が前面で
+# gfx_info → clear → rect x2 → text → line を呼び、窓の
+# 情報 (前面の内容領域 318x202) をコンソールに出す。
+# virt では実描画が無いので、照合は dmesg に残る gfx の
+# 要約行 (両環境で同じ形) で行う。実機のピクセル確認は
+# 目視の担当 (test-k210.py K18 でシリアル側だけ見る)
+{ sleep 3; printf 'run gdemo.elf\n'; sleep 3; \
+  printf 'dmesg\n'; sleep 2; \
+  printf 'exit\n'; sleep 1; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-y.log 2>&1 || true
+out=$(strip_ticks < test-y.log)
+check_order "$out" "Nish, the KosabaOS shell" \
+    "gdemo: screen 320x240 win 318x202" "gdemo: done" \
+    "gfx: info r=0 win=318x202" \
+    "gfx: clear r=0 color=0x0010" \
+    "gfx: rect r=0 x=10 y=10 w=120 h=60 color=0xf800" \
+    "gfx: rect r=0 x=30 y=30 w=60 h=30 color=0x07e0" \
+    "gfx: text r=0 x=10 y=80 \"GDEMO\" scale=2 color=0xffff" \
+    "gfx: line r=0 x0=0 y0=100 x1=200 y1=130 color=0x07ff" \
+    "[kernel] back from user program"
+report "Y gfx syscalls (info/clear/rect/text/line via dmesg)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

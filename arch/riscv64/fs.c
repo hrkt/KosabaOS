@@ -52,6 +52,10 @@ extern unsigned char slow_prog_start[];
 extern unsigned char slow_prog_end[];
 extern unsigned char crash_prog_start[];
 extern unsigned char crash_prog_end[];
+extern unsigned char gdemo_prog_start[];
+extern unsigned char gdemo_prog_end[];
+extern unsigned char gjob_prog_start[];
+extern unsigned char gjob_prog_end[];
 #ifdef IKESU_EMBED
 /* Ikesu 合流テストの素材 (build.sh が写してきたときだけ) */
 extern unsigned char ikesu_prog_start[];
@@ -481,6 +485,10 @@ void fs_init(void)
            (uint64_t)(slow_prog_end - slow_prog_start));
     fs_add("crash.elf", crash_prog_start,
            (uint64_t)(crash_prog_end - crash_prog_start));
+    fs_add("gdemo.elf", gdemo_prog_start,
+           (uint64_t)(gdemo_prog_end - gdemo_prog_start));
+    fs_add("gjob.elf", gjob_prog_start,
+           (uint64_t)(gjob_prog_end - gjob_prog_start));
 #ifdef IKESU_EMBED
     fs_add("ikesu.elf", ikesu_prog_start,
            (uint64_t)(ikesu_prog_end - ikesu_prog_start));

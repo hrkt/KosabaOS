@@ -25,6 +25,7 @@
 #include "elf.h"
 #include "fs.h"
 #include "fat.h"
+#include "gfx.h"
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -247,6 +248,11 @@ void trap_init(void)
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
+#define SYS_GFX_INFO 43
+#define SYS_GFX_CLEAR 44
+#define SYS_GFX_RECT 45
+#define SYS_GFX_TEXT 46
+#define SYS_GFX_LINE 47
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -1870,6 +1876,63 @@ static int do_syscall(uint64_t *frame)
         frame[FRAME_A0] = 0;
         break;
     }
+    case SYS_GFX_INFO: {
+        /* a0 = バッファ (16 バイト)。画面と自分の窓の情報を
+         * u32 x4 で書く (doc/gfx-design.md) */
+        uint32_t out[4];
+        gfx_info(cur_runner, out);
+        if (copy_to_user(frame[FRAME_A0],
+                         (const unsigned char *)out, 16) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            frame[FRAME_A0] = 0;
+        }
+        break;
+    }
+    case SYS_GFX_CLEAR:
+        /* a0 = 色 (RGB565)。自分の窓の内容領域を消す */
+        gfx_clear(cur_runner, (uint32_t)frame[FRAME_A0]);
+        frame[FRAME_A0] = 0;
+        break;
+    case SYS_GFX_RECT:
+        /* a0 = x | (y<<16)、a1 = w | (h<<16)、a2 = 色。
+         * 座標は窓の中の相対座標 (クリップは gfx 側) */
+        gfx_rect(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 (int)(frame[FRAME_A1] & 0xFFFF),
+                 (int)(frame[FRAME_A1] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
+    case SYS_GFX_TEXT: {
+        /* a0 = x | (y<<16)、a1 = 文字列、a2 = 色 |
+         * (scale<<16)。文字列はカーネルに写してから描く
+         * (最大 48 文字。写せなければ -1) */
+        char buf[49];
+        if (copy_user_string(frame[FRAME_A1], buf, sizeof(buf)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        gfx_text(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 buf,
+                 (int)(frame[FRAME_A2] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
+    }
+    case SYS_GFX_LINE:
+        /* a0 = x0 | (y0<<16)、a1 = x1 | (y1<<16)、a2 = 色 */
+        gfx_line(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 (int)(frame[FRAME_A1] & 0xFFFF),
+                 (int)(frame[FRAME_A1] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
     default:
         kputs("trap: unknown syscall ");
         put_dec(num);
