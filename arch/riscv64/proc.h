@@ -27,6 +27,14 @@ extern int preempt_enabled;
 void schedule(void);
 void yield(void);
 
+/* 段1: sleep (寝て起きる口、doc/scheduler-plan.md)。
+ * ユーザー向けの syscall は足さない (それは段3) */
+void task_sleep_ms(uint64_t ms);  /* 現在タスクを指定ミリ秒寝かせる */
+int sched_wake_due(void);         /* 起床時刻が来たタスクを READY に戻す */
+/* 待ちのポーリングからスケジューラを 1 回回す。割り込み状態に
+ * 触らないので、トラップ文脈からも呼べる */
+void sched_poll(void);
+
 /* トラップをまたぐスケジューリングでは、CSR の sepc / sstatus は
  * CPU に 1 組しかないので、タスクごとに退避・復元が要る */
 void sched_save_trapstate(uint64_t sepc, uint64_t sstatus);

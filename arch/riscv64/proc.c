@@ -22,17 +22,28 @@
  * なおこの段階のタスクはカーネル内 (S モード) の流れで、
  * ページテーブルは全タスクで共有する。タスクごとの
  * ページテーブルはこの先の広がり (roadmap 参照)。
+ *
+ * スケジューラ段1 (sleep、doc/scheduler-plan.md):
+ *   タスクが「◯ミリ秒寝る」と言える口 (task_sleep_ms) を足した。
+ *   寝ている間は TASK_SLEEPING で、起床時刻 (wake_at、time CSR
+ *   の生カウントで持つ) が来たら schedule() の入口の起床判定
+ *   (sched_wake_due) が READY に戻す。起こす側は trap.c の
+ *   タイマ割り込みと、入力待ちのポーリングからの schedule()
+ *   呼び出し。段2 で sched_start() が時計タスクを常駐させて
+ *   からは、スケジューラはずっと生きたままになる。
  */
 
 #include <stdint.h>
 #include "proc.h"
 #include "uart.h"
+#include "board.h"  /* BOARD_TIMER_HZ (sleep の時刻換算) */
 
 
-#define NTASK 3          /* 0 = main (kmain)、1 = A、2 = B */
+#define NTASK 4          /* 0 = main (kmain)、1 = A、2 = B、3 = 時計 */
 #define TASK_FREE 0
 #define TASK_READY 1
 #define TASK_DONE 2
+#define TASK_SLEEPING 3  /* 起床時刻まで寝ている (段1) */
 
 struct task {
     struct context ctx;      /* 文脈 (switch.S で読み書きする) */
@@ -41,6 +52,8 @@ struct task {
     char letter;             /* デモで出す文字 */
     uint64_t trap_sepc;      /* トラップをまたぐ切り替え用 */
     uint64_t trap_sstatus;
+    uint64_t wake_at;        /* SLEEPING の起床時刻 (time CSR) */
+    uint64_t wakes;          /* sleep から起きた回数 (段1) */
     char cwd[PROC_CWD_MAX];  /* 正規化済み絶対パス (段4) */
 };
 
@@ -49,17 +62,49 @@ static int current = 0;      /* 実行中のタスク番号 */
 int sched_active = 0;        /* スケジューラ稼働中か (trap.c が見る) */
 int preempt_enabled = 0;     /* タイマで強制的に切り替えるか */
 
-static uint64_t stacks[2][4096] __attribute__((aligned(16)));
+static uint64_t stacks[3][4096] __attribute__((aligned(16)));
 
 extern void switch_context(struct context *old, struct context *new);
 
 /* --- スケジューラ ------------------------------------------------ */
+
+/* 生の時刻 (time CSR)。ボードによらず常に進み続けるので、
+ * sleep の物差しは trap.c の tick (割り込みが滞ると止まる)
+ * ではなくこちらで測る。K210 では M シムが rdtime を
+ * エミュレーションする (mshim.c) */
+static uint64_t r_time(void)
+{
+    uint64_t x;
+    asm volatile("csrr %0, time" : "=r"(x));
+    return x;
+}
+
+/* 起床判定: 寝ていて起床時刻が来たタスクを READY に戻す。
+ * 戻り値は起こした数。schedule() の入口と、trap.c のタイマ
+ * 割り込み (起床駆動の切り替えの判断) から呼ばれる */
+int sched_wake_due(void)
+{
+    uint64_t now = r_time();
+    int woke = 0;
+    int i;
+
+    for (i = 0; i < NTASK; i++) {
+        if (tasks[i].state == TASK_SLEEPING &&
+            tasks[i].wake_at <= now) {
+            tasks[i].state = TASK_READY;
+            woke++;
+        }
+    }
+    return woke;
+}
 
 /* 次に動かすタスクを選んで切り替える (ラウンドロビン) */
 void schedule(void)
 {
     int next = current;
     int i;
+
+    sched_wake_due();  /* 寝ているタスクの起床を先に反映する */
 
     for (i = 0; i < NTASK; i++) {
         next = (next + 1) % NTASK;
@@ -91,6 +136,34 @@ void yield(void)
         schedule();
         enable_interrupts();
     }
+}
+
+/* 待ちのポーリングからスケジューラを 1 回回す。yield() と違い
+ * 割り込み状態には触らないので、トラップ文脈 (SYS_GETC の中
+ * など、割り込みを入れてはいけない場所) からも呼べる */
+void sched_poll(void)
+{
+    if (sched_active) {
+        schedule();
+    }
+}
+
+/* 現在のタスクを ms ミリ秒寝かせる (段1 の sleep)。
+ * 寝ている間は TASK_SLEEPING で、他の READY なタスクが進む。
+ * 誰も動けないときは、起床時刻が来るまで schedule() を回し
+ * 続ける (この OS の待ちはポーリングが流儀なので、wfi で
+ * CPU を止めることはしない)。起きたら wakes を 1 つ増やす */
+void task_sleep_ms(uint64_t ms)
+{
+    uint64_t wake = r_time() + ms * (BOARD_TIMER_HZ / 1000);
+
+    tasks[current].wake_at = wake;
+    tasks[current].state = TASK_SLEEPING;
+    while (r_time() < wake) {
+        schedule();
+    }
+    tasks[current].state = TASK_READY;
+    tasks[current].wakes++;
 }
 
 /* --- トラップをまたぐ状態 (trap.c から) --------------------------- */
@@ -155,7 +228,9 @@ static void task_create(int idx, void (*fn)(void), char letter)
     tasks[idx].ctx.sp = top;
 }
 
-/* 全タスクが DONE になるまで、自分も yield し続けて待つ */
+/* 全タスクが DONE になるまで、自分も yield し続けて待つ。
+ * 段1 の時点ではスケジューラの生死はここの出し入れが担う
+ * (段2 で sched_start() が常駐化してからは、そちらが担う) */
 static void run_until_done(void)
 {
     tasks[0].state = TASK_READY;
@@ -168,13 +243,6 @@ static void run_until_done(void)
 }
 
 /* --- デモのタスク本体 ---------------------------------------------- */
-
-static uint64_t r_time(void)
-{
-    uint64_t x;
-    asm volatile("csrr %0, time" : "=r"(x));
-    return x;
-}
 
 /* QEMU virt のタイマは 10MHz: 1ms = 10000 カウント */
 static void delay_ms(int ms)
@@ -227,7 +295,7 @@ void proc_demo(void)
  * 戻り値は書いたバイト数 */
 int proc_list(char *buf, unsigned long max)
 {
-    static const char *names[] = { "free", "ready", "done" };
+    static const char *names[] = { "free", "ready", "done", "sleeping" };
     unsigned long n = 0;
     int i;
 
@@ -248,6 +316,24 @@ int proc_list(char *buf, unsigned long max)
         }
         while (*st != '\0' && n < max) {
             buf[n++] = *st++;
+        }
+        /* sleep から起きた回数 (段1)。寝たことのあるタスク
+         * だけに付ける (デモのタスクの行は従来どおり) */
+        if (tasks[i].wakes > 0) {
+            const char *w = " wakes=";
+            uint64_t v = tasks[i].wakes;
+            char rev[20];
+            int m = 0;
+            while (*w != '\0' && n < max) {
+                buf[n++] = *w++;
+            }
+            while (v > 0) {
+                rev[m++] = (char)('0' + (v % 10));
+                v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
         }
         if (n < max) {
             buf[n++] = '\n';

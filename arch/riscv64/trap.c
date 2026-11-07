@@ -1326,16 +1326,23 @@ void trap_handler(uint64_t *frame, int from_user)
             con_dec(ticks);
             uart_putc('\n');
         }
-        if (sched_active && preempt_enabled) {
-            /* プリエンプティブな切り替え (ステップ 5)。
+        if (sched_active) {
+            /* 切り替えの判断 (スケジューラ段1):
+             *   - プリエンプティブ有効 (デモの第 2 幕) なら毎回
+             *   - そうでなくても、寝ていて起床時刻が来たタスクが
+             *     いたら切り替える (起床駆動)。周期タスク (時計)
+             *     は、相手が計算中でも 1 秒ごとに番が回る
              * 切り替わった先のタスクの文脈でこのハンドラに
              * 戻ってくることがあるので、帰る前に「今の」タスクの
              * sepc / sstatus を CSR に戻す */
-            uint64_t e, s;
-            schedule();
-            sched_restore_trapstate(&e, &s);
-            w_sepc(e);
-            w_sstatus(s);
+            int due = sched_wake_due();
+            if (preempt_enabled || due) {
+                uint64_t e, s;
+                schedule();
+                sched_restore_trapstate(&e, &s);
+                w_sepc(e);
+                w_sstatus(s);
+            }
         }
         return;
     }
