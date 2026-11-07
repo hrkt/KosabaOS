@@ -387,6 +387,25 @@ def main():
     ok = command("fg", "fg: program faulted", 20000) and ok
     report("K17 job control (bg / jobs / fg / fault isolation)", ok)
 
+    print("== scenario K19: SD rmdir ==")
+    # /sd の rmdir 対応の実機確認 (doc/sd-write-design.md 追補)。
+    # K18 は gfx-windows ブランチが使用済みのため K19 から。
+    # K15 と同じく、触るのはテスト用ディレクトリの作成と
+    # 削除だけ (既存ファイルは変更しない)。中にファイルが
+    # ある間は rmdir が断られ、消せば通ること。前後で
+    # BOOT.PY が無傷に読めることも見る
+    ok = command("mkdir /sd/K19DIR", "created /sd/K19DIR")
+    ok = command("write /sd/K19DIR/F.TXT k19",
+                 "wrote /sd/K19DIR/F\\.TXT") and ok
+    ok = command("rmdir /sd/K19DIR", "rmdir: cannot remove") and ok
+    ok = command("rm /sd/K19DIR/F.TXT",
+                 "removed /sd/K19DIR/F\\.TXT") and ok
+    ok = command("rmdir /sd/K19DIR", "removed /sd/K19DIR") and ok
+    ok = command("cat /sd/K19DIR/F.TXT", "cat: no such file") and ok
+    ok = command("cat /sd/BOOT.PY", "fpioa_manager") and ok
+    report("K19 SD rmdir (mkdir / non-empty refused / unlink / "
+           "rmdir, existing files intact)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

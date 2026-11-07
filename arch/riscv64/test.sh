@@ -458,6 +458,31 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "[kernel] back from user program"
 report "V SD write (create/write/read-back/subdir/unlink)" $?
 
+echo "== scenario AA: SD rmdir =="
+# /sd の rmdir 対応 (doc/sd-write-design.md 追補)。シナリオ名は
+# A〜X が埋まり、Y・Z は gfx-windows ブランチが使っているため
+# AA から続ける。Nish の mkdir で /sd にディレクトリを作り、
+# 中にファイルがある間は rmdir が断られること、ファイルを
+# 消せば rmdir が通り、その後は中身に届かないことを見る。
+# イメージの整合そのものはホスト側 (ハーネス +
+# check_sd_image.py) が担い、ここは配線の確認
+{ sleep 3; printf 'mkdir /sd/RDTEST\n'; sleep 2; \
+  printf 'write /sd/RDTEST/F.TXT in-dir\n'; sleep 2; \
+  printf 'rmdir /sd/RDTEST\n'; sleep 2; \
+  printf 'rm /sd/RDTEST/F.TXT\n'; sleep 2; \
+  printf 'rmdir /sd/RDTEST\n'; sleep 2; \
+  printf 'cat /sd/RDTEST/F.TXT\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 30 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-aa.log 2>&1 || true
+out=$(strip_ticks < test-aa.log)
+check_order "$out" "Nish, the KosabaOS shell" \
+    "created /sd/RDTEST" "wrote /sd/RDTEST/F.TXT" \
+    "rmdir: cannot remove" "removed /sd/RDTEST/F.TXT" \
+    "removed /sd/RDTEST" "cat: no such file" \
+    "[kernel] back from user program"
+report "AA SD rmdir (mkdir / non-empty refused / unlink / rmdir)" $?
+
 echo "== scenario W: clock task (scheduler stage 1+2) =="
 # スケジューラ段1 (sleep) + 段2 (時計タスクの常駐、
 # doc/scheduler-plan.md)。Nish の入力待ち (SYS_GETC の中で
