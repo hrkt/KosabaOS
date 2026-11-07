@@ -74,4 +74,9 @@ int fat_unlink(const char *path);
  * 成功 0、失敗 -1 */
 int fat_mkdir(const char *path);
 
+/* 空のディレクトリを消す ("." と ".." 以外の項があれば
+ * 失敗)。項の無効化 → 鎖の解放 → FSInfo の順は
+ * fat_unlink と同じ。成功 0、失敗 -1 */
+int fat_rmdir(const char *path);
+
 #endif

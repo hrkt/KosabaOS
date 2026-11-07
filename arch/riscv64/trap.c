@@ -1591,12 +1591,21 @@ static int do_syscall(uint64_t *frame)
         char name[PATH_MAX];
         char abs[PATH_MAX];
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+            resolve_path(name, abs) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
         if (str_eq(abs, proc_cwd())) {
             frame[FRAME_A0] = (uint64_t)-1;  /* 自分の cwd は消せない */
+            break;
+        }
+        if (is_sd_abs(abs)) {
+            /* SD 側も消せる (fat_rmdir)。自分の cwd の点検は
+             * 上で RAM 側と共通に済ませてある。他の走者の
+             * cwd や、cwd の祖先にあたるディレクトリは
+             * RAM FS と同じく未対策 (割り切り。経緯は
+             * doc/sd-write-design.md の追補) */
+            frame[FRAME_A0] = (uint64_t)fat_rmdir(sd_rel(abs));
             break;
         }
         frame[FRAME_A0] = (uint64_t)fs_rmdir(abs + 1);

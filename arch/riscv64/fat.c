@@ -1174,6 +1174,68 @@ int fat_unlink(const char *path)
     return fsinfo_sync();
 }
 
+int fat_rmdir(const char *path)
+{
+    char dirpart[128], last[40];
+    char name83[11];
+    uint32_t dir_cluster;
+    struct dir_entry e;
+    uint64_t off;
+    unsigned char ent[32];
+    uint64_t pos;
+
+    if (fat_ensure_mounted() != 0 ||
+        split_parent(path, dirpart, sizeof(dirpart),
+                     last, sizeof(last)) != 0 ||
+        to_83(last, name83) != 0 ||
+        resolve_dir(dirpart, &dir_cluster) != 0 ||
+        find_in_dir2(dir_cluster, name83, &e, &off) != 0) {
+        return -1;
+    }
+    if (!e.is_dir) {
+        return -1;  /* ファイルは rmdir しない (unlink の担当) */
+    }
+    /* 空であること: "." と ".." 以外の生きている項が 1 つ
+     * でもあれば消せない。削除済み (0xE5) と LFN とボリューム
+     * ラベルは数えない (fat_list の読み飛ばしと同じ扱い)。
+     * 中のファイルが開かれている間はその項が存在するので、
+     * この点検が「開いているものを含むディレクトリは消せ
+     * ない」を兼ねる (ディレクトリ自体を開く fd は現行ない) */
+    pos = 0;
+    for (;;) {
+        unsigned char chk[32];
+        if (chain_read(e.first_cluster, pos, chk, 32,
+                       0xFFFFFFFFFFFFFFFFULL) < 32) {
+            break;  /* 鎖の終わりまで見た */
+        }
+        pos += 32;
+        if (chk[0] == 0x00) {
+            break;  /* ここから先は未使用 */
+        }
+        if (chk[0] == 0xE5 || chk[11] == 0x0F || (chk[11] & 0x08)) {
+            continue;
+        }
+        if (chk[0] == '.') {
+            continue;  /* "." と ".." */
+        }
+        return -1;  /* 中身がある */
+    }
+    /* 順序は fat_unlink と同じ: 項を先に消してから鎖を返し、
+     * 最後に FAT の書き戻しと FSInfo の更新 */
+    if (entry_read(dir_cluster, off, ent) != 0) {
+        return -1;
+    }
+    ent[0] = 0xE5;
+    if (entry_write(dir_cluster, off, ent) != 0) {
+        return -1;
+    }
+    free_chain(e.first_cluster);
+    if (fat_cache_flush() != 0) {
+        return -1;
+    }
+    return fsinfo_sync();
+}
+
 int fat_mkdir(const char *path)
 {
     char name83[11];

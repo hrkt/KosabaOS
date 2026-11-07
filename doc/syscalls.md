@@ -97,10 +97,10 @@ audio_close = 40〜42、Ikesu 段2の確定仕様) を追加
   直接起動されたプログラムはルートから始まる
 - RAM FS は木の幹で、SD カード (FAT32) は `/sd` に固定
   マウントされる (doc/sd-design.md)。`/sd` の配下でも
-  create / write / unlink / mkdir が RAM FS と同じ意味づけで
-  使える (書き込み対応、doc/sd-write-design.md)。rmdir は
-  SD では未対応で -1。名前は 8.3 形式のみ。chdir は /sd の
-  中へも入れる。SD からの exec は v1 の対象外 (-1)
+  create / write / unlink / mkdir / rmdir が RAM FS と同じ
+  意味づけで使える (書き込み対応、doc/sd-write-design.md)。
+  名前は 8.3 形式のみ。chdir は /sd の中へも入れる。
+  SD からの exec は v1 の対象外 (-1)
 - カードやドライバが無い環境でも、/sd への操作は -1 に
   なるだけで、他のパスへの影響はない
 
