@@ -91,7 +91,7 @@ static uint64_t make_leaf_pte(uint64_t pa, uint64_t flags);
 #define USER_DATA_FLAGS  (PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D)
 /* スタックの旗はデータと同じ (読み書き可・実行不可) */
 
-static struct user_pages levels[EXEC_MAX_DEPTH + 1];
+static struct user_pages levels[VM_LEVELS];  /* exec の段 + ジョブの段 */
 static int cur_level = 0;  /* ページ表に今出ている段 */
 
 /* ユーザー領域の 4KB ページ 1 枚分の PTE を書く (pa = 0 なら

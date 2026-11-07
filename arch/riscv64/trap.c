@@ -239,6 +239,9 @@ void trap_init(void)
 #define SYS_RMDIR 14
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
+#define SYS_JOB_RUN 20
+#define SYS_JOB_LIST 21
+#define SYS_JOB_WAIT 22
 #define SYS_KLOG_READ 30
 #define SYS_UPTIME 31
 #define SYS_AUDIO_OPEN 40
@@ -337,7 +340,7 @@ struct fd_entry {
     int is_sd;     /* 1 = /sd の向こう (FAT) のファイル */
 };
 
-static struct fd_entry fd_tables[EXEC_MAX_DEPTH + 1][MAX_FD];
+static struct fd_entry fd_tables[VM_LEVELS][MAX_FD];  /* exec の段 + ジョブの段 */
 static struct fd_entry *fd_table;  /* trap_init で fd_tables[0] を指す */
 
 static void fd_table_init(void)
@@ -670,6 +673,470 @@ static int do_exec(uint64_t *frame)
     return 1;
 }
 
+/* --- ジョブ (スケジューラ段3、doc/jobs-design.md) -------------------
+ * exec の「親が凍結する」モデルを広げ、ユーザープログラムを
+ * バックグラウンドのジョブとして常駐・並行実行させる仕組み。
+ *
+ * 「走者 (runner)」が単位: 前面の走者 1 つ (根のプログラムと
+ * exec の段の流れ。番号 0) と、ジョブの走者 最大 JOB_MAX 本
+ * (番号 1〜JOB_MAX = ジョブ番号)。同時に CPU を使うのは
+ * 1 つだけで、切り替えはトラップの区切りでだけ起きる:
+ *   - タイマ割り込み (ユーザーモードから): ラウンドロビン
+ *   - getc: 持ち主の待ちでジョブへ / bg ジョブは停止
+ *   - ジョブの exit / フォルト: 次の走者へ (待つ前面がいれば
+ *     ステータスを渡して起こす)
+ *   - job_wait: 前面が待ちに入り、対象に番が回る
+ * 各ジョブはページ台帳・fd テーブル・cwd を専用に持ち、
+ * 切り替えでは相手のものを差し替える (resume_parent の
+ * 一般化)。前面の走者にも、ジョブへ番を渡している間の
+ * 文脈の退避場所 (fg_save) を 1 組持つ。
+ * exec_depth は前面の走者の中だけの話で、ジョブが走って
+ * いる間は値が残っているだけで参照されない (syscall の
+ * 振り分けは cur_runner で行う)。 */
+
+#define JOB_FREE 0
+#define JOB_RUNNING 1  /* 実行可能 (走っている最中も含む) */
+#define JOB_STOPPED 2  /* 入力待ちで停止 (bg の getc) */
+#define JOB_DONE 3     /* 終わった (回収待ち、status が有効) */
+
+struct job_slot {
+    uint64_t frame[32];   /* 退避したレジスタ一式 */
+    uint64_t sepc;
+    uint64_t sp;          /* ユーザーの sp (sscratch の中身) */
+    uint64_t status;      /* JOB_DONE のときの終了ステータス */
+    int state;
+    char name[32];        /* jobs 表示用 (起動時に渡された名前) */
+    char cwd[PATH_MAX];
+};
+
+static struct job_slot jobs[JOB_MAX];
+
+/* 前面の走者の退避場所。valid は「退避中」を表し、その間は
+ * ジョブのどれかが走っている。blocked は job_wait で
+ * 待っている状態で、wait_job のジョブが終わるまで前面は
+ * 実行可能にならない */
+static struct {
+    uint64_t frame[32];
+    uint64_t sepc;
+    uint64_t sp;
+    char cwd[PATH_MAX];
+    int valid;
+    int blocked;
+    int wait_job;  /* 待ち対象のジョブ番号 (0 = なし) */
+} fg_save;
+
+static int cur_runner = 0;     /* 今走っている走者 (0 = 前面) */
+static int console_owner = 0;  /* コンソールの持ち主 (0 = 前面) */
+
+/* 文字列を固定長バッファへ写す (末尾は必ず NUL) */
+static void copy_str(char *dst, const char *src, int max)
+{
+    int i = 0;
+    while (src[i] != '\0' && i < max - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+/* 今の走者の文脈 (レジスタ・sepc・ユーザー sp・cwd) を
+ * その走者の退避場所へ保存する。sepc は呼び出し側が決める
+ * (通常の切り替えは今の値、syscall の再実行をしたい場所
+ * では ecall の位置 = 今の値のまま) */
+static void save_runner(uint64_t *frame, uint64_t sepc)
+{
+    int i;
+    if (cur_runner == 0) {
+        for (i = 0; i < 32; i++) {
+            fg_save.frame[i] = frame[i];
+        }
+        fg_save.sepc = sepc;
+        fg_save.sp = r_sscratch();
+        copy_str(fg_save.cwd, proc_cwd(), PATH_MAX);
+        fg_save.valid = 1;
+    } else {
+        struct job_slot *j = &jobs[cur_runner - 1];
+        for (i = 0; i < 32; i++) {
+            j->frame[i] = frame[i];
+        }
+        j->sepc = sepc;
+        j->sp = r_sscratch();
+        copy_str(j->cwd, proc_cwd(), PATH_MAX);
+    }
+}
+
+/* 走者 runner の退避済み文脈を今のトラップの frame へ戻し、
+ * ページ台帳・fd テーブル・cwd をその走者のものに切り替える。
+ * この後のトラップ復帰 (sret) で、その走者の続きが走る */
+static void restore_runner(uint64_t *frame, int runner)
+{
+    int i;
+    if (runner == 0) {
+        for (i = 0; i < 32; i++) {
+            frame[i] = fg_save.frame[i];
+        }
+        w_sepc(fg_save.sepc);
+        w_sscratch(fg_save.sp);
+        proc_set_cwd(fg_save.cwd);
+        fg_save.valid = 0;
+        fd_table = fd_tables[exec_depth];  /* 前面の今の段の表 */
+        vm_apply_pages(exec_depth);
+    } else {
+        struct job_slot *j = &jobs[runner - 1];
+        int level = JOB_LEVEL_BASE + (runner - 1);
+        for (i = 0; i < 32; i++) {
+            frame[i] = j->frame[i];
+        }
+        w_sepc(j->sepc);
+        w_sscratch(j->sp);
+        proc_set_cwd(j->cwd);
+        fd_table = fd_tables[level];
+        vm_apply_pages(level);
+    }
+    cur_runner = runner;
+}
+
+/* 走者が「実行可能」か。前面は job_wait で待っている間だけ
+ * 実行可能でない。ジョブは RUNNING のときだけ */
+static int runner_runnable(int r)
+{
+    if (r == 0) {
+        return !fg_save.blocked;
+    }
+    return jobs[r - 1].state == JOB_RUNNING;
+}
+
+/* ラウンドロビン: 今の走者の次から順に実行可能な走者を探す。
+ * 誰もいなければ今の走者を返す */
+static int pick_next_runner(void)
+{
+    int k, r;
+    for (k = 1; k <= JOB_MAX; k++) {
+        r = (cur_runner + k) % (JOB_MAX + 1);
+        if (runner_runnable(r)) {
+            return r;
+        }
+    }
+    return cur_runner;
+}
+
+/* 生きているジョブ (FREE でないスロット) があるか */
+static int jobs_any_active(void)
+{
+    int i;
+    for (i = 0; i < JOB_MAX; i++) {
+        if (jobs[i].state != JOB_FREE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* タイマ割り込みからのラウンドロビン (trap_handler が
+ * ユーザーモードからの割り込みで呼ぶ)。ジョブが 1 つも
+ * 無ければ従来の挙動と完全に同じ (何もしない) */
+static void job_round_robin(uint64_t *frame)
+{
+    int next;
+    if (!jobs_any_active()) {
+        return;
+    }
+    next = pick_next_runner();
+    if (next != cur_runner) {
+        save_runner(frame, r_sepc());
+        restore_runner(frame, next);
+    }
+}
+
+/* 符号つき 10 進をログへ (終了ステータスは -2 もありうる) */
+static void kput_sdec(uint64_t v)
+{
+    int64_t sv = (int64_t)v;
+    if (sv < 0) {
+        kputc('-');
+        kput_dec((uint64_t)(-sv));
+    } else {
+        kput_dec(v);
+    }
+}
+
+/* 今走っているジョブを終わらせる (exit / フォルト共通)。
+ * ページを返し、fd を締めて、ログに 1 行残す。job_wait で
+ * 待っている前面がいれば、ステータスを渡して前面を起こし、
+ * スロットは回収済み (FREE) にする。いなければ done として
+ * 残し、次の実行可能な走者へ移る。どちらの場合も、戻る
+ * ときには frame に次の走者の文脈が入っている */
+static void job_finish(uint64_t *frame, uint64_t status)
+{
+    int jobno = cur_runner;
+    struct job_slot *j = &jobs[jobno - 1];
+    int level = JOB_LEVEL_BASE + (jobno - 1);
+
+    clear_fds(fd_tables[level]);  /* SD 書き込みの締めも含む */
+    vm_pages_release(level);
+    kputs("job: done ");
+    kputs(j->name);
+    kputs(" status=");
+    kput_sdec(status);
+    kputc('\n');
+
+    if (fg_save.blocked && fg_save.wait_job == jobno) {
+        j->state = JOB_FREE;
+        fg_save.frame[FRAME_A0] = status;
+        fg_save.sepc += 4;  /* job_wait の ecall を抜ける */
+        fg_save.blocked = 0;
+        fg_save.wait_job = 0;
+        console_owner = 0;
+        restore_runner(frame, 0);
+        return;
+    }
+    j->state = JOB_DONE;
+    j->status = status;
+    {
+        int next = pick_next_runner();
+        if (next == jobno) {
+            /* 起こせる相手が本当にいない場合の保険
+             * (通常は待つ前面か対象ジョブが必ず実行可能) */
+            next = 0;
+        }
+        restore_runner(frame, next);
+    }
+}
+
+/* 全ジョブを終わらせる (根のプログラムの終了 / フォルト時)。
+ * ジョブはシェルのセッションと運命を共にする */
+static void jobs_kill_all(void)
+{
+    int i;
+    for (i = 0; i < JOB_MAX; i++) {
+        if (jobs[i].state != JOB_FREE) {
+            int level = JOB_LEVEL_BASE + i;
+            clear_fds(fd_tables[level]);
+            vm_pages_release(level);
+            jobs[i].state = JOB_FREE;
+        }
+    }
+    fg_save.valid = 0;
+    fg_save.blocked = 0;
+    fg_save.wait_job = 0;
+    console_owner = 0;
+    cur_runner = 0;
+}
+
+/* job_run (20): プログラムをジョブとして起動する。
+ * do_exec と同じ約束 (名前 + 引数文字列) で、違うのは
+ * 親を凍らせるのではなく、文脈を用意して RUNNING に
+ * するだけなこと。実際の開始は次の切り替えのタイミング */
+static void do_job_run(uint64_t *frame)
+{
+    char name[PATH_MAX];
+    char abs[PATH_MAX];
+    char argsbuf[EXEC_ARGS_MAX];
+    const char *tokens[EXEC_ARGC_MAX];
+    int argc = 0;
+    struct fs_file *f;
+    int i, slot = -1;
+
+    if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
+        resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return;
+    }
+    argsbuf[0] = '\0';
+    if (frame[FRAME_A1] != 0 &&
+        copy_user_string(frame[FRAME_A1], argsbuf, sizeof(argsbuf)) != 0) {
+        argsbuf[0] = '\0';
+    }
+    {
+        char *p = argsbuf;
+        while (*p != '\0' && argc < EXEC_ARGC_MAX) {
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            tokens[argc++] = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t') {
+                p++;
+            }
+            if (*p != '\0') {
+                *p = '\0';
+                p++;
+            }
+        }
+    }
+    if (argc == 0) {
+        tokens[0] = name;
+        argc = 1;
+    }
+    f = fs_find(abs + 1);
+    if (f == 0 || f->is_dir) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return;
+    }
+    for (i = 0; i < JOB_MAX; i++) {
+        if (jobs[i].state == JOB_FREE) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        kputs("job: table full: ");
+        kputs(name);
+        kputc('\n');
+        frame[FRAME_A0] = (uint64_t)-1;
+        return;
+    }
+    {
+        int level = JOB_LEVEL_BASE + slot;
+        struct user_pages *up = vm_pages(level);
+        struct job_slot *j = &jobs[slot];
+        uint64_t entry, argv_va, sp;
+
+        vm_pages_release(level);  /* 前の残りがあれば返す */
+        entry = elf_load_to(f, up);
+        if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
+            kputs("job: cannot load: ");
+            kputs(name);
+            kputc('\n');
+            vm_pages_release(level);
+            frame[FRAME_A0] = (uint64_t)-1;
+            return;
+        }
+        sp = user_stack_setup_argv(up, argc, tokens, &argv_va);
+        if (sp == 0) {
+            vm_pages_release(level);
+            frame[FRAME_A0] = (uint64_t)-1;
+            return;
+        }
+        clear_fds(fd_tables[level]);  /* ジョブは空の表で始める */
+        for (i = 0; i < 32; i++) {
+            j->frame[i] = 0;
+        }
+        j->frame[FRAME_A0] = (uint64_t)argc;
+        j->frame[FRAME_A1] = argv_va;
+        j->sepc = entry;
+        j->sp = sp;
+        j->status = 0;
+        copy_str(j->name, name, sizeof(j->name));
+        copy_str(j->cwd, proc_cwd(), PATH_MAX);  /* cwd は引き継ぐ */
+        j->state = JOB_RUNNING;
+        frame[FRAME_A0] = (uint64_t)(slot + 1);
+    }
+}
+
+/* job_list (21) の 1 行を作る部品 (proc_list と同じ流儀) */
+static int job_line(char *buf, int max, int n, int idx)
+{
+    const struct job_slot *j = &jobs[idx];
+    const char *s;
+    int i;
+
+    s = "job ";
+    while (*s != '\0' && n < max) {
+        buf[n++] = *s++;
+    }
+    if (n < max) {
+        buf[n++] = (char)('1' + idx);
+    }
+    s = ": ";
+    while (*s != '\0' && n < max) {
+        buf[n++] = *s++;
+    }
+    for (i = 0; j->name[i] != '\0' && n < max; i++) {
+        buf[n++] = j->name[i];
+    }
+    if (n < max) {
+        buf[n++] = ' ';
+    }
+    s = j->state == JOB_RUNNING ? "running"
+        : j->state == JOB_STOPPED ? "stopped"
+                                  : "done status=";
+    while (*s != '\0' && n < max) {
+        buf[n++] = *s++;
+    }
+    if (j->state == JOB_DONE) {
+        int64_t sv = (int64_t)j->status;
+        uint64_t uv;
+        char rev[20];
+        int m = 0;
+        if (sv < 0 && n < max) {
+            buf[n++] = '-';
+            uv = (uint64_t)(-sv);
+        } else {
+            uv = (uint64_t)sv;
+        }
+        if (uv == 0) {
+            rev[m++] = '0';
+        }
+        while (uv > 0) {
+            rev[m++] = (char)('0' + (uv % 10));
+            uv /= 10;
+        }
+        while (m > 0 && n < max) {
+            buf[n++] = rev[--m];
+        }
+    }
+    if (n < max) {
+        buf[n++] = '\n';
+    }
+    return n;
+}
+
+static void do_job_list(uint64_t *frame)
+{
+    char kbuf[256];
+    int n = 0;
+    int i;
+    for (i = 0; i < JOB_MAX; i++) {
+        if (jobs[i].state != JOB_FREE) {
+            n = job_line(kbuf, (int)sizeof(kbuf), n, i);
+        }
+    }
+    if (copy_to_user(frame[FRAME_A0],
+                     (const unsigned char *)kbuf, (uint64_t)n) != 0) {
+        frame[FRAME_A0] = (uint64_t)-1;
+    } else {
+        frame[FRAME_A0] = (uint64_t)n;
+    }
+}
+
+/* job_wait (22): 対象が終わっていれば即座にステータスを
+ * 返して回収する。実行中なら、そのジョブをコンソールの
+ * 持ち主にして、前面は待ちに入る (戻り値 1 = frame に
+ * 対象ジョブの文脈を入れて切り替え済み)。完了は
+ * job_finish が待ち前面の保存済み frame へ書き込む */
+static int do_job_wait(uint64_t *frame)
+{
+    uint64_t num = frame[FRAME_A0];
+    struct job_slot *j;
+
+    if (num < 1 || num > JOB_MAX) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+    j = &jobs[num - 1];
+    if (j->state == JOB_FREE) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return 0;
+    }
+    if (j->state == JOB_DONE) {
+        frame[FRAME_A0] = j->status;
+        j->state = JOB_FREE;  /* 回収 */
+        return 0;
+    }
+    console_owner = (int)num;
+    if (j->state == JOB_STOPPED) {
+        j->state = JOB_RUNNING;  /* 持ち主になるので再開 */
+    }
+    save_runner(frame, r_sepc());  /* ecall の位置で退避 */
+    fg_save.blocked = 1;
+    fg_save.wait_job = (int)num;
+    restore_runner(frame, (int)num);
+    return 1;
+}
+
 /* --- オーディオ (デバイス、40〜42) ----------------------------------
  * 仕様は doc/syscalls.md (Ikesu 段2の確定仕様。Ikesu 側の
  * doc/audio-syscall.md が原案)。カーネルは「サンプルの流れを
@@ -716,21 +1183,68 @@ static int do_syscall(uint64_t *frame)
         frame[FRAME_A0] = 0;
         break;
     case SYS_GETC: {
-        /* 1 文字届くまで待つ。待ちの間もスケジューラを回し、
-         * 寝ているタスク (時計) が起きられるようにする
-         * (スケジューラ段2)。ここはトラップ文脈で割り込みが
-         * 入らない間なので、タイマ割り込みはこの待ちを
-         * 助けてくれない。代わりにポーリングの合間に
-         * sched_poll() で番を回す (割り込み状態に触る
-         * yield() はここでは使えない) */
-        int c;
-        while ((c = uart_try_getc()) < 0) {
+        /* コンソール仲裁 (doc/jobs-design.md): 文字は持ち主
+         * にだけ配る。ジョブが無ければ従来とまったく同じ
+         * 待ちになる (ポーリングの流儀はそのまま) */
+        if (cur_runner != console_owner) {
+            /* bg ジョブの getc: 入力待ちで停止する。文脈は
+             * ecall の位置で保存するので、持ち主になって
+             * 再開されたときに getc がやり直される */
+            int next;
+            save_runner(frame, r_sepc());
+            jobs[cur_runner - 1].state = JOB_STOPPED;
+            if (runner_runnable(console_owner)) {
+                next = console_owner;
+            } else {
+                next = pick_next_runner();
+            }
+            restore_runner(frame, next);
+            return 1;
+        }
+        for (;;) {
+            int c = uart_try_getc();
+            if (c >= 0) {
+                frame[FRAME_A0] = (uint64_t)(unsigned char)c;
+                break;
+            }
+            /* 文字が無い間は、実行可能なジョブに番を回す。
+             * 自分の文脈は ecall の位置で保存しておき、
+             * 戻ってきたら getc を再実行する */
+            {
+                int k, n, target = 0;
+                for (k = 0; k < JOB_MAX; k++) {
+                    n = (cur_runner + k) % JOB_MAX + 1;
+                    if (n != cur_runner &&
+                        jobs[n - 1].state == JOB_RUNNING) {
+                        target = n;
+                        break;
+                    }
+                }
+                if (target != 0) {
+                    save_runner(frame, r_sepc());
+                    restore_runner(frame, target);
+                    return 1;
+                }
+            }
+            /* ジョブが無い / 誰も走れない: 待ちの間も
+             * スケジューラを回し、寝ているタスク (時計) が
+             * 起きられるようにする (スケジューラ段2)。ここは
+             * トラップ文脈で割り込みが入らない間なので、
+             * タイマ割り込みはこの待ちを助けてくれない。
+             * 代わりにポーリングの合間に sched_poll() で
+             * 番を回す (割り込み状態に触る yield() は
+             * ここでは使えない) */
             sched_poll();
         }
-        frame[FRAME_A0] = (uint64_t)(unsigned char)c;
         break;
     }
     case SYS_EXIT:
+        if (cur_runner != 0) {
+            /* ジョブの終了: そのジョブだけを終わらせ、
+             * 次の走者へ移る (job_finish が frame を差し替える) */
+            job_finish(frame, frame[FRAME_A0]);
+            return 1;
+        }
         if (exec_depth > 0) {
             /* a0 = 終了ステータス。そのまま親の exec の戻り値に
              * なる (0 が正常。-1 / -2 は exec 自身の失敗と
@@ -740,9 +1254,11 @@ static int do_syscall(uint64_t *frame)
             resume_parent(frame, status);  /* 親の exec へ戻る */
             return 1;
         }
-        /* 根のプログラムの終了: 閉じ忘れた SD 書き込みが
+        /* 根のプログラムの終了: ジョブはセッションと運命を
+         * 共にするので全部終わらせ、閉じ忘れた SD 書き込みが
          * あれば締めてから戻る (fd 自体の後始末は従来どおり
          * テーブルに残す) */
+        jobs_kill_all();
         flush_sd_fds(fd_table);
         user_exit_jump();  /* ここからは戻ってこない */
         break;
@@ -913,6 +1429,12 @@ static int do_syscall(uint64_t *frame)
         break;
     }
     case SYS_EXEC:
+        if (cur_runner != 0) {
+            /* bg ジョブからの exec は作らない (入れ子に
+             * しない、doc/jobs-design.md の割り切り) */
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
         if (do_exec(frame)) {
             return 1;  /* sepc は do_exec が子の入口に設定済み */
         }
@@ -929,6 +1451,23 @@ static int do_syscall(uint64_t *frame)
         }
         break;
     }
+    case SYS_JOB_RUN:
+    case SYS_JOB_LIST:
+    case SYS_JOB_WAIT:
+        /* ジョブ管理は根のプログラム (段 0 で動くシェル)
+         * だけの仕事。ジョブの中や exec の子からは使えない */
+        if (cur_runner != 0 || exec_depth != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (num == SYS_JOB_RUN) {
+            do_job_run(frame);
+        } else if (num == SYS_JOB_LIST) {
+            do_job_list(frame);
+        } else if (do_job_wait(frame)) {
+            return 1;  /* 待ちに入って対象へ切り替え済み */
+        }
+        break;
     case SYS_UNLINK: {
         char name[PATH_MAX];
         char abs[PATH_MAX];
@@ -963,6 +1502,26 @@ static int do_syscall(uint64_t *frame)
                     }
                 }
             }
+            /* ジョブが開いている場合も同様に消せない (段3) */
+            for (l = 0; l < JOB_MAX && !open_found; l++) {
+                int t;
+                if (jobs[l].state == JOB_FREE) {
+                    continue;
+                }
+                t = JOB_LEVEL_BASE + l;
+                for (i = 0; i < MAX_FD; i++) {
+                    if (fd_tables[t][i].used &&
+                        fd_tables[t][i].is_sd &&
+                        fd_tables[t][i].fat.has_dir &&
+                        fd_tables[t][i].fat.dir_cluster ==
+                            target.dir_cluster &&
+                        fd_tables[t][i].fat.dir_off ==
+                            target.dir_off) {
+                        open_found = 1;
+                        break;
+                    }
+                }
+            }
             frame[FRAME_A0] = open_found
                                   ? (uint64_t)-1
                                   : (uint64_t)fat_unlink(sd_rel(abs));
@@ -983,6 +1542,21 @@ static int do_syscall(uint64_t *frame)
                 for (i = 0; i < MAX_FD; i++) {
                     if (fd_tables[l][i].used &&
                         fd_tables[l][i].file == f) {
+                        open_found = 1;
+                        break;
+                    }
+                }
+            }
+            /* ジョブが開いている場合も同様に消せない (段3) */
+            for (l = 0; l < JOB_MAX && !open_found; l++) {
+                int t;
+                if (jobs[l].state == JOB_FREE) {
+                    continue;
+                }
+                t = JOB_LEVEL_BASE + l;
+                for (i = 0; i < MAX_FD; i++) {
+                    if (fd_tables[t][i].used &&
+                        fd_tables[t][i].file == f) {
                         open_found = 1;
                         break;
                     }
@@ -1356,6 +1930,16 @@ void trap_handler(uint64_t *frame, int from_user)
                 w_sstatus(s);
             }
         }
+        /* ジョブのラウンドロビン (段3): ユーザーモードから
+         * の割り込みでだけ走者を切り替える。本当にユーザー
+         * モードから来たかは sstatus の SPP (bit8 = 前の
+         * 特権モード) で判定する。from_user は入口の都合を
+         * 伝えるだけで、カーネルタスクの割り込みがユーザー用
+         * 入口 (trap_entry_user) を踏んだ場合と区別できない
+         * ため、こちらを物差しにする */
+        if (from_user && (r_sstatus() & (1ULL << 8)) == 0) {
+            job_round_robin(frame);
+        }
         return;
     }
 
@@ -1399,10 +1983,17 @@ void trap_handler(uint64_t *frame, int from_user)
         kputs(" stval=");
         put_hex(r_stval());
         kputc('\n');
+        if ((r_sstatus() & (1ULL << 8)) == 0 && cur_runner != 0) {
+            /* ジョブのフォルト: そのジョブだけを終わらせる
+             * (障害の分離。SPP の判定はタイマ側と同じ理由) */
+            job_finish(frame, (uint64_t)-2);
+            return;
+        }
         if (exec_depth > 0) {
             resume_parent(frame, (uint64_t)-2);
             return;
         }
+        jobs_kill_all();  /* 根が落ちたらジョブも全部終わらせる */
         flush_sd_fds(fd_table);  /* 根のプログラムの書き込みも締める */
         user_exit_jump();  /* ここからは戻ってこない */
     }

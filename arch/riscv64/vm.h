@@ -10,6 +10,15 @@
  * この上限で大きさを決める */
 #define EXEC_MAX_DEPTH 16
 
+/* ジョブ (スケジューラ段3、doc/jobs-design.md) の上限と、
+ * ジョブが使うページ台帳の置き場所。台帳は exec の段
+ * (0〜EXEC_MAX_DEPTH) の後ろに JOB_MAX 段ぶん足して持ち、
+ * ジョブ番号 N (1〜JOB_MAX) の台帳が JOB_LEVEL_BASE + N - 1。
+ * fd テーブル (trap.c) も同じ並びで持つ */
+#define JOB_MAX 4
+#define JOB_LEVEL_BASE (EXEC_MAX_DEPTH + 1)
+#define VM_LEVELS (EXEC_MAX_DEPTH + 1 + JOB_MAX)
+
 /* ページングの初期化 (kernel.c から起動時に 1 回呼ぶ) */
 void vm_init(void);
 
