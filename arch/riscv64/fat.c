@@ -7,9 +7,16 @@
  * チェーン (fs.c) と同じ考え方を、ディスクの形式のまま
  * たどるのがこのドライバの仕事。
  *
- * 割り切り (設計どおり): FAT32 のみ、読み取り専用、
- * 名前は 8.3 形式のみ (LFN は読み飛ばす)、同時に相手に
- * するのは 1 ボリューム。マウントは遅延 (最初の利用時)。
+ * 割り切り (設計どおり): FAT32 のみ、名前は 8.3 形式のみ
+ * (LFN は読み飛ばす)、同時に相手にするのは 1 ボリューム。
+ * マウントは遅延 (最初の利用時)。
+ *
+ * 書き込み対応 (doc/sd-write-design.md): 段1 で blkdev の
+ * write と FAT キャッシュの書き戻し (dirty 管理) と FSInfo
+ * の読みを用意し、段2 で確保・作成・削除の本体を足した。
+ * 書き込みの順序は「データ → FAT → ディレクトリ (サイズは
+ * close 時)」で、FAT の変更はキャッシュに溜めてから
+ * 全面へ書き戻す。
  *
  * 読みは位置指定 (fat_read_at) に統一し、開いたファイルの
  * 状態は {先頭クラスタ, サイズ} だけ。キャッシュは FAT 用
@@ -30,9 +37,16 @@ static uint64_t data_start;  /* データ領域先頭の LBA (絶対) */
 static uint32_t root_cluster;
 static uint32_t sec_per_cluster;
 static uint64_t total_clusters;
+static uint32_t num_fats;         /* FAT の面数 (通常 2) */
+static uint32_t fat_sectors;      /* FAT 1 面のセクタ数 */
+static uint64_t fsinfo_lba;       /* FSInfo の LBA (絶対)。無ければ 0 */
+static uint64_t free_clusters;    /* 空きクラスタ数 (FSInfo 由来。
+                                   * 不明なら 0xFFFFFFFFFFFFFFFF) */
+static uint32_t alloc_hint;       /* 空き探索の開始クラスタ */
 
 static unsigned char fat_cache[SECTOR];
 static uint64_t fat_cache_lba = 0xFFFFFFFFFFFFFFFFULL;
+static int fat_cache_dirty;  /* キャッシュに未書き戻しの変更がある */
 static unsigned char bounce[SECTOR];
 
 /* --- 小物 ------------------------------------------------------------ */
@@ -53,25 +67,106 @@ static int read_sector(uint64_t lba, unsigned char *buf)
     return dev->read(dev, lba, buf, 1);
 }
 
+static int write_sector(uint64_t lba, const unsigned char *buf)
+{
+    if (dev->write == 0) {
+        return -1;  /* 書き込みに対応しないデバイス */
+    }
+    return dev->write(dev, lba, buf, 1);
+}
+
+/* 書きかけの FAT セクタを全ての面へ書き戻す。FAT は複数面が
+ * 同じ内容でなければならないので、キャッシュの 1 セクタは
+ * 全面に同じ形で出す。成功したら dirty を落とす */
+static int fat_cache_flush(void)
+{
+    uint64_t off;
+    uint32_t i;
+
+    if (!fat_cache_dirty) {
+        return 0;
+    }
+    off = fat_cache_lba - fat_start;  /* FAT 先頭からのセクタ数 */
+    for (i = 0; i < num_fats; i++) {
+        if (write_sector(fat_start + (uint64_t)i * fat_sectors + off,
+                         fat_cache) != 0) {
+            return -1;  /* dirty は残し、呼び出し側に失敗を返す */
+        }
+    }
+    fat_cache_dirty = 0;
+    return 0;
+}
+
+/* 公開口: 溜まった FAT の変更を全部書き戻す
+ * (doc/sd-write-design.md 段1。段2 の close 等が使う) */
+int fat_sync(void)
+{
+    return fat_cache_flush();
+}
+
+/* キャッシュに lba の FAT セクタを載せる。載せ替えの前に
+ * 書きかけがあれば書き戻す。失敗は -1 */
+static int fat_cache_ensure(uint64_t lba)
+{
+    if (lba == fat_cache_lba) {
+        return 0;
+    }
+    if (fat_cache_flush() != 0) {
+        return -1;
+    }
+    if (read_sector(lba, fat_cache) != 0) {
+        fat_cache_lba = 0xFFFFFFFFFFFFFFFFULL;
+        return -1;
+    }
+    fat_cache_lba = lba;
+    return 0;
+}
+
 /* クラスタ番号 → データ領域の先頭 LBA */
 static uint64_t cluster_lba(uint32_t cluster)
 {
     return data_start + (uint64_t)(cluster - 2) * sec_per_cluster;
 }
 
-/* FAT の鎖で「次」を引く (終わりは 0x0FFFFFF8 以上) */
-static uint32_t fat_next(uint32_t cluster)
+/* FAT の 1 項を読む (読めなければ鎖の終わりとして扱う) */
+static uint32_t fat_entry_get(uint32_t cluster)
 {
     uint64_t off = (uint64_t)cluster * 4;
     uint64_t lba = fat_start + off / SECTOR;
 
-    if (lba != fat_cache_lba) {
-        if (read_sector(lba, fat_cache) != 0) {
-            return 0x0FFFFFF8;  /* 読めなければ終わりとして扱う */
-        }
-        fat_cache_lba = lba;
+    if (fat_cache_ensure(lba) != 0) {
+        return 0x0FFFFFF8;
     }
     return rd32(fat_cache + (off % SECTOR)) & 0x0FFFFFFF;
+}
+
+/* FAT の 1 項を書く。実デバイスへの反映はキャッシュの
+ * 書き戻し (fat_cache_flush) まで遅らせる。最上位 4 ビットは
+ * 予約分として元の値を保つ */
+static int fat_entry_set(uint32_t cluster, uint32_t value)
+{
+    uint64_t off = (uint64_t)cluster * 4;
+    uint64_t lba = fat_start + off / SECTOR;
+    unsigned char *p;
+    uint32_t v;
+
+    if (fat_cache_ensure(lba) != 0) {
+        return -1;
+    }
+    p = fat_cache + (off % SECTOR);
+    v = (rd32(p) & 0xF0000000u) | (value & 0x0FFFFFFFu);
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+    p[2] = (unsigned char)((v >> 16) & 0xFF);
+    p[3] = (unsigned char)((v >> 24) & 0xFF);
+    fat_cache_dirty = 1;
+    return 0;
+}
+
+/* FAT の鎖で「次」を引く (終わりは 0x0FFFFFF8 以上) */
+static uint32_t fat_next(uint32_t cluster)
+{
+    return fat_entry_get(cluster);
 }
 
 /* 鎖をたどって pos から n バイト読む。limit はファイルの
@@ -187,9 +282,38 @@ static int fat_mount(struct blkdev *d)
         return -1;  /* FAT32 の形をしていない */
     }
     fat_start = bpb_lba + reserved;
-    data_start = fat_start + (uint64_t)bounce[16] * fatsz32;
+    num_fats = bounce[16];
+    fat_sectors = fatsz32;
+    data_start = fat_start + (uint64_t)num_fats * fatsz32;
     total_clusters =
         (total32 - (data_start - bpb_lba)) / sec_per_cluster;
+
+    /* FSInfo (空きクラスタ数と探索ヒント)。署名が正しい
+     * ときだけ信用する。壊れている・無いボリュームでは
+     * 「不明」のままにし、書き込み側も FSInfo を触らない */
+    fsinfo_lba = 0;
+    free_clusters = 0xFFFFFFFFFFFFFFFFULL;
+    alloc_hint = 2;
+    {
+        uint32_t fsinfo_sec = rd16(bounce + 48);
+        if (fsinfo_sec != 0 &&
+            read_sector(bpb_lba + fsinfo_sec, bounce) == 0 &&
+            rd32(bounce + 0) == 0x41615252u &&
+            rd32(bounce + 484) == 0x61417272u &&
+            rd32(bounce + 508) == 0xAA550000u) {
+            uint32_t free_n = rd32(bounce + 488);
+            uint32_t next_free = rd32(bounce + 492);
+            fsinfo_lba = bpb_lba + fsinfo_sec;
+            if (free_n != 0xFFFFFFFFu &&
+                (uint64_t)free_n <= total_clusters) {
+                free_clusters = free_n;
+            }
+            if (next_free >= 2 &&
+                (uint64_t)next_free <= total_clusters + 1) {
+                alloc_hint = next_free;
+            }
+        }
+    }
     mounted = 1;
     /* マウントは遅延 (最初の /sd アクセス時) なので、起きた
      * ことをログに残す (コンソールにも出る) */

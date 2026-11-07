@@ -19,6 +19,10 @@ struct fat_file {
  * 既にマウント済みなら何もしない。成功 0、失敗 -1 */
 int fat_ensure_mounted(void);
 
+/* 溜まった FAT の変更を全ての面へ書き戻す (書き込み対応
+ * 段1、doc/sd-write-design.md)。成功 0、失敗 -1 */
+int fat_sync(void);
+
 /* パスでファイルを探す。成功 0、無ければ -1 */
 int fat_find(const char *path, struct fat_file *out);
 

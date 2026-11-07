@@ -241,6 +241,50 @@ static int sd_read_block(uint64_t lba, unsigned char *buf)
     return 0;
 }
 
+/* 1 ブロック書く (CMD24)。データ応答トークンで受理を
+ * 確かめ、カードが内部で書き終えるまで (DO が 0 = busy)
+ * 有限回待つ (doc/sd-write-design.md 段1) */
+static int sd_write_block(uint64_t lba, const unsigned char *buf)
+{
+    uint32_t arg = card_ccs ? (uint32_t)lba : (uint32_t)(lba * 512);
+    int r = send_cmd(24, arg);
+    if (r != 0) {
+        cmd_end();
+        return -1;
+    }
+    sd_xfer(0xFF);   /* データ開始までの隙間 (1 バイト以上) */
+    sd_xfer(0xFE);   /* データ開始トークン */
+    for (int i = 0; i < 512; i++) {
+        sd_xfer(buf[i]);
+    }
+    sd_xfer(0xFF);
+    sd_xfer(0xFF);   /* CRC (ダミー) */
+    /* データ応答トークン: 下位 5 ビットが 00101 で受理 */
+    r = sd_xfer(0xFF);
+    if ((r & 0x1F) != 0x05) {
+        cmd_end();
+        return -1;
+    }
+    /* busy 待ち: 書き込み中は DO が 0 を返す。カードの
+     * 書き込み時間は最大でも数百 ms の想定で、有限回で
+     * 諦める (数 MHz の転送で 2M 回は秒単位の余裕) */
+    {
+        int done = 0;
+        for (long i = 0; i < 2000000; i++) {
+            if (sd_xfer(0xFF) == 0xFF) {
+                done = 1;
+                break;
+            }
+        }
+        if (!done) {
+            cmd_end();
+            return -1;
+        }
+    }
+    cmd_end();
+    return 0;
+}
+
 static int sd_dev_read(struct blkdev *dev, uint64_t lba,
                        unsigned char *buf, uint32_t count)
 {
@@ -253,10 +297,23 @@ static int sd_dev_read(struct blkdev *dev, uint64_t lba,
     return 0;
 }
 
+static int sd_dev_write(struct blkdev *dev, uint64_t lba,
+                        const unsigned char *buf, uint32_t count)
+{
+    (void)dev;
+    for (uint32_t i = 0; i < count; i++) {
+        if (sd_write_block(lba + i, buf + (uint64_t)i * 512) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static struct blkdev sd_dev = {
     .name = "sd0",
     .block_count = 0,
     .read = sd_dev_read,
+    .write = sd_dev_write,
 };
 
 /* 初期化に成功したら SD の blkdev を返し、失敗なら 0。

@@ -115,6 +115,18 @@ def build():
         off = (PART_START + RESERVED + i * fatsz) * SECTOR
         img[off:off + len(fat_bytes)] = fat_bytes
 
+    # FSInfo (パーティション先頭 + 1 セクタ。BPB の指定どおり)。
+    # 空き数と探索ヒントを実態に合わせて書く。KosabaOS の
+    # 書き込み側はこの値を起点に保守し、ホスト側の検証
+    # (check_sd_image.py) はここが実態と合うかを見る
+    free_count = sum(1 for v in fat[2:] if v == 0)
+    fi = (PART_START + 1) * SECTOR
+    struct.pack_into("<I", img, fi + 0, 0x41615252)    # 先行署名
+    struct.pack_into("<I", img, fi + 484, 0x61417272)  # 構造署名
+    struct.pack_into("<I", img, fi + 488, free_count)  # 空きクラスタ数
+    struct.pack_into("<I", img, fi + 492, next_free[0])  # 次の空き候補
+    struct.pack_into("<I", img, fi + 508, 0xAA550000)  # 末尾署名
+
     # BPB (パーティション先頭セクタ)
     b = PART_START * SECTOR
     img[b:b + 3] = b"\xEB\x58\x90"

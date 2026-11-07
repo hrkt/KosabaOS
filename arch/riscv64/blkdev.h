@@ -13,6 +13,11 @@ struct blkdev {
     /* lba から count ブロックを buf へ読む。成功 0、失敗は負数 */
     int (*read)(struct blkdev *dev, uint64_t lba,
                 unsigned char *buf, uint32_t count);
+    /* lba から count ブロックを buf から書く。成功 0、失敗は
+     * 負数 (SD 書き込み対応、doc/sd-write-design.md 段1)。
+     * 書き込みに対応しないデバイスは 0 のままにしてよい */
+    int (*write)(struct blkdev *dev, uint64_t lba,
+                 const unsigned char *buf, uint32_t count);
 };
 
 /* ボードが持つブロックデバイスを返す (無ければ 0)。
