@@ -10,8 +10,14 @@
  * イメージは .rodata にあって書き換えられないので、最初の
  * board_blkdev で RAM 上に写しを作り、読み書きは写しに
  * 対して行う。写しは再起動で消える (テスト用デバイスの
- * 割り切り)。写しの上限は 16MiB で、イメージがそれより
- * 大きいときはデバイス自体を出さない
+ * 割り切り)。写しの上限はイメージの実寸 (8MiB、
+ * make_sd_image.py の TOTAL_SECTORS と対) で、それより
+ * 大きいイメージのときはデバイス自体を出さない。
+ * 注意: この写しはカーネルの BSS に置く。BSS の末尾が
+ * ページプール (0x82200000) に食い込むとプールと BSS が
+ * 同じ物理メモリを指して静かに壊れる (16MiB で確保して
+ * 実際に踏んだ、2026-11-07)。kernel.ld 側にも ASSERT を
+ * 置いてあるので、大きくするときは両方を見ること
  */
 
 #include <stdint.h>
@@ -29,7 +35,7 @@ __asm__(
     "sd_image_end:\n"
     ".text\n");
 
-#define RAMDISK_CAP (16 * 1024 * 1024)
+#define RAMDISK_CAP (8 * 1024 * 1024)
 static unsigned char store[RAMDISK_CAP];
 static uint64_t store_size;
 static int store_ready;

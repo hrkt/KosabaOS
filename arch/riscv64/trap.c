@@ -463,9 +463,24 @@ static const char *sd_rel(const char *abs)
     return abs[3] == '\0' ? abs + 3 : abs + 4;
 }
 
+/* SD 書き込みの締め忘れを拾う: テーブルの持ち主が close
+ * しないまま終わった書き込み用 fd があれば、目録への
+ * 書き戻し (fat_close_write) を済ませる。RAM FS 側は
+ * close で何も起きないので対象は SD だけ */
+static void flush_sd_fds(struct fd_entry *t)
+{
+    int i;
+    for (i = 0; i < MAX_FD; i++) {
+        if (t[i].used && t[i].is_sd && t[i].writable) {
+            fat_close_write(&t[i].fat);
+        }
+    }
+}
+
 static void clear_fds(struct fd_entry *t)
 {
     int i;
+    flush_sd_fds(t);  /* 使い回す前に前の持ち主の書き込みを締める */
     for (i = 0; i < MAX_FD; i++) {
         t[i].used = 0;
     }
@@ -498,6 +513,10 @@ static int exec_depth = 0;  /* 今動いているプログラムの段 */
 static void resume_parent(uint64_t *frame, uint64_t result)
 {
     int i;
+    /* 子が閉じ忘れた SD 書き込みはここで締める (子の fd
+     * テーブルはこの後しばらく残るが、目録の書き戻しは
+     * プログラムの終了時点で済ませるのが約束) */
+    flush_sd_fds(fd_tables[exec_depth]);
     vm_pages_release(exec_depth);  /* 子のページをプールへ返す */
     exec_depth--;
     for (i = 0; i < 32; i++) {
@@ -709,6 +728,10 @@ static int do_syscall(uint64_t *frame)
             resume_parent(frame, status);  /* 親の exec へ戻る */
             return 1;
         }
+        /* 根のプログラムの終了: 閉じ忘れた SD 書き込みが
+         * あれば締めてから戻る (fd 自体の後始末は従来どおり
+         * テーブルに残す) */
+        flush_sd_fds(fd_table);
         user_exit_jump();  /* ここからは戻ってこない */
         break;
     case SYS_OPEN: {
@@ -805,8 +828,15 @@ static int do_syscall(uint64_t *frame)
         if (fd >= MAX_FD || !fd_table[fd].used) {
             frame[FRAME_A0] = (uint64_t)-1;
         } else {
+            /* SD の書き込み用 fd は、閉じるときに目録への
+             * 書き戻しまで済ませる (書き込み対応 段2/3)。
+             * 失敗したら -1 を返す */
+            int r = 0;
+            if (fd_table[fd].is_sd && fd_table[fd].writable) {
+                r = fat_close_write(&fd_table[fd].fat);
+            }
             fd_table[fd].used = 0;
-            frame[FRAME_A0] = 0;
+            frame[FRAME_A0] = (uint64_t)r;
         }
         break;
     }
@@ -893,9 +923,37 @@ static int do_syscall(uint64_t *frame)
         int i;
         struct fs_file *f;
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
-            /* SD は読み取り専用なので unlink は常に失敗 */
+            resolve_path(name, abs) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (is_sd_abs(abs)) {
+            /* SD 側も消せる (書き込み対応、段3)。開いている
+             * ファイルは消せない割り切りは RAM 側と同じで、
+             * 照合は目録項の位置 (fat_find が埋める) で行う */
+            struct fat_file target;
+            int l, open_found = 0;
+            if (fat_find(sd_rel(abs), &target) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+            for (l = 0; l <= exec_depth && !open_found; l++) {
+                for (i = 0; i < MAX_FD; i++) {
+                    if (fd_tables[l][i].used &&
+                        fd_tables[l][i].is_sd &&
+                        fd_tables[l][i].fat.has_dir &&
+                        fd_tables[l][i].fat.dir_cluster ==
+                            target.dir_cluster &&
+                        fd_tables[l][i].fat.dir_off ==
+                            target.dir_off) {
+                        open_found = 1;
+                        break;
+                    }
+                }
+            }
+            frame[FRAME_A0] = open_found
+                                  ? (uint64_t)-1
+                                  : (uint64_t)fat_unlink(sd_rel(abs));
             break;
         }
         f = fs_find(abs + 1);
@@ -930,8 +988,14 @@ static int do_syscall(uint64_t *frame)
         char name[PATH_MAX];
         char abs[PATH_MAX];
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
-            frame[FRAME_A0] = (uint64_t)-1;  /* SD は読み取り専用 */
+            resolve_path(name, abs) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (is_sd_abs(abs)) {
+            /* SD 側にも作れる (書き込み対応、段3)。
+             * 中身は "." と ".." だけの空ディレクトリ */
+            frame[FRAME_A0] = (uint64_t)fat_mkdir(sd_rel(abs));
             break;
         }
         frame[FRAME_A0] = (uint64_t)fs_mkdir(abs + 1);
@@ -998,24 +1062,42 @@ static int do_syscall(uint64_t *frame)
         char name[PATH_MAX];
         char abs[PATH_MAX];
         int i;
-        struct fs_file *f;
+        struct fs_file *f = 0;
+        struct fat_file fat;
+        int is_sd = 0;
+        fat.first_cluster = 0;
+        fat.size = 0;
+        fat.has_dir = 0;
+        fat.dirty = 0;
         if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-            resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
-            frame[FRAME_A0] = (uint64_t)-1;  /* SD は読み取り専用 */
-            break;
-        }
-        f = fs_create(abs + 1);
-        if (f == 0) {
+            resolve_path(name, abs) != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
+        }
+        if (is_sd_abs(abs)) {
+            /* /sd にも作れる (書き込み対応、doc/sd-write-
+             * design.md 段3)。意味づけは RAM 側と同じ
+             * (同名は空に切り捨て、親が無いと -1) */
+            if (fat_create(sd_rel(abs), &fat) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
+            is_sd = 1;
+        } else {
+            f = fs_create(abs + 1);
+            if (f == 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                break;
+            }
         }
         for (i = 0; i < MAX_FD; i++) {
             if (!fd_table[i].used) {
                 fd_table[i].file = f;
+                fd_table[i].fat = fat;
                 fd_table[i].pos = 0;
                 fd_table[i].used = 1;
                 fd_table[i].writable = 1;
-                fd_table[i].is_sd = 0;
+                fd_table[i].is_sd = is_sd;
                 frame[FRAME_A0] = (uint64_t)i;
                 break;
             }
@@ -1046,7 +1128,11 @@ static int do_syscall(uint64_t *frame)
                 done = (uint64_t)-1;
                 break;
             }
-            w = fs_write_data(fd_table[fd].file, buf, chunk);
+            /* 書き先は RAM FS か SD (FAT) かで振り分ける。
+             * どちらも「末尾へ書く」意味づけは同じ */
+            w = fd_table[fd].is_sd
+                    ? fat_write_data(&fd_table[fd].fat, buf, chunk)
+                    : fs_write_data(fd_table[fd].file, buf, chunk);
             done += w;
             if (w < chunk) {
                 break;  /* 容量いっぱい */
@@ -1298,6 +1384,7 @@ void trap_handler(uint64_t *frame, int from_user)
             resume_parent(frame, (uint64_t)-2);
             return;
         }
+        flush_sd_fds(fd_table);  /* 根のプログラムの書き込みも締める */
         user_exit_jump();  /* ここからは戻ってこない */
     }
 

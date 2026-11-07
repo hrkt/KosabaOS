@@ -45,6 +45,15 @@ SECTIONS {
     __bss_end = .;
   }
 
+  /* カーネルの BSS がページプール (board.h の
+   * BOARD_PAGE_POOL_BASE = 0x82200000) に食い込んでは
+   * いけない。食い込むと、プールから配ったページと
+   * カーネルの静的データが同じ物理メモリを指し、大きな
+   * プログラムから静かに壊れる (2026-11-07 に ramdisk の
+   * 写し 16MiB で実際に踏んだ)。 */
+  ASSERT(__bss_end <= 0x82200000,
+         "kernel BSS overflows into the page pool (see boards/virt/board.h)")
+
   /* 結果の住所 (ビルド済み kernel の実数):
    *   0x80200000  _start / .text 先頭
    *   0x80200034  kmain (C の入口、.text の中)

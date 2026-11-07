@@ -432,6 +432,32 @@ else
     report "U ikesu join test (mp3 decode, audio close fnv)" $?
 fi
 
+echo "== scenario V: SD write (FAT32 write on ramdisk) =="
+# /sd への書き込み対応 (doc/sd-write-design.md 段3)。
+# Nish の write (create + write + close) で /sd にファイルを
+# 作り、cat で開き直して中身が一致すること。サブディレクトリ
+# の中への作成と、rm (unlink) してから cat が失敗すること、
+# 一覧に新しいファイルが見えることもあわせて見る。
+# イメージの中身そのものの検証 (バイト一致・鎖の整合) は
+# ホスト側の check_sd_image.py が担う (ここは配線の確認)
+{ sleep 3; printf 'write /sd/WTEST.TXT sd-write-check\n'; sleep 2; \
+  printf 'cat /sd/WTEST.TXT\n'; sleep 2; \
+  printf 'write /sd/SUB/W2.TXT inner-write\n'; sleep 2; \
+  printf 'cat /sd/SUB/W2.TXT\n'; sleep 2; \
+  printf 'ls /sd\n'; sleep 2; \
+  printf 'rm /sd/WTEST.TXT\n'; sleep 2; \
+  printf 'cat /sd/WTEST.TXT\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 30 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-v.log 2>&1 || true
+out=$(strip_ticks < test-v.log)
+check_order "$out" "Nish, the KosabaOS shell" \
+    "wrote /sd/WTEST.TXT" "sd-write-check" \
+    "wrote /sd/SUB/W2.TXT" "inner-write" \
+    "WTEST.TXT" "removed /sd/WTEST.TXT" "cat: no such file" \
+    "[kernel] back from user program"
+report "V SD write (create/write/read-back/subdir/unlink)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
