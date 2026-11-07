@@ -325,6 +325,27 @@ def main():
     report("K15 SD write (create/write/read-back/unlink, "
            "existing files intact)", ok)
 
+    print("== scenario K20: SD exec ==")
+    # /sd 上の ELF の実行の実機確認 (doc/sd-exec-design.md)。
+    # K19 は sd-rmdir ブランチが使用済みのため K20。
+    # copy.elf で RAM FS の uprog.elf を /sd へ運び (Nish の
+    # write はテキスト前提でバイナリに使えない)、それを
+    # run して挨拶と終了ステータス 7 ('e' キー) まで見る。
+    # 終わったらコピーは消し、BOOT.PY が無傷なことも見る
+    ok = command("run copy.elf uprog.elf /sd/UPROG.ELF",
+                 "copied")
+    cur = log_total()
+    send_chunked("run /sd/UPROG.ELF")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("hello from user mode!", 15000, cursor=cur) and ok
+    cur = log_total()
+    send_chunked("e")
+    ok = expect("run: exit status 7", 10000, cursor=cur) and ok
+    ok = command("rm /sd/UPROG.ELF",
+                 "removed /sd/UPROG\\.ELF") and ok
+    ok = command("cat /sd/BOOT.PY", "fpioa_manager") and ok
+    report("K20 SD exec (copy to /sd, run, exit status 7)", ok)
+
     print("== scenario K16: clock task (scheduler stage 2) ==")
     # スケジューラ段2 (doc/scheduler-plan.md): 時計タスクが
     # 常駐し、入力待ちの間も sleep から起き続けていることを
