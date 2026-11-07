@@ -18,6 +18,9 @@
  *   cd <名前>       ディレクトリを移る (省略時は /)
  *   pwd             現在のディレクトリを表示
  *   run <名前>      プログラムを実行 (終わると戻ってくる)
+ *   run <名前> &    プログラムをバックグラウンドで実行
+ *   jobs            バックグラウンドジョブの一覧
+ *   fg [番号]       ジョブを前面にして終わるまで待つ
  *   echo <本文>     本文をそのまま表示
  *   ps              カーネルタスクの一覧
  *   dmesg           カーネルログを表示
@@ -44,6 +47,9 @@
 #define SYS_RMDIR 14
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
+#define SYS_JOB_RUN 20
+#define SYS_JOB_LIST 21
+#define SYS_JOB_WAIT 22
 #define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
@@ -393,14 +399,214 @@ static void cmd_write(char *arg)
     putc_('\n');
 }
 
+/* 10 進文字列を数に直す (fg の引数用) */
+static int atoi_(const char *s)
+{
+    int v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return v;
+}
+
+/* --- ジョブ制御 (スケジューラ段3、doc/jobs-design.md) --------------
+ * カーネル側の job_list (21) が作るテキストは 1 行 1 ジョブで
+ *   job N: <名前> running / stopped / done status=S
+ * の形。Nish はそれを表示 (jobs)・解釈 (fg の対象選びと
+ * Done 通知) に使う。 */
+
+static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
+
+/* job_list のテキストから、行 [s, e) が「終わったジョブ」の
+ * 行かどうかを見る (状態欄の " done status=" を探す) */
+static int job_line_done(const char *buf, long s, long e)
+{
+    const char *pat = " done status=";
+    long plen = 13;
+    long k, m;
+    for (k = s; k + plen <= e; k++) {
+        for (m = 0; m < plen; m++) {
+            if (buf[k + m] != pat[m]) {
+                break;
+            }
+        }
+        if (m == plen) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* fg の対象の既定: 一番大きい番号の、終わっていないジョブ。
+ * 終わったものしか無ければ、その中で一番大きい番号
+ * (fg で回収して結果を報告できる)。どちらも無ければ -1 */
+static long job_pick_fg(void)
+{
+    char buf[256];
+    long n = syscall3(SYS_JOB_LIST, (long)buf, sizeof(buf) - 1, 0);
+    long i = 0;
+    long pick = -1;
+    long pick_done = -1;
+
+    if (n <= 0) {
+        return -1;
+    }
+    buf[n] = '\0';
+    while (i < n) {
+        long s = i;
+        while (i < n && buf[i] != '\n') {
+            i++;
+        }
+        if (i - s >= 6 && buf[s] == 'j' && buf[s + 4] >= '1' &&
+            buf[s + 4] <= '9') {
+            long no = buf[s + 4] - '0';
+            if (job_line_done(buf, s, i)) {
+                if (no > pick_done) {
+                    pick_done = no;
+                }
+            } else if (no > pick) {
+                pick = no;
+            }
+        }
+        i++;
+    }
+    return pick >= 0 ? pick : pick_done;
+}
+
+/* プロンプトを出す前の Done 通知 (Linux の縮小形)。
+ * 終わったジョブがいれば 1 回だけ知らせ、その次の
+ * プロンプトのときに回収する (fg すればその場で回収) */
+static void job_notify(void)
+{
+    char buf[256];
+    long n = syscall3(SYS_JOB_LIST, (long)buf, sizeof(buf) - 1, 0);
+    long i = 0;
+    int present = 0;
+
+    if (n <= 0) {
+        job_notified_mask = 0;
+        return;
+    }
+    buf[n] = '\0';
+    while (i < n) {
+        long s = i, m;
+        int no;
+        while (i < n && buf[i] != '\n') {
+            i++;
+        }
+        if (i - s >= 6 && buf[s] == 'j') {
+            no = buf[s + 4] - '0';
+            if (no >= 1 && no <= 15) {
+                present |= (1 << no);
+                if (job_line_done(buf, s, i)) {
+                    if (job_notified_mask & (1 << no)) {
+                        /* 通知済み: 静かに回収する */
+                        syscall3(SYS_JOB_WAIT, no, 0, 0);
+                        job_notified_mask &= ~(1 << no);
+                        present &= ~(1 << no);
+                    } else {
+                        /* 行そのものが通知文になる */
+                        for (m = s; m < i; m++) {
+                            putc_(buf[m]);
+                        }
+                        putc_('\n');
+                        job_notified_mask |= (1 << no);
+                    }
+                }
+            }
+        }
+        i++;
+    }
+    job_notified_mask &= present;  /* 消えたジョブの分は落とす */
+}
+
+static void cmd_jobs(void)
+{
+    char buf[256];
+    long n = syscall3(SYS_JOB_LIST, (long)buf, sizeof(buf), 0);
+    long i;
+
+    if (n <= 0) {
+        puts_("no jobs\n");
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        putc_(buf[i]);
+    }
+}
+
+/* fg [番号]: ジョブを前面にして終わるまで待つ。
+ * 結果の出し方は run に倣う */
+static void cmd_fg(char *arg)
+{
+    long no;
+    long r;
+
+    if (*arg != '\0') {
+        no = atoi_(arg);
+    } else {
+        no = job_pick_fg();
+    }
+    if (no <= 0) {
+        puts_("fg: no job\n");
+        return;
+    }
+    r = syscall3(SYS_JOB_WAIT, no, 0, 0);
+    job_notified_mask &= ~(1 << (int)no);  /* 回収したので通知不要 */
+    if (r == -1) {
+        puts_("fg: no such job\n");
+    } else if (r == -2) {
+        puts_("fg: program faulted\n");
+    } else if (r != 0) {
+        puts_("fg: exit status ");
+        put_dec_(r);
+        putc_('\n');
+    }
+}
+
 /* run の引数は「プログラム名＋渡したい引数」の並び全体。
  * 名前だけを切り出して a0 に、並び全体を a1 に渡すと、
- * 子は argv として受け取る (入口の約束、doc/syscalls.md) */
+ * 子は argv として受け取る (入口の約束、doc/syscalls.md)。
+ * 末尾に & が付いていたらバックグラウンド起動 (job_run) */
 static void cmd_run(char *arg)
 {
     char name[128];
     int i = 0;
     long r;
+    int len = strlen_(arg);
+
+    /* 末尾の空白を落としてから、末尾の & を見る */
+    while (len > 0 && arg[len - 1] == ' ') {
+        arg[--len] = '\0';
+    }
+    if (len > 0 && arg[len - 1] == '&') {
+        arg[--len] = '\0';
+        while (len > 0 && arg[len - 1] == ' ') {
+            arg[--len] = '\0';
+        }
+        if (len == 0) {
+            puts_("run: cannot start\n");
+            return;
+        }
+        while (arg[i] != '\0' && arg[i] != ' ' && i < 127) {
+            name[i] = arg[i];
+            i++;
+        }
+        name[i] = '\0';
+        r = syscall3(SYS_JOB_RUN, (long)name, (long)arg, 0);
+        if (r < 0) {
+            puts_("run: cannot start\n");
+            return;
+        }
+        puts_("job ");
+        put_dec_(r);
+        puts_(": ");
+        puts_(name);
+        puts_(" started\n");
+        job_notified_mask &= ~(1 << (int)r);
+        return;
+    }
 
     while (arg[i] != '\0' && arg[i] != ' ' && i < 127) {
         name[i] = arg[i];
@@ -467,6 +673,7 @@ void _start(void)
     for (;;) {
         char *arg;
 
+        job_notify();  /* 終わったジョブの知らせ (段3) */
         puts_(PROMPT);
         readline(line);
 
@@ -496,6 +703,9 @@ void _start(void)
             puts_("cd <name>       change directory (default: /)\n");
             puts_("pwd             print working directory\n");
             puts_("run <name> [..] run a program (args after the name)\n");
+            puts_("run <name> [..] &  run in background\n");
+            puts_("jobs            list background jobs\n");
+            puts_("fg [n]          wait for a background job in front\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
             puts_("dmesg           show the kernel log\n");
@@ -519,6 +729,10 @@ void _start(void)
             cmd_rm(arg);
         } else if (streq(line, "run")) {
             cmd_run(arg);
+        } else if (streq(line, "jobs")) {
+            cmd_jobs();
+        } else if (streq(line, "fg")) {
+            cmd_fg(arg);
         } else if (streq(line, "echo")) {
             puts_(arg);
             putc_('\n');

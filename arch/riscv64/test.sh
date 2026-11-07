@@ -487,6 +487,41 @@ if [ -z "$w1" ] || [ -z "$w2" ] || [ $((w2 - w1)) -lt 3 ]; then
 fi
 report "W clock task (wakes advance during Nish input wait)" $rc
 
+echo "== scenario X: job control (bg jobs) =="
+# スケジューラ段3 (doc/jobs-design.md): slow.elf を bg で
+# 走らせるとプロンプトが即戻り、走っている間に echo が
+# 実行でき、jobs に running と見え、fg が完了まで待つ。
+# 終わったジョブは次のプロンプトで Done 通知が出て
+# (status=5 のもの)、回収されると jobs は空になる。
+# crash.elf のフォルトはそのジョブだけを終わらせ
+# (status=-2)、Nish は無事で fg が faulted を報告する。
+# uprog.elf は bg では getc で stopped になり、fg して
+# 初めて入力が効く
+{ sleep 3; printf 'run slow.elf 12 &\n'; sleep 1; \
+  printf 'echo during\n'; sleep 1; printf 'jobs\n'; sleep 1; \
+  printf 'fg\n'; sleep 3; \
+  printf 'run slow.elf 2 5 &\n'; sleep 2; \
+  printf 'echo poke\n'; sleep 1; printf 'echo tick\n'; sleep 1; \
+  printf 'jobs\n'; sleep 1; \
+  printf 'run crash.elf &\n'; sleep 2; \
+  printf 'echo alive\n'; sleep 1; printf 'fg\n'; sleep 1; \
+  printf 'run uprog.elf &\n'; sleep 2; printf 'jobs\n'; sleep 1; \
+  printf 'fg\n'; sleep 1; printf 'z'; sleep 1; printf 'q'; sleep 2; \
+  printf 'exit\n'; sleep 1; } \
+    | timeout 34 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-x.log 2>&1 || true
+out=$(strip_ticks < test-x.log)
+check_order "$out" "Nish, the KosabaOS shell" \
+    "job 1: slow.elf started" "during" \
+    "job 1: slow.elf running" "slow done" \
+    "job 1: slow.elf done status=5" "no jobs" \
+    "job 1: crash.elf started" "alive" \
+    "job 1: crash.elf done status=-2" "fg: program faulted" \
+    "job 1: uprog.elf started" "hello from user mode!" \
+    "job 1: uprog.elf stopped" \
+    "[kernel] back from user program"
+report "X job control (bg / jobs / fg / notice / fault isolation)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

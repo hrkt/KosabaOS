@@ -55,6 +55,9 @@ echo "build: BOARD=$BOARD"
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o atest.elf atest.c
 # fptest だけは浮動小数点の検証用に lp64d (FP レジスタ渡しの ABI)
 "$CC" -march=rv64gc -mabi=lp64d -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o fptest.elf fptest.c
+# slow / crash はジョブ制御 (段3) の検証用 (test.sh シナリオ X)
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o slow.elf slow.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o crash.elf crash.c
 
 # Ikesu 合流テスト (test.sh シナリオ U) の素材は、Ikesu 側の
 # ビルド成果物を借りてくる。OS リポジトリにはバイナリを
