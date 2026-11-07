@@ -363,6 +363,24 @@ def main():
     ok = command("dmesg", "clock: wake") and ok
     report("K16 clock task (wakes advance across input waits)", ok)
 
+    print("== scenario K17: job control (bg jobs) ==")
+    # ジョブ制御 (スケジューラ段3、doc/jobs-design.md) の
+    # 実機確認。Nish に入ったままの状態から: slow.elf を
+    # bg で走らせるとプロンプトが戻り、走っている間に
+    # 別のコマンドが打て、jobs に running と見え、fg が
+    # 完了まで待つ。crash.elf のフォルトはそのジョブだけを
+    # 終わらせ、Nish は無事 (fg が faulted を報告する)
+    ok = command("run slow.elf 12 &", "job 1: slow\\.elf started",
+                 15000)
+    ok = command("echo during", "during") and ok
+    ok = command("jobs", "job 1: slow\\.elf running") and ok
+    ok = command("fg", "slow done", 20000) and ok
+    ok = command("run crash.elf &", "job 1: crash\\.elf started",
+                 15000) and ok
+    ok = command("echo alive", "alive") and ok
+    ok = command("fg", "fg: program faulted", 15000) and ok
+    report("K17 job control (bg / jobs / fg / fault isolation)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
