@@ -547,6 +547,29 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "[kernel] back from user program"
 report "X job control (bg / jobs / fg / notice / fault isolation)" $?
 
+echo "== scenario AB: SD exec =="
+# /sd 上の ELF の実行 (doc/sd-exec-design.md)。イメージには
+# build.sh が user.elf を UPROG.ELF として取り込んである。
+# 絶対パスでの実行と終了ステータスの伝播 (シナリオ K の
+# SD 版)、cwd を /sd に移しての相対名での実行、ELF でない
+# ファイルが "cannot start" で断られることを見る
+{ sleep 3; printf 'run /sd/UPROG.ELF\n'; sleep 2; \
+  printf 'e'; sleep 2; \
+  printf 'cd /sd\n'; sleep 1; \
+  printf 'run UPROG.ELF\n'; sleep 2; \
+  printf 'e'; sleep 2; \
+  printf 'cd /\n'; sleep 1; \
+  printf 'run /sd/HELLO.TXT\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 30 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ab.log 2>&1 || true
+out=$(strip_ticks < test-ab.log)
+check_order "$out" "Nish, the KosabaOS shell" \
+    "hello from user mode!" "run: exit status 7" \
+    "hello from user mode!" "run: exit status 7" \
+    "run: cannot start" "[kernel] back from user program"
+report "AB SD exec (absolute + cwd-relative + non-ELF refused)" $?
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

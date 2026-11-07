@@ -537,6 +537,19 @@ static void resume_parent(uint64_t *frame, uint64_t result)
 #define EXEC_ARGS_MAX 512
 #define EXEC_ARGC_MAX 16
 
+/* elf_load_src へ渡す FAT 側の読み口 (fs_read_at と同型に
+ * そろえた橋渡し。doc/sd-exec-design.md 決め事2) */
+static uint64_t fat_read_adapter(void *file, uint64_t pos,
+                                 unsigned char *dst, uint64_t n)
+{
+    return fat_read_at((struct fat_file *)file, pos, dst, n);
+}
+
+/* SD のファイルがどこかの段かジョブで書き込み用に開かれて
+ * いるか (exec の点検用)。実体はジョブの節に置く (ジョブの
+ * fd テーブルも見るため) */
+static int sd_open_for_write(const struct fat_file *target);
+
 /* 戻り値: 1 = sepc は処理済みなので進めない、0 = 通常どおり進める */
 static int do_exec(uint64_t *frame)
 {
@@ -546,6 +559,8 @@ static int do_exec(uint64_t *frame)
     const char *tokens[EXEC_ARGC_MAX];
     int argc = 0;
     struct fs_file *f;
+    struct fat_file fat;
+    int from_sd = 0;
     struct user_pages *up;
     uint64_t entry;
     int i;
@@ -564,8 +579,7 @@ static int do_exec(uint64_t *frame)
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
-    if (resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
-        /* SD からの exec は v1 の対象外 (sd-design.md) */
+    if (resolve_path(name, abs) != 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return 0;
     }
@@ -599,17 +613,38 @@ static int do_exec(uint64_t *frame)
         tokens[0] = name;  /* 引数が無ければ argv[0] = プログラム名 */
         argc = 1;
     }
-    f = fs_find(abs + 1);
-    if (f == 0 || f->is_dir) {
-        frame[FRAME_A0] = (uint64_t)-1;
-        return 0;
+    if (is_sd_abs(abs)) {
+        /* /sd 上の ELF も実行できる (doc/sd-exec-design.md)。
+         * ディレクトリは fat_find が -1 にする (RAM 側の
+         * is_dir の弾き方と揃う)。書き込み用に開かれている
+         * ファイルは、目録への書き戻しが close まで済んで
+         * いないので実行しない (決め事4) */
+        if (fat_find(sd_rel(abs), &fat) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            return 0;
+        }
+        if (sd_open_for_write(&fat)) {
+            kputs("exec: sd file open for writing: ");
+            kputs(name);
+            kputc('\n');
+            frame[FRAME_A0] = (uint64_t)-1;
+            return 0;
+        }
+        from_sd = 1;
+    } else {
+        f = fs_find(abs + 1);
+        if (f == 0 || f->is_dir) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            return 0;
+        }
     }
     /* 子の段の台帳へ ELF を読み、スタックの初期分 (16KB) を
      * 用意する。どちらか失敗したら、取ったページを返して
      * 起動失敗 (-1) にする */
     up = vm_pages(exec_depth + 1);
     vm_pages_release(exec_depth + 1);  /* 前の残りがあれば返す */
-    entry = elf_load_to(f, up);
+    entry = from_sd ? elf_load_src(&fat, fat_read_adapter, up)
+                    : elf_load_to(f, up);
     if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
         /* 失敗の具体的な理由 (プール枯渇、ELF の形など) は
          * elf.c / vm.c 側がログに残す。ここでは対象だけ残す */
@@ -923,6 +958,49 @@ static void jobs_kill_all(void)
     cur_runner = 0;
 }
 
+/* SD のファイル (目録項の位置で照合) が、どこかの段か
+ * ジョブで書き込み用に開かれているか。exec と job_run が
+ * 「書き込み中の SD ファイルは実行しない」を点検する
+ * ために使う (doc/sd-exec-design.md 決め事4)。照合の範囲は
+ * unlink の点検と同じ (前面の全段 + 生きているジョブ)。
+ * 読み用に開いているだけのものは対象にしない */
+static int sd_open_for_write(const struct fat_file *target)
+{
+    int l, i;
+    for (l = 0; l <= exec_depth; l++) {
+        for (i = 0; i < MAX_FD; i++) {
+            if (fd_tables[l][i].used &&
+                fd_tables[l][i].is_sd &&
+                fd_tables[l][i].writable &&
+                fd_tables[l][i].fat.has_dir &&
+                fd_tables[l][i].fat.dir_cluster ==
+                    target->dir_cluster &&
+                fd_tables[l][i].fat.dir_off == target->dir_off) {
+                return 1;
+            }
+        }
+    }
+    for (l = 0; l < JOB_MAX; l++) {
+        int t;
+        if (jobs[l].state == JOB_FREE) {
+            continue;
+        }
+        t = JOB_LEVEL_BASE + l;
+        for (i = 0; i < MAX_FD; i++) {
+            if (fd_tables[t][i].used &&
+                fd_tables[t][i].is_sd &&
+                fd_tables[t][i].writable &&
+                fd_tables[t][i].fat.has_dir &&
+                fd_tables[t][i].fat.dir_cluster ==
+                    target->dir_cluster &&
+                fd_tables[t][i].fat.dir_off == target->dir_off) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* job_run (20): プログラムをジョブとして起動する。
  * do_exec と同じ約束 (名前 + 引数文字列) で、違うのは
  * 親を凍らせるのではなく、文脈を用意して RUNNING に
@@ -935,10 +1013,12 @@ static void do_job_run(uint64_t *frame)
     const char *tokens[EXEC_ARGC_MAX];
     int argc = 0;
     struct fs_file *f;
+    struct fat_file fat;
+    int from_sd = 0;
     int i, slot = -1;
 
     if (copy_user_string(frame[FRAME_A0], name, sizeof(name)) != 0 ||
-        resolve_path(name, abs) != 0 || is_sd_abs(abs)) {
+        resolve_path(name, abs) != 0) {
         frame[FRAME_A0] = (uint64_t)-1;
         return;
     }
@@ -970,10 +1050,21 @@ static void do_job_run(uint64_t *frame)
         tokens[0] = name;
         argc = 1;
     }
-    f = fs_find(abs + 1);
-    if (f == 0 || f->is_dir) {
-        frame[FRAME_A0] = (uint64_t)-1;
-        return;
+    if (is_sd_abs(abs)) {
+        /* exec と同じく /sd 上の ELF も対象 (ローダ共有。
+         * doc/sd-exec-design.md 決め事5) */
+        if (fat_find(sd_rel(abs), &fat) != 0 ||
+            sd_open_for_write(&fat)) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            return;
+        }
+        from_sd = 1;
+    } else {
+        f = fs_find(abs + 1);
+        if (f == 0 || f->is_dir) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            return;
+        }
     }
     for (i = 0; i < JOB_MAX; i++) {
         if (jobs[i].state == JOB_FREE) {
@@ -995,7 +1086,8 @@ static void do_job_run(uint64_t *frame)
         uint64_t entry, argv_va, sp;
 
         vm_pages_release(level);  /* 前の残りがあれば返す */
-        entry = elf_load_to(f, up);
+        entry = from_sd ? elf_load_src(&fat, fat_read_adapter, up)
+                        : elf_load_to(f, up);
         if (entry == 0 || vm_stack_prepare(up, 16384) != 0) {
             kputs("job: cannot load: ");
             kputs(name);

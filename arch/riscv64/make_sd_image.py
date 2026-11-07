@@ -13,6 +13,11 @@ virt の RAM ブロックデバイス (boards/virt/ramdisk.c) が
                  末尾に SD-END-MARKER の行がある
   SUB/           サブディレクトリ
   SUB/INNER.TXT  中に SD-INNER-MARKER の行がある
+
+追加の引数 `名前=ホストパス` を渡すと、そのホストファイル
+をルートにその名前 (8.3) で置く。SD からの exec の検証で
+user.elf を UPROG.ELF として取り込むために使う
+(doc/sd-exec-design.md 決め事6)。
 """
 
 import struct
@@ -27,7 +32,16 @@ RESERVED = 32
 NFATS = 2
 
 
-def build():
+def to_83(name):
+    """'UPROG.ELF' のような表示名を 8.3 の 11 バイトにする。"""
+    if "." in name:
+        base, ext = name.split(".", 1)
+    else:
+        base, ext = name, ""
+    return (base.upper().ljust(8) + ext.upper().ljust(3)).encode()
+
+
+def build(extras=()):
     # FAT の大きさ: クラスタ数から逆算して 2 回ほど回す
     fatsz = 16
     for _ in range(4):
@@ -101,12 +115,18 @@ def build():
     ])
     write_chain(sub_cluster, sub_entries)
 
-    # ルートディレクトリ (クラスタ 2)
-    root_entries = b"".join([
+    # 追加ファイル (名前=ホストパス) をルートへ
+    root_list = [
         dir_entry(b"HELLO   TXT", 0x20, hello_cluster, len(hello)),
         dir_entry(b"SUB        ", 0x10, sub_cluster, 0),
-    ])
-    write_chain(2, root_entries)
+    ]
+    for name, data in extras:
+        c = alloc_chain(len(data))
+        write_chain(c, data)
+        root_list.append(dir_entry(to_83(name), 0x20, c, len(data)))
+
+    # ルートディレクトリ (クラスタ 2)
+    write_chain(2, b"".join(root_list))
 
     # FAT 領域へ書く (2 個とも同じ内容)
     fat_bytes = b"".join(struct.pack("<I", v & 0x0FFFFFFF) for v in fat)
@@ -165,8 +185,15 @@ def build():
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "sd.img"
+    extras = []
+    for arg in sys.argv[2:]:
+        name, sep, path = arg.partition("=")
+        if not sep:
+            raise SystemExit("extra file must be NAME=HOSTPATH: " + arg)
+        with open(path, "rb") as f:
+            extras.append((name, f.read()))
     with open(out, "wb") as f:
-        f.write(build())
+        f.write(build(extras))
     print("wrote", out)
 
 
