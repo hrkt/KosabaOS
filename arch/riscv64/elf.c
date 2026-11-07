@@ -13,9 +13,11 @@
  * ELF64 / リトルエンディアン / 実行形式 (ET_EXEC) / RISC-V、
  * PT_LOAD セグメントだけを対象にする。
  *
- * ファイルからの読み出しは fs_read_at (位置指定) 経由。
+ * ファイルからの読み出しは位置指定読み (read_at) 経由。
  * FS のブロックチェーン化 (doc/fs-design.md 段1) で、
- * ファイルのデータは連続とは限らなくなったため。
+ * ファイルのデータは連続とは限らなくなったため。読み口は
+ * 関数ポインタで受け、fs_read_at (RAM FS) と fat_read_at
+ * (SD) のどちらでも使える (doc/sd-exec-design.md)。
  *
  * 置き先は「段のページ台帳」(vm.h) で、物理メモリは連続とは
  * 限らない。セグメントが触るページだけをプール (page.c) から
@@ -68,13 +70,14 @@ struct elf64_phdr {
  * 違うボード (virt はデータ 4MB) があるため、範囲チェックと
  * 台帳の列は領域ごとに分ける */
 
-uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
+uint64_t elf_load_src(void *file, elf_read_at_fn read_at,
+                      struct user_pages *up)
 {
     struct elf64_header h;
     int i;
 
     /* ヘッダを読む。短ければ ELF ではない */
-    if (fs_read_at(f, 0, (unsigned char *)&h, sizeof(h)) != sizeof(h)) {
+    if (read_at(file, 0, (unsigned char *)&h, sizeof(h)) != sizeof(h)) {
         kputs("[elf] bad magic\n");
         return 0;
     }
@@ -103,8 +106,8 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
         uint64_t extent;   /* セグメントが触る長さ (memsz と filesz の大きい方) */
         uint64_t done;
 
-        if (fs_read_at(f, h.e_phoff + (uint64_t)i * h.e_phentsize,
-                       (unsigned char *)&p, sizeof(p)) != sizeof(p)) {
+        if (read_at(file, h.e_phoff + (uint64_t)i * h.e_phentsize,
+                    (unsigned char *)&p, sizeof(p)) != sizeof(p)) {
             kputs("[elf] truncated program header\n");
             return 0;
         }
@@ -170,7 +173,7 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
             if (chunk > sizeof(buf)) {
                 chunk = sizeof(buf);
             }
-            got = fs_read_at(f, p.p_offset + done, buf, chunk);
+            got = read_at(file, p.p_offset + done, buf, chunk);
             if (got == 0) {
                 kputs("[elf] truncated segment\n");
                 return 0;
@@ -185,4 +188,16 @@ uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
     /* 書いた命令を命令キャッシュ側へ反映させる */
     asm volatile("fence.i");
     return h.e_entry;
+}
+
+/* fs_read_at を elf_read_at_fn の形に合わせる橋渡し */
+static uint64_t fs_read_at_adapter(void *file, uint64_t pos,
+                                   unsigned char *dst, uint64_t n)
+{
+    return fs_read_at((struct fs_file *)file, pos, dst, n);
+}
+
+uint64_t elf_load_to(struct fs_file *f, struct user_pages *up)
+{
+    return elf_load_src(f, fs_read_at_adapter, up);
 }

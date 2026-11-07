@@ -58,6 +58,8 @@ echo "build: BOARD=$BOARD"
 # slow / crash はジョブ制御 (段3) の検証用 (test.sh シナリオ X)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o slow.elf slow.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o crash.elf crash.c
+# copy は SD exec の実機確認用 (ELF を /sd へ運ぶ道具)
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o copy.elf copy.c
 
 # Ikesu 合流テスト (test.sh シナリオ U) の素材は、Ikesu 側の
 # ビルド成果物を借りてくる。OS リポジトリにはバイナリを
@@ -82,8 +84,10 @@ if [ "$BOARD" = virt ] \
 fi
 
 if [ "$BOARD" = virt ]; then
-    # FAT ドライバのテスト相手 (boards/virt/ramdisk.c が埋め込む)
-    python3 make_sd_image.py sd.img
+    # FAT ドライバのテスト相手 (boards/virt/ramdisk.c が埋め込む)。
+    # SD exec の検証用に user.elf を UPROG.ELF として取り込む
+    # (doc/sd-exec-design.md 決め事6)
+    python3 make_sd_image.py sd.img UPROG.ELF=user.elf
 fi
 
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c
