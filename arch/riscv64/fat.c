@@ -27,6 +27,7 @@
 #include "fat.h"
 #include "blkdev.h"
 #include "klog.h"
+#include "time.h"
 
 #define SECTOR 512
 
@@ -60,6 +61,38 @@ static uint32_t rd32(const unsigned char *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void wr16(unsigned char *p, uint16_t v)
+{
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+}
+
+static void wr32(unsigned char *p, uint32_t v)
+{
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+    p[2] = (unsigned char)((v >> 16) & 0xFF);
+    p[3] = (unsigned char)((v >> 24) & 0xFF);
+}
+
+/* 壁時計を FAT の日時形式にする (doc/sd-write-design.md の
+ * 決め事4)。RTC 未設定などで読めなければ 0 (1980-01-01) */
+static void fat_now(uint16_t *date, uint16_t *tim)
+{
+    struct datetime dt;
+
+    if (time_read(&dt) != 0 || dt.year < 1980 || dt.year > 2107) {
+        *date = 0;
+        *tim = 0;
+        return;
+    }
+    *date = (uint16_t)(((uint32_t)(dt.year - 1980) << 9) |
+                       ((uint32_t)dt.month << 5) | (uint32_t)dt.day);
+    *tim = (uint16_t)(((uint32_t)dt.hour << 11) |
+                      ((uint32_t)dt.minute << 5) |
+                      ((uint32_t)dt.second >> 1));
 }
 
 static int read_sector(uint64_t lba, unsigned char *buf)
@@ -413,15 +446,18 @@ static int to_83(const char *comp, char out[11])
     return 0;
 }
 
-/* ディレクトリの鎖から、8.3 名が一致する項目を探す */
-static int find_in_dir(uint32_t dir_cluster, const char name83[11],
-                       struct dir_entry *out)
+/* ディレクトリの鎖から、8.3 名が一致する項目を探す。
+ * off_out があれば、見つけた項のバイト位置も返す
+ * (書き込み側がその項を書き戻すために使う) */
+static int find_in_dir2(uint32_t dir_cluster, const char name83[11],
+                        struct dir_entry *out, uint64_t *off_out)
 {
     unsigned char e[32];
     uint64_t pos = 0;
 
     for (;;) {
         int i, same = 1;
+        uint64_t cur = pos;
         if (chain_read(dir_cluster, pos, e, 32,
                        0xFFFFFFFFFFFFFFFFULL) < 32) {
             return -1;  /* 鎖の終わりまで無かった */
@@ -449,8 +485,17 @@ static int find_in_dir(uint32_t dir_cluster, const char name83[11],
             ((uint32_t)rd16(e + 20) << 16) | rd16(e + 26);
         out->size = rd32(e + 28);
         out->is_dir = (e[11] & 0x10) != 0;
+        if (off_out != 0) {
+            *off_out = cur;
+        }
         return 0;
     }
+}
+
+static int find_in_dir(uint32_t dir_cluster, const char name83[11],
+                       struct dir_entry *out)
+{
+    return find_in_dir2(dir_cluster, name83, out, 0);
 }
 
 /* パスのディレクトリ部分をたどって、対象ディレクトリの
@@ -486,11 +531,16 @@ int fat_find(const char *path, struct fat_file *out)
     char buf[128];
     char *comps[10];
     int ncomp = 0, i, n = 0;
-    uint32_t cur = root_cluster;
+    uint32_t cur;
 
     if (fat_ensure_mounted() != 0) {
         return -1;
     }
+    /* cur の初期値はマウントの後で読む。マウント前は
+     * root_cluster がまだ 0 で、最初の呼び出しが fat_find
+     * だと根を外す (trap.c 経由では先にマウントされるため
+     * 隠れていた。ホスト検証で発見、2026-11-07) */
+    cur = root_cluster;
     while (path[n] != '\0' && n < (int)sizeof(buf) - 1) {
         buf[n] = path[n];
         n++;
@@ -529,8 +579,9 @@ int fat_find(const char *path, struct fat_file *out)
     for (i = 0; i < ncomp; i++) {
         char name83[11];
         struct dir_entry e;
+        uint64_t off = 0;
         if (to_83(comps[i], name83) != 0 ||
-            find_in_dir(cur, name83, &e) != 0) {
+            find_in_dir2(cur, name83, &e, &off) != 0) {
             return -1;
         }
         if (i == ncomp - 1) {
@@ -539,6 +590,14 @@ int fat_find(const char *path, struct fat_file *out)
             }
             out->first_cluster = e.first_cluster;
             out->size = e.size;
+            /* 目録項の位置も記録する (書き込み側と unlink の
+             * 照合用。読み取り専用の利用では使わない) */
+            out->dir_cluster = cur;
+            out->dir_off = off;
+            out->tail_cluster = 0;
+            out->capacity = 0;
+            out->has_dir = 1;
+            out->dirty = 0;
             return 0;
         }
         if (!e.is_dir) {
@@ -603,4 +662,570 @@ int fat_list(const char *dir_path, int index, char *name,
         *is_dir = (e[11] & 0x10) != 0;
         return 1;
     }
+}
+
+/* --- 書き込み (doc/sd-write-design.md 段2) ----------------------------
+ *
+ * 書き込みの順序 (設計の決め事2): データを先に書き、FAT の
+ * リンクはキャッシュに溜め、close で「FAT → 目録項 (サイズ
+ * 最後)」の順に確定させる。電源断の被害は書いていた
+ * ファイルに寄る形にし、ジャーナルは持たない (割り切り)。 */
+
+/* 鎖へ pos から n バイト書く (鎖の容量の範囲内が前提)。
+ * 書けたバイト数を返す。部分セクタは読み戻してから直す
+ * (chain_read の鏡像) */
+static uint64_t chain_write_bytes(uint32_t first_cluster, uint64_t pos,
+                                  const unsigned char *src, uint64_t n)
+{
+    uint64_t cluster_bytes = (uint64_t)sec_per_cluster * SECTOR;
+    uint64_t done = 0;
+    uint32_t cluster = first_cluster;
+    uint64_t idx, guard = total_clusters + 2;
+
+    idx = pos / cluster_bytes;
+    while (idx > 0) {
+        if (cluster < 2 || cluster >= 0x0FFFFFF8 || guard-- == 0) {
+            return 0;
+        }
+        cluster = fat_next(cluster);
+        idx--;
+    }
+    while (done < n) {
+        uint64_t in_cluster = (pos + done) % cluster_bytes;
+        uint64_t lba, in_sector, chunk, j;
+
+        if (cluster < 2 || cluster >= 0x0FFFFFF8) {
+            break;  /* 鎖の終わり */
+        }
+        lba = cluster_lba(cluster) + in_cluster / SECTOR;
+        in_sector = in_cluster % SECTOR;
+        chunk = SECTOR - in_sector;
+        if (chunk > n - done) {
+            chunk = n - done;
+        }
+        if (chunk > cluster_bytes - in_cluster) {
+            chunk = cluster_bytes - in_cluster;
+        }
+        if (in_sector == 0 && chunk == SECTOR) {
+            if (write_sector(lba, src + done) != 0) {
+                break;
+            }
+        } else {
+            if (read_sector(lba, bounce) != 0) {
+                break;
+            }
+            for (j = 0; j < chunk; j++) {
+                bounce[in_sector + j] = src[done + j];
+            }
+            if (write_sector(lba, bounce) != 0) {
+                break;
+            }
+        }
+        done += chunk;
+        if ((pos + done) % cluster_bytes == 0 && done < n) {
+            cluster = fat_next(cluster);
+            if (guard-- == 0) {
+                break;
+            }
+        }
+    }
+    return done;
+}
+
+/* 目録項 1 つ (32 バイト) の読み書き */
+static int entry_read(uint32_t dir_cluster, uint64_t off,
+                      unsigned char e[32])
+{
+    return chain_read(dir_cluster, off, e, 32,
+                      0xFFFFFFFFFFFFFFFFULL) == 32 ? 0 : -1;
+}
+
+static int entry_write(uint32_t dir_cluster, uint64_t off,
+                       const unsigned char e[32])
+{
+    return chain_write_bytes(dir_cluster, off, e, 32) == 32 ? 0 : -1;
+}
+
+/* 鎖の最後のクラスタ (と、数えればクラスタ数) */
+static uint32_t chain_last(uint32_t first, uint64_t *count_out)
+{
+    uint32_t c = first, last = first;
+    uint64_t n = 0, guard = total_clusters + 2;
+
+    while (c >= 2 && c < 0x0FFFFFF8 && guard-- > 0) {
+        last = c;
+        n++;
+        c = fat_next(c);
+    }
+    if (count_out != 0) {
+        *count_out = n;
+    }
+    return last;
+}
+
+/* 空きクラスタを [from, to) から探す。無ければ 0 */
+static uint32_t scan_free(uint32_t from, uint32_t to)
+{
+    uint32_t c;
+    for (c = from; c < to; c++) {
+        if (fat_entry_get(c) == 0) {
+            return c;
+        }
+    }
+    return 0;
+}
+
+/* 空きクラスタを 1 つ確保し、鎖の終端印を打つ。無ければ 0。
+ * 探索は FSInfo 由来のヒントから始め、末尾まで行ったら
+ * 先頭へ回る (大きなカードでの素朴な対策。実測は未決事項) */
+static uint32_t alloc_cluster(void)
+{
+    uint32_t limit = (uint32_t)(total_clusters + 2);
+    uint32_t c = scan_free(alloc_hint, limit);
+
+    if (c == 0) {
+        c = scan_free(2, alloc_hint);
+    }
+    if (c == 0) {
+        return 0;  /* 空きが無い */
+    }
+    if (fat_entry_set(c, 0x0FFFFFFFu) != 0) {
+        return 0;
+    }
+    if (free_clusters != 0xFFFFFFFFFFFFFFFFULL) {
+        free_clusters--;
+    }
+    alloc_hint = c + 1;
+    if (alloc_hint >= limit) {
+        alloc_hint = 2;
+    }
+    return c;
+}
+
+/* 鎖をまるごと空きに戻す。返した数を返す */
+static uint64_t free_chain(uint32_t first)
+{
+    uint64_t freed = 0, guard = total_clusters + 2;
+    uint32_t c = first;
+
+    while (c >= 2 && c < 0x0FFFFFF8 && guard-- > 0) {
+        uint32_t next = fat_next(c);
+        if (fat_entry_set(c, 0) != 0) {
+            break;
+        }
+        freed++;
+        c = next;
+    }
+    if (free_clusters != 0xFFFFFFFFFFFFFFFFULL) {
+        free_clusters += freed;
+    }
+    return freed;
+}
+
+/* FSInfo の空き数とヒントを実態に合わせて書き戻す。
+ * FSInfo が無い・空き数が不明なボリュームでは何もしない */
+static int fsinfo_sync(void)
+{
+    if (fsinfo_lba == 0 ||
+        free_clusters == 0xFFFFFFFFFFFFFFFFULL) {
+        return 0;
+    }
+    if (read_sector(fsinfo_lba, bounce) != 0) {
+        return -1;
+    }
+    wr32(bounce + 488, (uint32_t)free_clusters);
+    wr32(bounce + 492, alloc_hint);
+    return write_sector(fsinfo_lba, bounce);
+}
+
+/* パスを「親ディレクトリのパス」と「最後の要素」に分ける。
+ * 親は "" (ルート) になり得る。成功 0、形が悪ければ -1 */
+static int split_parent(const char *path, char *dir, int dir_max,
+                        char *last, int last_max)
+{
+    int i = 0, slash = -1, n;
+
+    while (path[i] != '\0') {
+        if (path[i] == '/') {
+            slash = i;
+        }
+        i++;
+    }
+    if (slash < 0) {
+        n = 0;
+        dir[0] = '\0';
+    } else {
+        if (slash >= dir_max) {
+            return -1;
+        }
+        for (n = 0; n < slash; n++) {
+            dir[n] = path[n];
+        }
+        dir[n] = '\0';
+    }
+    n = 0;
+    i = slash + 1;
+    while (path[i] != '\0') {
+        if (n >= last_max - 1) {
+            return -1;
+        }
+        last[n++] = path[i++];
+    }
+    last[n] = '\0';
+    if (n == 0) {
+        return -1;  /* 最後の要素が無い */
+    }
+    return 0;
+}
+
+/* ディレクトリの鎖の中の空きスロット (0x00 = ここから先は
+ * 未使用、0xE5 = 削除済み) を探す。見つかれば 0 で位置を、
+ * 鎖が満杯なら 1 で「末尾の位置」(= 新しいクラスタの先頭に
+ * なる位置) を返す */
+static int find_free_slot(uint32_t dir_cluster, uint64_t *off_out)
+{
+    unsigned char e[32];
+    uint64_t pos = 0;
+
+    for (;;) {
+        if (chain_read(dir_cluster, pos, e, 32,
+                       0xFFFFFFFFFFFFFFFFULL) < 32) {
+            *off_out = pos;
+            return 1;  /* 鎖の終わり = 満杯 */
+        }
+        if (e[0] == 0x00 || e[0] == 0xE5) {
+            *off_out = pos;
+            return 0;
+        }
+        pos += 32;
+    }
+}
+
+/* クラスタを 0 で埋める (ディレクトリ用) */
+static int zero_cluster(uint32_t cluster)
+{
+    uint32_t s;
+    int i;
+
+    for (i = 0; i < SECTOR; i++) {
+        bounce[i] = 0;
+    }
+    for (s = 0; s < sec_per_cluster; s++) {
+        if (write_sector(cluster_lba(cluster) + s, bounce) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ディレクトリの鎖を 1 クラスタ伸ばす (0 埋めしてから繋ぐ) */
+static int extend_dir_chain(uint32_t dir_cluster)
+{
+    uint32_t last = chain_last(dir_cluster, 0);
+    uint32_t nc = alloc_cluster();
+
+    if (nc == 0) {
+        return -1;
+    }
+    if (zero_cluster(nc) != 0) {
+        return -1;
+    }
+    if (fat_entry_set(last, nc) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* 目録項を組み立てる */
+static void build_entry(unsigned char ent[32], const char name83[11],
+                        uint8_t attr, uint32_t cluster, uint32_t size,
+                        uint16_t date, uint16_t tim)
+{
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        ent[i] = 0;
+    }
+    for (i = 0; i < 11; i++) {
+        ent[i] = (unsigned char)name83[i];
+    }
+    ent[11] = attr;
+    wr16(ent + 14, tim);   /* 作成時刻 */
+    wr16(ent + 16, date);  /* 作成日 */
+    wr16(ent + 18, date);  /* アクセス日 */
+    wr16(ent + 20, (uint16_t)(cluster >> 16));
+    wr16(ent + 22, tim);   /* 更新時刻 */
+    wr16(ent + 24, date);  /* 更新日 */
+    wr16(ent + 26, (uint16_t)(cluster & 0xFFFF));
+    wr32(ent + 28, size);
+}
+
+/* 親ディレクトリと名前から、書き込み先の目録項の場所を
+ * 決める。同名ファイルがあれば *exist にその内容を入れて
+ * 0 を返す (呼び出し側が切り捨て等を判断する)。無ければ
+ * 空きスロット (必要なら鎖を伸ばす) の位置を返して 1。
+ * 失敗は -1 */
+static int prepare_slot(const char *path, uint32_t *dir_cluster_out,
+                        char name83[11], uint64_t *off_out,
+                        struct dir_entry *exist)
+{
+    char dirpart[128], last[40];
+    uint32_t dir_cluster;
+
+    if (split_parent(path, dirpart, sizeof(dirpart),
+                     last, sizeof(last)) != 0 ||
+        to_83(last, name83) != 0 ||
+        resolve_dir(dirpart, &dir_cluster) != 0) {
+        return -1;
+    }
+    *dir_cluster_out = dir_cluster;
+    if (find_in_dir2(dir_cluster, name83, exist, off_out) == 0) {
+        return 0;  /* 既にある */
+    }
+    if (find_free_slot(dir_cluster, off_out) == 1) {
+        /* 満杯: 1 クラスタ伸ばして、その先頭を使う */
+        if (extend_dir_chain(dir_cluster) != 0) {
+            return -1;
+        }
+    }
+    return 1;
+}
+
+int fat_create(const char *path, struct fat_file *out)
+{
+    char name83[11];
+    uint32_t dir_cluster;
+    uint64_t off;
+    struct dir_entry exist;
+    uint16_t date, tim;
+    int r;
+
+    if (fat_ensure_mounted() != 0) {
+        return -1;
+    }
+    r = prepare_slot(path, &dir_cluster, name83, &off, &exist);
+    if (r < 0) {
+        return -1;
+    }
+    fat_now(&date, &tim);
+    if (r == 0) {
+        unsigned char ent[32];
+        if (exist.is_dir) {
+            return -1;  /* ディレクトリは作り直せない */
+        }
+        /* 切り捨て: 鎖を返してから項を空にする (FAT → 目録
+         * の順)。作成日時は元の項を保ち、更新日時だけ進める */
+        free_chain(exist.first_cluster);
+        if (fat_cache_flush() != 0 ||
+            entry_read(dir_cluster, off, ent) != 0) {
+            return -1;
+        }
+        wr16(ent + 20, 0);
+        wr16(ent + 26, 0);
+        wr32(ent + 28, 0);
+        wr16(ent + 22, tim);
+        wr16(ent + 24, date);
+        if (entry_write(dir_cluster, off, ent) != 0) {
+            return -1;
+        }
+    } else {
+        unsigned char ent[32];
+        build_entry(ent, name83, 0x20, 0, 0, date, tim);
+        if (entry_write(dir_cluster, off, ent) != 0) {
+            return -1;
+        }
+    }
+    out->first_cluster = 0;
+    out->size = 0;
+    out->dir_cluster = dir_cluster;
+    out->dir_off = off;
+    out->tail_cluster = 0;
+    out->capacity = 0;
+    out->has_dir = 1;
+    out->dirty = 0;
+    return 0;
+}
+
+/* ファイルの鎖を need バイト収まるまで育てる */
+static int chain_grow(struct fat_file *f, uint64_t need)
+{
+    uint64_t cluster_bytes = (uint64_t)sec_per_cluster * SECTOR;
+
+    while (f->capacity < need) {
+        uint32_t c = alloc_cluster();
+        if (c == 0) {
+            return -1;  /* 空きが尽きた */
+        }
+        if (f->first_cluster == 0) {
+            f->first_cluster = c;
+        } else if (fat_entry_set(f->tail_cluster, c) != 0) {
+            return -1;
+        }
+        f->tail_cluster = c;
+        f->capacity += cluster_bytes;
+    }
+    return 0;
+}
+
+uint64_t fat_write_data(struct fat_file *f,
+                        const unsigned char *src, uint64_t n)
+{
+    uint64_t pos, written;
+
+    if (!f->has_dir || fat_ensure_mounted() != 0 || n == 0) {
+        return 0;
+    }
+    if (f->capacity == 0 && f->first_cluster != 0) {
+        /* 作成を経ていないファイル (防御): 鎖を数え直す */
+        uint64_t cnt = 0;
+        f->tail_cluster = chain_last(f->first_cluster, &cnt);
+        f->capacity = cnt * (uint64_t)sec_per_cluster * SECTOR;
+    }
+    pos = f->size;
+    if (chain_grow(f, pos + n) != 0 && f->capacity <= pos) {
+        if (f->first_cluster != 0) {
+            f->dirty = 1;  /* 確保だけ進んだ分は close で残す */
+        }
+        return 0;
+    }
+    if (pos + n > f->capacity) {
+        n = f->capacity - pos;  /* 育った分まで */
+    }
+    written = chain_write_bytes(f->first_cluster, pos, src, n);
+    if (written > 0) {
+        f->size = pos + written;
+        f->dirty = 1;
+    }
+    return written;
+}
+
+int fat_close_write(struct fat_file *f)
+{
+    unsigned char ent[32];
+    uint16_t date, tim;
+
+    if (!f->has_dir) {
+        return -1;
+    }
+    if (!f->dirty) {
+        return 0;  /* 書き戻すものが無い */
+    }
+    /* FAT → 目録項 → FSInfo の順に確定させる */
+    if (fat_cache_flush() != 0) {
+        return -1;
+    }
+    if (entry_read(f->dir_cluster, f->dir_off, ent) != 0) {
+        return -1;
+    }
+    if (ent[0] == 0x00 || ent[0] == 0xE5) {
+        return -1;  /* 項が消えている (unlink と競合した等) */
+    }
+    wr16(ent + 20, (uint16_t)(f->first_cluster >> 16));
+    wr16(ent + 26, (uint16_t)(f->first_cluster & 0xFFFF));
+    wr32(ent + 28, (uint32_t)f->size);
+    fat_now(&date, &tim);
+    wr16(ent + 18, date);
+    wr16(ent + 22, tim);
+    wr16(ent + 24, date);
+    if (entry_write(f->dir_cluster, f->dir_off, ent) != 0) {
+        return -1;
+    }
+    if (fsinfo_sync() != 0) {
+        return -1;
+    }
+    f->dirty = 0;
+    return 0;
+}
+
+int fat_unlink(const char *path)
+{
+    char dirpart[128], last[40];
+    char name83[11];
+    uint32_t dir_cluster;
+    struct dir_entry e;
+    uint64_t off;
+    unsigned char ent[32];
+
+    if (fat_ensure_mounted() != 0 ||
+        split_parent(path, dirpart, sizeof(dirpart),
+                     last, sizeof(last)) != 0 ||
+        to_83(last, name83) != 0 ||
+        resolve_dir(dirpart, &dir_cluster) != 0 ||
+        find_in_dir2(dir_cluster, name83, &e, &off) != 0) {
+        return -1;
+    }
+    if (e.is_dir) {
+        return -1;  /* ディレクトリは unlink しない */
+    }
+    /* 項を先に消す。中断したときの被害は「鎖が迷子になる」
+     * 側に寄せ、生きている項が解放済みクラスタを指す形は
+     * 作らない */
+    if (entry_read(dir_cluster, off, ent) != 0) {
+        return -1;
+    }
+    ent[0] = 0xE5;
+    if (entry_write(dir_cluster, off, ent) != 0) {
+        return -1;
+    }
+    free_chain(e.first_cluster);
+    if (fat_cache_flush() != 0) {
+        return -1;
+    }
+    return fsinfo_sync();
+}
+
+int fat_mkdir(const char *path)
+{
+    char name83[11];
+    uint32_t dir_cluster, nc;
+    uint64_t off;
+    struct dir_entry exist;
+    uint16_t date, tim;
+    unsigned char dots[64];
+    unsigned char ent[32];
+    int r;
+
+    if (fat_ensure_mounted() != 0) {
+        return -1;
+    }
+    r = prepare_slot(path, &dir_cluster, name83, &off, &exist);
+    if (r != 1) {
+        return -1;  /* 既にある (r == 0) か、親がたどれない */
+    }
+    nc = alloc_cluster();
+    if (nc == 0) {
+        return -1;
+    }
+    if (zero_cluster(nc) != 0) {
+        return -1;
+    }
+    fat_now(&date, &tim);
+    /* "." は自分、".." は親 (親がルートなら 0 が約束)。
+     * 名前は空白詰めの 11 バイトを組み立てて渡す */
+    {
+        char dot1[11], dot2[11];
+        int i;
+        for (i = 0; i < 11; i++) {
+            dot1[i] = ' ';
+            dot2[i] = ' ';
+        }
+        dot1[0] = '.';
+        dot2[0] = '.';
+        dot2[1] = '.';
+        build_entry(dots, dot1, 0x10, nc, 0, date, tim);
+        build_entry(dots + 32, dot2, 0x10,
+                    dir_cluster == root_cluster ? 0 : dir_cluster,
+                    0, date, tim);
+    }
+    if (chain_write_bytes(nc, 0, dots, 64) != 64) {
+        return -1;
+    }
+    build_entry(ent, name83, 0x10, nc, 0, date, tim);
+    if (entry_write(dir_cluster, off, ent) != 0) {
+        return -1;
+    }
+    if (fat_cache_flush() != 0) {
+        return -1;
+    }
+    return fsinfo_sync();
 }
