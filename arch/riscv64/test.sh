@@ -551,8 +551,8 @@ echo "== scenario Z: gfx windows (stage B) =="
 # 走らせると、それぞれの窓が開き (open r=1 / r=2)、両方が
 # 自分の窓へ描き続ける (rect r=1 / r=2 が両方出る)。
 # fg (省略時は一番大きい番号 = ジョブ 2) で持ち主が移ると
-# フォーカスが移り (focus r=2)、終わると done → フォーカス
-# が前面へ戻り (focus r=0)、窓が回収される (close r=2)。
+# フォーカスが移り (focus r=2)、終わると done → 窓が回収
+# され (close r=2)、フォーカスが前面へ戻る (focus r=0)。
 # 照合は dmesg の gfx 要約行。ピクセルの見た目は目視の担当
 { sleep 3; printf 'run gjob.elf 12 &\n'; sleep 1; \
   printf 'run gjob.elf 12 &\n'; sleep 1; \
@@ -568,8 +568,8 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "job 1: gjob.elf running" "job 2: gjob.elf running" \
     "gfx: open r=1 \"gjob.elf\"" "gfx: open r=2 \"gjob.elf\"" \
     "gfx: rect r=1" "gfx: rect r=2" \
-    "gfx: focus r=2" "gfx: done r=2" "gfx: focus r=0" \
-    "gfx: close r=2" \
+    "gfx: focus r=2" "gfx: done r=2" "gfx: close r=2" \
+    "gfx: focus r=0" \
     "[kernel] back from user program"
 report "Z gfx windows (open/draw/focus/done/close via dmesg)" $?
 
