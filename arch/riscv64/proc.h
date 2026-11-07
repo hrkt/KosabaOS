@@ -35,6 +35,10 @@ int sched_wake_due(void);         /* 起床時刻が来たタスクを READY に
  * 触らないので、トラップ文脈からも呼べる */
 void sched_poll(void);
 
+/* 段2: スケジューラの常駐化。時計タスクを作って以後ずっと
+ * 生かしておく。kmain が 1 回だけ呼ぶ */
+void sched_start(void);
+
 /* トラップをまたぐスケジューリングでは、CSR の sepc / sstatus は
  * CPU に 1 組しかないので、タスクごとに退避・復元が要る */
 void sched_save_trapstate(uint64_t sepc, uint64_t sstatus);

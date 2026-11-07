@@ -458,6 +458,35 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "[kernel] back from user program"
 report "V SD write (create/write/read-back/subdir/unlink)" $?
 
+echo "== scenario W: clock task (scheduler stage 1+2) =="
+# スケジューラ段1 (sleep) + 段2 (時計タスクの常駐、
+# doc/scheduler-plan.md)。Nish の入力待ち (SYS_GETC の中で
+# ブロック) の間に何も送らなくても、時計タスクが約 1 秒
+# ごとに sleep から起き続けていることを、ps の起床回数
+# (wakes) が増えることと、dmesg の "clock: wake" 記録
+# (2 回分以上) で見る。段2 より前は、この待ちの間は
+# タイマ割り込みが戻らず tick も止まっていた
+{ sleep 3; printf 'ps\n'; sleep 1; \
+  sleep 5; \
+  printf 'ps\n'; sleep 1; \
+  printf 'dmesg\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-w.log 2>&1 || true
+out=$(strip_ticks < test-w.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "task 3:" "task 3:" "clock: wake" "clock: wake" || rc=1
+# 起床回数は生ログから拾う (check_order は $out を消費する)
+wakes=$(tr -d '\000' < test-w.log | grep -ao 'wakes=[0-9][0-9]*' | sed 's/wakes=//')
+w1=$(printf '%s\n' "$wakes" | sed -n 1p)
+w2=$(printf '%s\n' "$wakes" | sed -n 2p)
+if [ -z "$w1" ] || [ -z "$w2" ] || [ $((w2 - w1)) -lt 3 ]; then
+    echo "  wakes did not advance enough during input wait: $w1 -> $w2"
+    rc=1
+fi
+report "W clock task (wakes advance during Nish input wait)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

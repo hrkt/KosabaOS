@@ -56,6 +56,17 @@ char uart_getc(void)
                            * 読むと「受信データあり」は自動で消える */
 }
 
+/* 待たずに 1 文字受け取る。届いていなければ -1。
+ * 待ちの間に他のタスクを回したい場所 (スケジューラ段2) が
+ * ポーリングで使う */
+int uart_try_getc(void)
+{
+    if ((REG(5) & LSR_DATA_READY) == 0) {
+        return -1;
+    }
+    return (unsigned char)REG(0);
+}
+
 void uart_puts(const char *s)
 {
     while (*s != '\0') {

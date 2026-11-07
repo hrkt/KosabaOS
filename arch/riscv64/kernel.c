@@ -86,6 +86,20 @@ static void start_user_named(const char *name)
 }
 #endif /* BOARD_FEATURE_SMODE_PATH */
 
+/* カーネルコンソールの 1 文字待ち。待ちの間もスケジューラを
+ * 回し、寝ているタスク (時計) が起きられるようにする
+ * (スケジューラ段2)。コンソールの入力待ちで OS の他の仕事が
+ * 止まらないための口で、待ちの合間に sched_poll() を呼ぶ */
+static char console_getc(void)
+{
+    int c;
+
+    while ((c = uart_try_getc()) < 0) {
+        sched_poll();
+    }
+    return (char)c;
+}
+
 /* カーネルコンソールの行入力: エコーと BS だけの最小実装。
  * 入った文字数を返す (buf は NUL 終端される) */
 static int console_read_line(char *buf, int cap)
@@ -93,7 +107,7 @@ static int console_read_line(char *buf, int cap)
     int n = 0;
 
     for (;;) {
-        char c = uart_getc();
+        char c = console_getc();
         if (c == '\n' || c == '\r') {
             uart_puts("\r\n");
             break;
@@ -168,7 +182,8 @@ void kmain(void)
 #if BOARD_FEATURE_LCD
     /* LCD にタイトルと最初のステージを出す。以後のステージは
      * 各初期化が終わるたびに 1 行ずつ足す。最後に tick 表示を
-     * 有効化すると、割り込みハンドラが毎秒数字を描き直す */
+     * 有効化すると、時計タスクが毎秒数字を描き直す
+     * (スケジューラ段2) */
     lcd_init();
     lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, LCD_RGB(24, 24, 24));
     lcd_draw_text(64, 12, "KOSABAOS", 4, LCD_WHITE);
@@ -194,6 +209,8 @@ void kmain(void)
     kput_dec(page_free_count());
     kputc('\n');
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
+    sched_start();  /* 時計タスクの常駐開始 (スケジューラ段2)。
+                     * 以後、入力待ちの間も時計が進む */
 #endif
 #if BOARD_FEATURE_MMODE_TRAP
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
@@ -247,7 +264,7 @@ void kmain(void)
 #endif
 
     for (;;) {
-        char c = uart_getc();  /* 1 文字届くまで待って受け取る */
+        char c = console_getc();  /* 待ちの間は時計タスクも進む */
 #if BOARD_FEATURE_SMODE_PATH
         if (c == 'x') {
             vm_fault_demo();   /* 'x' キーでページフォルトのデモ */

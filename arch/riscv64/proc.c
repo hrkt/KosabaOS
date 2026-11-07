@@ -31,12 +31,20 @@
  *   タイマ割り込みと、入力待ちのポーリングからの schedule()
  *   呼び出し。段2 で sched_start() が時計タスクを常駐させて
  *   からは、スケジューラはずっと生きたままになる。
+ *
+ * スケジューラ段2 (時計タスクの常駐):
+ *   ファイル末尾の clock_body / sched_start を参照。表示の
+ *   更新は割り込み文脈ではなく、このタスクの仕事。
  */
 
 #include <stdint.h>
 #include "proc.h"
 #include "uart.h"
 #include "board.h"  /* BOARD_TIMER_HZ (sleep の時刻換算) */
+#include "klog.h"   /* 時計タスクの起床記録 (lkputs、段2) */
+#if BOARD_FEATURE_LCD
+#include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
+#endif
 
 
 #define NTASK 4          /* 0 = main (kmain)、1 = A、2 = B、3 = 時計 */
@@ -121,13 +129,29 @@ void schedule(void)
     /* 切り替え相手がいない: そのまま戻る */
 }
 
+extern void trap_entry(void);  /* trap.S: カーネル側のトラップ入口 */
+
 /* 通常の文脈では割り込み許可 (sstatus.SIE) が前提。
  * トラップ処理の最中から切り替わって戻ってきた場合、CPU の
  * SIE は落ちたままなので、通常文脈に戻る yield の出口と
- * タスクの入口 (トランポリン) で立て直す */
+ * タスクの入口 (トランポリン) で立て直す。
+ *
+ * ただし立て直してよいのは、トラップの入口がカーネル側
+ * (trap_entry) のときだけ。ユーザープログラムの実行中は
+ * stvec が trap_entry_user で、sscratch はトラップ専用
+ * スタックではなくユーザーの sp を保持している。そういう
+ * 文脈 (SYS_GETC の中から初めて切り替わったタスクなど) で
+ * 割り込みを入れると、次の割り込みが入口で sp を取り違え、
+ * ユーザーのスタックへ退避を書いて壊れる (段2 で実踏み。
+ * test-w の初期版で Nish が落ちた)。入口がユーザー側の間は
+ * 割り込みを入れず、ポーリングで回す */
 static inline void enable_interrupts(void)
 {
-    asm volatile("csrs sstatus, 0x2");
+    uint64_t vec;
+    asm volatile("csrr %0, stvec" : "=r"(vec));
+    if (vec == (uint64_t)trap_entry) {
+        asm volatile("csrs sstatus, 0x2");
+    }
 }
 
 void yield(void)
@@ -229,17 +253,15 @@ static void task_create(int idx, void (*fn)(void), char letter)
 }
 
 /* 全タスクが DONE になるまで、自分も yield し続けて待つ。
- * 段1 の時点ではスケジューラの生死はここの出し入れが担う
- * (段2 で sched_start() が常駐化してからは、そちらが担う) */
+ * スケジューラは sched_start() (段2) 以後ずっと生きている
+ * ので、ここでは出し入れしない */
 static void run_until_done(void)
 {
     tasks[0].state = TASK_READY;
     current = 0;
-    sched_active = 1;
     while (tasks[1].state != TASK_DONE || tasks[2].state != TASK_DONE) {
         yield();
     }
-    sched_active = 0;
 }
 
 /* --- デモのタスク本体 ---------------------------------------------- */
@@ -340,4 +362,51 @@ int proc_list(char *buf, unsigned long max)
         }
     }
     return (int)n;
+}
+
+/* --- 時計タスク (段2: 部分プロセス第 1 号) --------------------------
+ *
+ * スケジューラ段2 (doc/scheduler-plan.md)。OS の一部 (時刻
+ * 表示) を、独立した常駐カーネルタスクとして動かす。
+ * 置き時計は最初カーネルの描画経路 (K210 では M シムの
+ * 割り込み文脈) で達成したが、その形では「入力待ちで
+ * 割り込みが戻らない間は表示が止まる」弱点があった。
+ * ここでは表示の更新を、sleep して起きるタスクの仕事に
+ * 移す。入力待ちの側 (SYS_GETC とカーネルコンソール) が
+ * 待ちの間にスケジューラを回すので、待ちの間も秒が進む。 */
+
+#define CLOCK_TASK 3   /* タスク表の時計の席 */
+
+static void clock_body(void)
+{
+    uint64_t start = r_time();
+
+    for (;;) {
+        task_sleep_ms(1000);
+        /* 起きたことはログにだけ残す (コンソールには出さない)。
+         * virt ではこれが観測手段になり、実機でも dmesg と
+         * ps (wakes) で「待ちの間も起きていた」ことが追える */
+        lkputs("clock: wake ");
+        lkput_dec(tasks[current].wakes);
+        lkputc('\n');
+#if BOARD_FEATURE_LCD
+        /* 表示する秒数は生の時刻 (time CSR) から数える。
+         * trap.c の tick は入力待ちで割り込みが滞ると一緒に
+         * 滞るが、こちらは滞らない。壁時計が有効な間は
+         * lcd 側が RTC を読んで HH:MM:SS を描くので、この
+         * 秒数は RTC 未設定のときの表示にだけ使われる */
+        lcd_tick_draw((r_time() - start) / BOARD_TIMER_HZ);
+#endif
+    }
+}
+
+/* スケジューラの常駐化 (段2): 時計タスクを作り、以後ずっと
+ * スケジューラを生かしておく。kmain が初期化の途中で
+ * 1 回だけ呼ぶ */
+void sched_start(void)
+{
+    tasks[0].state = TASK_READY;
+    current = 0;
+    task_create(CLOCK_TASK, clock_body, 0);
+    sched_active = 1;
 }

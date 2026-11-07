@@ -55,8 +55,8 @@ void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
 
 /* 覚えた場所の表示を描き直す。RTC が有効な日時を返す間は
  * 壁時計 "HH:MM:SS" (UTC)、それ以外は引数の秒数 (10 進)。
- * setup 前は何もしない。割り込みハンドラから呼ばれる想定で、
- * 描画はこの 1 箇所だけ */
+ * setup 前は何もしない。スケジューラ段2 以後は時計タスク
+ * (proc.c の clock_body) から呼ばれる。描画はこの 1 箇所だけ */
 void lcd_tick_draw(uint64_t seconds);
 
 #endif

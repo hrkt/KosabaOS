@@ -22,6 +22,7 @@
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -323,6 +324,44 @@ def main():
     ok = command("cat /sd/K15TEST.TXT", "cat: no such file") and ok
     report("K15 SD write (create/write/read-back/unlink, "
            "existing files intact)", ok)
+
+    print("== scenario K16: clock task (scheduler stage 2) ==")
+    # スケジューラ段2 (doc/scheduler-plan.md): 時計タスクが
+    # 常駐し、入力待ちの間も sleep から起き続けていることを
+    # ps の起床回数 (wakes) で見る。Nish のプロンプトで
+    # 数秒待つ → 'exit' でカーネルコンソールに落ちて 5 秒
+    # 待つ → 's' で Nish に戻る、の流れで、両方の待ちを
+    # またいで wakes が増えていることを確認する (待ちの
+    # 前後で ps を 2 回取り、差を見る)。
+    # LCD の秒表示が実際に進むところはシリアルからは
+    # 見えないので、人間の目視の担当 (このシナリオは
+    # シリアル側の証跡 = wakes と dmesg の記録まで)
+    def ps_wakes():
+        cur = log_total()
+        send_chunked("ps")
+        call_tool("serial_send", {"text": "", "newline": True})
+        if not expect("wakes=", 10000, cursor=cur):
+            return None
+        r = call_tool("serial_read", {"cursor": cur})
+        m = re.findall(r"task 3: (?:sleeping|ready) wakes=(\d+)",
+                       r.get("text", ""))
+        return int(m[-1]) if m else None
+
+    w1 = ps_wakes()
+    ok = w1 is not None
+    ok = command("exit", "back from user program") and ok
+    time.sleep(5)  # カーネルコンソールの入力待ち
+    cur = log_total()
+    send_chunked("s")
+    ok = expect("Nish, the KosabaOS shell", 10000, cursor=cur) and ok
+    w2 = ps_wakes()
+    ok = w2 is not None and ok
+    if w1 is not None and w2 is not None:
+        print(f"   wakes: {w1} -> {w2} (across console wait)")
+        if w2 - w1 < 3:
+            ok = False
+    ok = command("dmesg", "clock: wake") and ok
+    report("K16 clock task (wakes advance across input waits)", ok)
 
     print("== summary ==")
     if fails == 0:

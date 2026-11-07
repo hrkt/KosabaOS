@@ -715,9 +715,21 @@ static int do_syscall(uint64_t *frame)
         uart_putc((char)frame[FRAME_A0]);
         frame[FRAME_A0] = 0;
         break;
-    case SYS_GETC:
-        frame[FRAME_A0] = (uint64_t)uart_getc();
+    case SYS_GETC: {
+        /* 1 文字届くまで待つ。待ちの間もスケジューラを回し、
+         * 寝ているタスク (時計) が起きられるようにする
+         * (スケジューラ段2)。ここはトラップ文脈で割り込みが
+         * 入らない間なので、タイマ割り込みはこの待ちを
+         * 助けてくれない。代わりにポーリングの合間に
+         * sched_poll() で番を回す (割り込み状態に触る
+         * yield() はここでは使えない) */
+        int c;
+        while ((c = uart_try_getc()) < 0) {
+            sched_poll();
+        }
+        frame[FRAME_A0] = (uint64_t)(unsigned char)c;
         break;
+    }
     case SYS_EXIT:
         if (exec_depth > 0) {
             /* a0 = 終了ステータス。そのまま親の exec の戻り値に

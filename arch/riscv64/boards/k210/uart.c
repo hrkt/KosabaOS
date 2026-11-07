@@ -92,6 +92,18 @@ char uart_getc(void)
     return (char)(v & 0xFFu);
 }
 
+/* 待たずに 1 文字受け取る。受信 FIFO が空なら -1。
+ * 待ちの間に他のタスクを回したい場所 (スケジューラ段2) が
+ * ポーリングで使う */
+int uart_try_getc(void)
+{
+    uint32_t v = UARTHS_RXDATA;
+    if (v & 0x80000000u) {
+        return -1;
+    }
+    return (int)(v & 0xFFu);
+}
+
 void uart_puts(const char *s)
 {
     while (*s != '\0') {

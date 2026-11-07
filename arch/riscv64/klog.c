@@ -60,7 +60,8 @@ static void ring_put_dec(uint64_t x)
     }
 }
 
-void kputc(char c)
+/* 1 文字を残す。console が 1 なら UART にも同時に出す */
+static void log_char(char c, int console)
 {
     if (at_line_start) {
         /* 行頭: [秒] の接頭辞をログにだけ先に入れる */
@@ -71,10 +72,17 @@ void kputc(char c)
         at_line_start = 0;
     }
     ring_putc(c);
-    uart_putc(c);  /* コンソールにも同時に出す (見え方は不変) */
+    if (console) {
+        uart_putc(c);  /* コンソールにも同時に出す (見え方は不変) */
+    }
     if (c == '\n') {
         at_line_start = 1;
     }
+}
+
+void kputc(char c)
+{
+    log_char(c, 1);
 }
 
 void kputs(const char *s)
@@ -82,6 +90,40 @@ void kputs(const char *s)
     while (*s != '\0') {
         kputc(*s);
         s++;
+    }
+}
+
+/* ログ専用の記録口 (コンソールには出さない)。毎秒の定期記録
+ * のように、画面に出すと邪魔だが dmesg で追いたいもの用
+ * (時計タスクの起床記録など、スケジューラ段2) */
+void lkputc(char c)
+{
+    log_char(c, 0);
+}
+
+void lkputs(const char *s)
+{
+    while (*s != '\0') {
+        lkputc(*s);
+        s++;
+    }
+}
+
+void lkput_dec(uint64_t x)
+{
+    char buf[20];
+    int n = 0;
+
+    if (x == 0) {
+        lkputc('0');
+        return;
+    }
+    while (x > 0) {
+        buf[n++] = (char)('0' + (x % 10));
+        x /= 10;
+    }
+    while (n > 0) {
+        lkputc(buf[--n]);
     }
 }
 

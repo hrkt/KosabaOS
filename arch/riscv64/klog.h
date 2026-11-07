@@ -20,6 +20,12 @@ void kputs(const char *s);     /* 文字列: コンソール + ログ */
 void kput_dec(uint64_t x);     /* 数値 (10 進): コンソール + ログ */
 void kput_hex(uint64_t x);     /* 数値 (16 進): コンソール + ログ */
 
+/* ログ専用 (コンソールには出さない)。定期記録のように、
+ * 画面に出すと邪魔だが dmesg で追いたいもの用 */
+void lkputc(char c);
+void lkputs(const char *s);
+void lkput_dec(uint64_t x);
+
 uint64_t klog_total(void);     /* 起動以来に記録した総バイト数 */
 uint64_t klog_oldest(void);    /* まだ残っている最古の位置 (通し) */
 /* 絶対位置 offset から最大 max バイトを dst へ写し、写した

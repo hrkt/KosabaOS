@@ -18,14 +18,14 @@
  * それ以外の例外は S へ委譲 (medeleg) し、カーネルの仕事は
  * すべて S 側に任せる。実験の記録は spike-k210/step4-usermode/。
  *
- * LCD の tick 表示は step 3 の mtrap.c から引き継ぎ: MTI の
- * 10 回に 1 回 (約 1 秒) だけ lcd_tick_draw を進める。
+ * LCD の tick 表示はスケジューラ段2 で時計タスク (S 側、
+ * proc.c の clock_body) の仕事になったので、ここ (M の
+ * 割り込み文脈) では描かない。MTI の仕事は STIP の転送だけ。
  */
 
 #include <stdint.h>
 #include "board.h"
 #include "uart.h"
-#include "lcd.h"
 
 #define REG64(addr) (*(volatile uint64_t *)(addr))
 #define CLINT_MTIME    REG64(0x0200BFF8)
@@ -203,9 +203,6 @@ static void set_frame_rd(uint64_t *tf, int rd, uint64_t v)
     }
 }
 
-static int tick_divider;      /* MTI の数え (10 回で 1 秒) */
-static uint64_t tick_seconds; /* LCD 表示用の秒数 */
-
 void mshim_handler(uint64_t *tf)
 {
     uint64_t cause = r_mcause();
@@ -216,11 +213,6 @@ void mshim_handler(uint64_t *tf)
              * 次の期限は S が SBI TIME で予約し直す */
             __asm__ volatile("csrs mip, %0" :: "r"(1ULL << 5));
             CLINT_MTIMECMP = ~0ULL;
-            if (++tick_divider >= 10) {
-                tick_divider = 0;
-                tick_seconds++;
-                lcd_tick_draw(tick_seconds);
-            }
         }
         return;  /* その他の割り込みは来ないはずだが、素通りする */
     }

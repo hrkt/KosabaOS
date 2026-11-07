@@ -7,6 +7,7 @@
 void uart_init(void);        /* 通信の約束事を UART に書き込む */
 void uart_putc(char c);      /* 1 文字送る (送れるまで待つ) */
 char uart_getc(void);        /* 1 文字受け取る (届くまで待つ) */
+int uart_try_getc(void);     /* 待たずに受け取る (無ければ -1) */
 void uart_puts(const char *s); /* 文字列を送る */
 
 #endif
