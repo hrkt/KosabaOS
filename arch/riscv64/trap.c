@@ -203,6 +203,7 @@ void trap_init(void)
     s_sstatus(SSTATUS_SIE);        /* 全体の割り込み許可 (sstatus) */
 
     fd_table_init();  /* fd_table を根のプログラムの表に */
+    gfx_init();       /* 前面の窓を開く (画面表示、doc/gfx-design.md) */
 
     next_deadline = r_time() + TIMER_INTERVAL;
     if (sbi_set_timer(next_deadline) != 0) {  /* 最初の 1 回を予約 */
@@ -676,6 +677,10 @@ static int do_exec(uint64_t *frame)
         w_sepc(entry);
         w_sscratch(sp);
     }
+    /* 前面の窓のタイトルを実行したプログラム名へ
+     * (画面表示 段B。do_exec は前面からしか呼ばれない。
+     * 戻っても戻さない割り切り) */
+    gfx_fg_title(name);
     return 1;
 }
 
@@ -878,6 +883,8 @@ static void job_finish(uint64_t *frame, uint64_t status)
     struct job_slot *j = &jobs[jobno - 1];
     int level = JOB_LEVEL_BASE + (jobno - 1);
 
+    gfx_window_done(jobno);  /* ジョブの窓を終了の見た目に (段B) */
+
     clear_fds(fd_tables[level]);  /* SD 書き込みの締めも含む */
     vm_pages_release(level);
     kputs("job: done ");
@@ -893,6 +900,8 @@ static void job_finish(uint64_t *frame, uint64_t status)
         fg_save.blocked = 0;
         fg_save.wait_job = 0;
         console_owner = 0;
+        gfx_window_close(jobno);  /* 回収まで済んだので窓も消す */
+        gfx_set_focus(0);         /* フォーカスは前面へ戻る */
         restore_runner(frame, 0);
         return;
     }
@@ -920,6 +929,7 @@ static void jobs_kill_all(void)
             clear_fds(fd_tables[level]);
             vm_pages_release(level);
             jobs[i].state = JOB_FREE;
+            gfx_window_close(i + 1);  /* ジョブの窓も消す (段B) */
         }
     }
     fg_save.valid = 0;
@@ -927,6 +937,7 @@ static void jobs_kill_all(void)
     fg_save.wait_job = 0;
     console_owner = 0;
     cur_runner = 0;
+    gfx_set_focus(0);
 }
 
 /* job_run (20): プログラムをジョブとして起動する。
@@ -1028,6 +1039,7 @@ static void do_job_run(uint64_t *frame)
         copy_str(j->name, name, sizeof(j->name));
         copy_str(j->cwd, proc_cwd(), PATH_MAX);  /* cwd は引き継ぐ */
         j->state = JOB_RUNNING;
+        gfx_window_open(slot + 1, j->name);  /* ジョブの窓 (段B) */
         frame[FRAME_A0] = (uint64_t)(slot + 1);
     }
 }
@@ -1130,6 +1142,7 @@ static int do_job_wait(uint64_t *frame)
     if (j->state == JOB_DONE) {
         frame[FRAME_A0] = j->status;
         j->state = JOB_FREE;  /* 回収 */
+        gfx_window_close((int)num);  /* 窓も消す (段B) */
         return 0;
     }
     console_owner = (int)num;
@@ -1140,6 +1153,7 @@ static int do_job_wait(uint64_t *frame)
     fg_save.blocked = 1;
     fg_save.wait_job = (int)num;
     restore_runner(frame, (int)num);
+    gfx_set_focus((int)num);  /* 持ち主の窓にフォーカス (段B) */
     return 1;
 }
 

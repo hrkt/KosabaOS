@@ -227,6 +227,189 @@ void gfx_text(int runner, int x, int y, const char *s, int scale,
 #endif
 }
 
+/* --- 窓の状態と枠 (段B) ---------------------------------------------
+ * 窓の生滅とフォーカスは trap.c の出来事 (ジョブ開始・終了・
+ * 回収、コンソールの持ち主の変更) に連れて変わる。枠と
+ * タイトルバーは内容領域の外側にだけ描くので、フォーカスの
+ * 描き直しでプログラムの絵が消えることはない (フレーム
+ * バッファを持たない ST7789 では、これが共存の条件)。
+ * タイトルは字形表に小文字が無いので、表示のときだけ
+ * 大文字に寄せる (klog には元の名前が残る) */
+
+#define FRAME_FOCUS 0xffff   /* 白 */
+#define FRAME_NORMAL 0x8410  /* 灰 RGB(128,128,128) 相当 */
+#define FRAME_DONE 0x4208    /* 暗い灰 RGB(64,64,64) 相当 */
+#define TITLE_BG_FOCUS 0x0210   /* 濃い青緑 RGB(0,64,128) 相当 */
+#define TITLE_BG_NORMAL 0x3186  /* RGB(48,48,48) 相当 */
+#define TITLE_BG_DONE 0x18c3    /* デスクトップ色 */
+#define TITLE_FG_FOCUS 0xffff
+#define TITLE_FG_NORMAL 0xbdd7  /* RGB(184,184,184) 相当 */
+#define TITLE_FG_DONE 0x8410
+
+struct gfx_win_state {
+    int used;
+    int done;
+    char title[32];
+};
+
+static struct gfx_win_state win_state[JOB_MAX + 1];
+static int focus_runner = 0;
+
+static void copy_title(char *dst, const char *src)
+{
+    int i = 0;
+    while (src[i] != '\0' && i < 31) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static void log_event(const char *what, int runner)
+{
+    lkputs("gfx: ");
+    lkputs(what);
+    lkputs(" r=");
+    lkput_dec((uint64_t)runner);
+}
+
+/* 枠とタイトルバーを描く (LCD の無い環境では何もしない)。
+ * 色は状態 (フォーカス / 通常 / 終了) で決まる */
+static void draw_frame(int runner)
+{
+#if BOARD_FEATURE_LCD
+    const struct gfx_win_state *st = &win_state[runner];
+    int x, y, w, h;
+    uint32_t frame, tbg, tfg;
+    char disp[40];
+    int i = 0, n = 0;
+
+    if (!st->used) {
+        return;
+    }
+    window_rect(runner, &x, &y, &w, &h);
+    if (runner == focus_runner) {
+        frame = FRAME_FOCUS;
+        tbg = TITLE_BG_FOCUS;
+        tfg = TITLE_FG_FOCUS;
+    } else if (st->done) {
+        frame = FRAME_DONE;
+        tbg = TITLE_BG_DONE;
+        tfg = TITLE_FG_DONE;
+    } else {
+        frame = FRAME_NORMAL;
+        tbg = TITLE_BG_NORMAL;
+        tfg = TITLE_FG_NORMAL;
+    }
+    draw_fill(x, y, w, BORDER, frame);
+    draw_fill(x, y + h - BORDER, w, BORDER, frame);
+    draw_fill(x, y, BORDER, h, frame);
+    draw_fill(x + w - BORDER, y, BORDER, h, frame);
+    draw_fill(x + BORDER, y + BORDER, w - BORDER * 2,
+              TITLE_H - BORDER, tbg);
+    /* タイトルは大文字に寄せて描く (字形表の都合) */
+    while (st->title[i] != '\0' && n < 39) {
+        char c = st->title[i++];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        disp[n++] = c;
+    }
+    if (st->done) {
+        const char *sfx = " DONE";
+        while (*sfx != '\0' && n < 39) {
+            disp[n++] = *sfx++;
+        }
+    }
+    disp[n] = '\0';
+    lcd_draw_text_clip((uint32_t)(x + 4), (uint32_t)(y + 3), disp, 1,
+                       (uint16_t)tfg, (uint32_t)(x + BORDER),
+                       (uint32_t)(y + BORDER),
+                       (uint32_t)(w - BORDER * 2),
+                       (uint32_t)(TITLE_H - BORDER));
+#else
+    (void)runner;
+#endif
+}
+
+void gfx_init(void)
+{
+    win_state[0].used = 1;
+    win_state[0].done = 0;
+    copy_title(win_state[0].title, "FG");
+    focus_runner = 0;
+    log_event("open", 0);
+    lkputs(" \"FG\"\n");
+    log_event("focus", 0);
+    lkputc('\n');
+    draw_frame(0);
+}
+
+void gfx_window_open(int runner, const char *title)
+{
+    int cx, cy, cw, ch;
+    if (runner < 1 || runner > JOB_MAX) {
+        return;
+    }
+    win_state[runner].used = 1;
+    win_state[runner].done = 0;
+    copy_title(win_state[runner].title, title);
+    log_event("open", runner);
+    lkputs(" \"");
+    lkputs(win_state[runner].title);
+    lkputs("\"\n");
+    /* 前の持ち主の残像を残さないよう、内容を消してから枠 */
+    content_rect(runner, &cx, &cy, &cw, &ch);
+    draw_fill(cx, cy, cw, ch, DESKTOP_COLOR);
+    draw_frame(runner);
+}
+
+void gfx_window_done(int runner)
+{
+    if (runner < 1 || runner > JOB_MAX || !win_state[runner].used) {
+        return;
+    }
+    win_state[runner].done = 1;
+    log_event("done", runner);
+    lkputc('\n');
+    draw_frame(runner);
+}
+
+void gfx_window_close(int runner)
+{
+    int x, y, w, h;
+    if (runner < 1 || runner > JOB_MAX || !win_state[runner].used) {
+        return;
+    }
+    win_state[runner].used = 0;
+    win_state[runner].done = 0;
+    log_event("close", runner);
+    lkputc('\n');
+    /* 枠ごとデスクトップ色に戻す */
+    window_rect(runner, &x, &y, &w, &h);
+    draw_fill(x, y, w, h, DESKTOP_COLOR);
+}
+
+void gfx_set_focus(int runner)
+{
+    int old;
+    if (runner == focus_runner) {
+        return;
+    }
+    old = focus_runner;
+    focus_runner = runner;
+    log_event("focus", runner);
+    lkputc('\n');
+    draw_frame(old);
+    draw_frame(runner);
+}
+
+void gfx_fg_title(const char *title)
+{
+    copy_title(win_state[0].title, title);
+    draw_frame(0);
+}
+
 void gfx_line(int runner, int x0, int y0, int x1, int y1,
               uint32_t color)
 {
