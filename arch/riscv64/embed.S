@@ -61,13 +61,11 @@ crash_prog_start:
     .incbin "crash.elf"
 crash_prog_end:
 
-<<<<<<< HEAD
     .globl copy_prog_start
     .globl copy_prog_end
 copy_prog_start:
     .incbin "copy.elf"
 copy_prog_end:
-=======
     .globl gdemo_prog_start
     .globl gdemo_prog_end
 gdemo_prog_start:
@@ -79,7 +77,6 @@ gdemo_prog_end:
 gjob_prog_start:
     .incbin "gjob.elf"
 gjob_prog_end:
->>>>>>> gfx-windows
 
 /* Ikesu 合流テストの素材 (test.sh シナリオ U)。リポジトリの
  * 外にある Ikesu のビルド成果物を build.sh が写してきた
