@@ -34,8 +34,11 @@
 #define COEF_Q16 130815       /* 2cosθ を Q16 で */
 #define Y1_Q16 32845765       /* 8000・sinθ を Q16 で */
 
-int64 g_fnv;
-int64 g_fnv_prime;
+/* FNV の状態はファイルスコープに置かない (main の
+ * ローカルで持つ)。nori のデータ配置は段の開始を
+ * 8 バイト境界に揃えないため、スカラ型のグローバルが
+ * 奇数アドレスに置かれて実機で misaligned になる
+ * ことがある (doc/nami-design.md の既知の問題) */
 
 void out_str(char *s)
 {
@@ -121,6 +124,8 @@ int32 main(int32 argc, char **argv)
     int64 fd;
     int64 y_prev2;
     int64 y_prev1;
+    int64 fnv;
+    int64 fnv_prime;
     int32 sent;
     int32 i;
 
@@ -147,9 +152,9 @@ int32 main(int32 argc, char **argv)
         v = (v << 16) | 40164;
         v = (v << 16) | 33826;
         v = (v << 16) | 8997;
-        g_fnv = v;
+        fnv = v;
     }
-    g_fnv_prime = ((int64)256 << 32) + 435;
+    fnv_prime = ((int64)256 << 32) + 435;
 
     /* RIFF ヘッダ (44 バイト、PCM・モノラル 16bit)。
      * 文字コードは数で書く: R=82 I=73 F=70 W=87 A=65
@@ -205,9 +210,8 @@ int32 main(int32 argc, char **argv)
             }
             g_sbuf[i * 2] = (char)(s & 255);
             g_sbuf[i * 2 + 1] = (char)((s >> 8) & 255);
-            g_fnv = (g_fnv ^ (g_sbuf[i * 2] & 255)) * g_fnv_prime;
-            g_fnv = (g_fnv ^ (g_sbuf[i * 2 + 1] & 255)) *
-                    g_fnv_prime;
+            fnv = (fnv ^ (g_sbuf[i * 2] & 255)) * fnv_prime;
+            fnv = (fnv ^ (g_sbuf[i * 2 + 1] & 255)) * fnv_prime;
             i = i + 1;
         }
         if (write_all((int32)fd, g_sbuf, n * 2) != 0) {
@@ -226,7 +230,7 @@ int32 main(int32 argc, char **argv)
     out_str("wavgen: samples=");
     out_num(TOTAL_SAMPLES);
     out_str(" fnv=");
-    out_hex64(g_fnv);
+    out_hex64(fnv);
     putc(10);
     out_str("wavgen: done\n");
     return 0;

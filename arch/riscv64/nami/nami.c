@@ -81,17 +81,21 @@ int64 rd32(char *p)
 /* ---- 小さいバッファ付き読み ---------------------------
  * ヘッダ解析 (少しずつ読む) と data のストリーミング
  * (塊で読む) の両方をこの一本で賄う。読みは全部ここを
- * 通るので、バッファに先読みした分を取りこぼさない。 */
+ * 通るので、バッファに先読みした分を取りこぼさない。
+ * 読みの状態 (fd / 位置 / 長さ) は main のローカル配列
+ * st[3] に持ち、ポインタで渡す。ファイルスコープの
+ * スカラ変数にしないのは、nori のデータ配置が段の
+ * 開始を 8 バイト境界に揃えず、実機で misaligned に
+ * なるため (doc/nami-design.md の既知の問題)。
+ * バッファはバイト単位でしか触らないのでグローバルで
+ * よい。 */
 
-int32 g_fd;
 char g_rbuf[1024];
-int32 g_rpos;
-int32 g_rlen;
 
 /* 最大 n バイトまで dst へ入れ、入れた数を返す。
  * EOF では 0、エラーでは -1 (少しでも入っていたら
  * その数を返し、エラーは次の呼び出しで出る) */
-int32 reader_read(char *dst, int32 n)
+int32 reader_read(int32 *st, char *dst, int32 n)
 {
     int32 got;
     got = 0;
@@ -100,8 +104,8 @@ int32 reader_read(char *dst, int32 n)
         int32 avail;
         int32 take;
         int32 i;
-        if (g_rpos >= g_rlen) {
-            r = syscall3(SYS_READ, g_fd, g_rbuf, 1024);
+        if (st[1] >= st[2]) {
+            r = syscall3(SYS_READ, st[0], g_rbuf, 1024);
             if (r < 0) {
                 if (got > 0) {
                     return got;
@@ -111,33 +115,33 @@ int32 reader_read(char *dst, int32 n)
             if (r == 0) {
                 return got;
             }
-            g_rpos = 0;
-            g_rlen = (int32)r;
+            st[1] = 0;
+            st[2] = (int32)r;
         }
-        avail = g_rlen - g_rpos;
+        avail = st[2] - st[1];
         take = avail;
         if (n - got < avail) {
             take = n - got;
         }
         i = 0;
         while (i < take) {
-            dst[got + i] = g_rbuf[g_rpos + i];
+            dst[got + i] = g_rbuf[st[1] + i];
             i = i + 1;
         }
-        g_rpos = g_rpos + take;
+        st[1] = st[1] + take;
         got = got + take;
     }
     return got;
 }
 
 /* ちょうど n バイト読む。読めなければ -1 */
-int32 reader_exact(char *dst, int32 n)
+int32 reader_exact(int32 *st, char *dst, int32 n)
 {
     int32 got;
     got = 0;
     while (got < n) {
         int32 r;
-        r = reader_read(dst + got, n - got);
+        r = reader_read(st, dst + got, n - got);
         if (r <= 0) {
             return -1;
         }
@@ -147,7 +151,7 @@ int32 reader_exact(char *dst, int32 n)
 }
 
 /* n バイト読み飛ばす。途中で尽きたら -1 */
-int32 reader_skip(int64 n)
+int32 reader_skip(int32 *st, int64 n)
 {
     char scratch[256];
     while (n > 0) {
@@ -157,7 +161,7 @@ int32 reader_skip(int64 n)
         if (n < 256) {
             want = (int32)n;
         }
-        r = reader_read(scratch, want);
+        r = reader_read(st, scratch, want);
         if (r <= 0) {
             return -1;
         }
@@ -171,8 +175,9 @@ int32 reader_skip(int64 n)
 
 char g_pbuf[4096];
 
-int32 play_data(int64 data_size, int32 format, int32 channels,
-                int32 rate, int32 block_align, int32 bits)
+int32 play_data(int32 *st, int64 data_size, int32 format,
+                int32 channels, int32 rate, int32 block_align,
+                int32 bits)
 {
     int64 total_samples;
     int64 frames;
@@ -242,7 +247,7 @@ int32 play_data(int64 data_size, int32 format, int32 channels,
         filled = 0;
         while (filled < want) {
             int32 n;
-            n = reader_read(g_pbuf + filled, want - filled);
+            n = reader_read(st, g_pbuf + filled, want - filled);
             if (n < 0) {
                 syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
                 out_str("nami: read failed\n");
@@ -285,7 +290,7 @@ int32 play_data(int64 data_size, int32 format, int32 channels,
     return 0;
 }
 
-int32 play_wav(void)
+int32 play_wav(int32 *st)
 {
     char hdr[8];
     char f[16];
@@ -303,7 +308,7 @@ int32 play_wav(void)
     have_fmt = 0;
 
     /* RIFF のサイズ (4 バイト、使わない) と "WAVE" */
-    if (reader_exact(hdr, 8) != 0 ||
+    if (reader_exact(st, hdr, 8) != 0 ||
         (hdr[4] & 255) != 87 || (hdr[5] & 255) != 65 ||
         (hdr[6] & 255) != 86 || (hdr[7] & 255) != 69) {
         out_str("nami: unknown format\n");
@@ -312,7 +317,7 @@ int32 play_wav(void)
 
     while (1) {
         int64 size;
-        if (reader_exact(hdr, 8) != 0) {
+        if (reader_exact(st, hdr, 8) != 0) {
             out_str("nami: broken wav\n");
             return 4;
         }
@@ -320,7 +325,7 @@ int32 play_wav(void)
         if ((hdr[0] & 255) == 102 && (hdr[1] & 255) == 109 &&
             (hdr[2] & 255) == 116 && (hdr[3] & 255) == 32) {
             /* "fmt " */
-            if (size < 16 || reader_exact(f, 16) != 0) {
+            if (size < 16 || reader_exact(st, f, 16) != 0) {
                 out_str("nami: broken wav\n");
                 return 4;
             }
@@ -330,7 +335,7 @@ int32 play_wav(void)
             block_align = rd16(f + 12);
             bits = rd16(f + 14);
             have_fmt = 1;
-            if (reader_skip((size - 16) + (size & 1)) != 0) {
+            if (reader_skip(st, (size - 16) + (size & 1)) != 0) {
                 out_str("nami: broken wav\n");
                 return 4;
             }
@@ -341,10 +346,10 @@ int32 play_wav(void)
                 out_str("nami: broken wav\n");
                 return 4;
             }
-            return play_data(size, format, channels, rate,
+            return play_data(st, size, format, channels, rate,
                              block_align, bits);
         } else {
-            if (reader_skip(size + (size & 1)) != 0) {
+            if (reader_skip(st, size + (size & 1)) != 0) {
                 out_str("nami: broken wav\n");
                 return 4;
             }
@@ -365,6 +370,7 @@ int32 main(int32 argc, char **argv)
 {
     char *path;
     char m[4];
+    int32 st[3];
     int64 fd;
 
     if (argc < 2) {
@@ -383,11 +389,11 @@ int32 main(int32 argc, char **argv)
         putc(10);
         return 1;
     }
-    g_fd = (int32)fd;
-    g_rpos = 0;
-    g_rlen = 0;
+    st[0] = (int32)fd;   /* 読みの状態: fd / 位置 / 長さ */
+    st[1] = 0;
+    st[2] = 0;
 
-    if (reader_exact(m, 4) != 0) {
+    if (reader_exact(st, m, 4) != 0) {
         out_str("nami: unknown format\n");
         return 4;
     }
@@ -403,5 +409,5 @@ int32 main(int32 argc, char **argv)
         out_str("nami: unknown format\n");
         return 4;            /* "RIFF" でない */
     }
-    return play_wav();
+    return play_wav(st);
 }
