@@ -408,6 +408,20 @@ def main():
     ok = command("fg", "fg: program faulted", 20000) and ok
     report("K17 job control (bg / jobs / fg / fault isolation)", ok)
 
+    print("== scenario K18: gfx windows ==")
+    # 画面表示 (doc/gfx-design.md) の実機確認。シリアルで
+    # 追える範囲: gdemo.elf を前面で走らせて描画が配線
+    # されていること、gjob.elf を bg で走らせると窓が開き、
+    # fg で完了まで待つと窓が回収される (dmesg の
+    # gfx: close) こと。LCD に窓・枠・フォーカスが実際に
+    # 見えるかはシリアルから確認できないので目視の担当
+    ok = command("run gdemo.elf", "gdemo: done", 30000)
+    ok = command("run gjob.elf 30 &", "job 1: gjob\\.elf started",
+                 20000) and ok
+    ok = command("fg", "gjob done", 60000) and ok
+    ok = command("dmesg", "gfx: close r=1", 20000) and ok
+    report("K18 gfx windows (drawing + window lifecycle via dmesg)",
+           ok)
     print("== scenario K19: SD rmdir ==")
     # /sd の rmdir 対応の実機確認 (doc/sd-write-design.md 追補)。
     # K18 は gfx-windows ブランチが使用済みのため K19 から。

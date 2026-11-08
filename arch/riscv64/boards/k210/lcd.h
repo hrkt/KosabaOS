@@ -43,6 +43,13 @@ void lcd_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
 void lcd_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t scale,
                    uint16_t color);
 
+/* lcd_draw_text と同じ描画を、クリップ領域 (cx, cy, cw, ch)
+ * の内側だけで行う (画面表示の窓用、doc/gfx-design.md) */
+void lcd_draw_text_clip(uint32_t x, uint32_t y, const char *s,
+                        uint32_t scale, uint16_t color,
+                        uint32_t cx, uint32_t cy, uint32_t cw,
+                        uint32_t ch);
+
 /* 10 進の数を描き、描いた幅 (ピクセル) を返す。文字列と
  * つなげて 1 行を作るときに使う */
 uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,

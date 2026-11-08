@@ -300,6 +300,43 @@ void lcd_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t scale, uint16
     }
 }
 
+/* 矩形 (ax, ay, aw, ah) とクリップ領域 (cx, cy, cw, ch) の
+ * 交わりを塗る。交わりが無ければ何もしない */
+static void fill_intersect(uint32_t ax, uint32_t ay, uint32_t aw,
+                           uint32_t ah, uint32_t cx, uint32_t cy,
+                           uint32_t cw, uint32_t ch, uint16_t color) {
+    uint32_t x0 = ax > cx ? ax : cx;
+    uint32_t y0 = ay > cy ? ay : cy;
+    uint32_t x1 = ax + aw < cx + cw ? ax + aw : cx + cw;
+    uint32_t y1 = ay + ah < cy + ch ? ay + ah : cy + ch;
+    if (x1 > x0 && y1 > y0) {
+        lcd_fill_rect(x0, y0, x1 - x0, y1 - y0, color);
+    }
+}
+
+/* lcd_draw_text と同じ描画を、クリップ領域 (cx, cy, cw, ch)
+ * の内側だけで行う (画面表示の窓用、doc/gfx-design.md)。
+ * 字形 1 ブロック (scale x scale) ごとに交わりを塗るので、
+ * ブロックの一部だけが領域に掛かる場合もその分だけ出る */
+void lcd_draw_text_clip(uint32_t x, uint32_t y, const char *s,
+                        uint32_t scale, uint16_t color,
+                        uint32_t cx, uint32_t cy, uint32_t cw,
+                        uint32_t ch) {
+    for (; *s; s++, x += 6 * scale) {
+        const uint8_t *g = glyph(*s);
+        for (int col = 0; col < 5; col++) {
+            for (int row = 0; row < 7; row++) {
+                if (g[col] & (1u << (6 - row))) {
+                    fill_intersect(x + (uint32_t)col * scale,
+                                   y + (uint32_t)row * scale,
+                                   scale, scale, cx, cy, cw, ch,
+                                   color);
+                }
+            }
+        }
+    }
+}
+
 uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
                       uint16_t color) {
     char buf[24];

@@ -58,8 +58,15 @@ echo "build: BOARD=$BOARD"
 # slow / crash はジョブ制御 (段3) の検証用 (test.sh シナリオ X)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o slow.elf slow.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o crash.elf crash.c
+<<<<<<< HEAD
 # copy は SD exec の実機確認用 (ELF を /sd へ運ぶ道具)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o copy.elf copy.c
+=======
+# gdemo / gjob は画面表示 (描画 syscall と窓) の検証用
+# (test.sh シナリオ Y / Z、doc/gfx-design.md)
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o gdemo.elf gdemo.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o gjob.elf gjob.c
+>>>>>>> gfx-windows
 
 # Ikesu 合流テスト (test.sh シナリオ U) の素材は、Ikesu 側の
 # ビルド成果物を借りてくる。OS リポジトリにはバイナリを
@@ -90,7 +97,7 @@ if [ "$BOARD" = virt ]; then
     python3 make_sd_image.py sd.img UPROG.ELF=user.elf
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

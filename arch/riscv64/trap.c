@@ -25,6 +25,7 @@
 #include "elf.h"
 #include "fs.h"
 #include "fat.h"
+#include "gfx.h"
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -202,6 +203,7 @@ void trap_init(void)
     s_sstatus(SSTATUS_SIE);        /* 全体の割り込み許可 (sstatus) */
 
     fd_table_init();  /* fd_table を根のプログラムの表に */
+    gfx_init();       /* 前面の窓を開く (画面表示、doc/gfx-design.md) */
 
     next_deadline = r_time() + TIMER_INTERVAL;
     if (sbi_set_timer(next_deadline) != 0) {  /* 最初の 1 回を予約 */
@@ -247,6 +249,11 @@ void trap_init(void)
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
+#define SYS_GFX_INFO 43
+#define SYS_GFX_CLEAR 44
+#define SYS_GFX_RECT 45
+#define SYS_GFX_TEXT 46
+#define SYS_GFX_LINE 47
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -705,6 +712,10 @@ static int do_exec(uint64_t *frame)
         w_sepc(entry);
         w_sscratch(sp);
     }
+    /* 前面の窓のタイトルを実行したプログラム名へ
+     * (画面表示 段B。do_exec は前面からしか呼ばれない。
+     * 戻っても戻さない割り切り) */
+    gfx_fg_title(name);
     return 1;
 }
 
@@ -907,6 +918,8 @@ static void job_finish(uint64_t *frame, uint64_t status)
     struct job_slot *j = &jobs[jobno - 1];
     int level = JOB_LEVEL_BASE + (jobno - 1);
 
+    gfx_window_done(jobno);  /* ジョブの窓を終了の見た目に (段B) */
+
     clear_fds(fd_tables[level]);  /* SD 書き込みの締めも含む */
     vm_pages_release(level);
     kputs("job: done ");
@@ -922,6 +935,8 @@ static void job_finish(uint64_t *frame, uint64_t status)
         fg_save.blocked = 0;
         fg_save.wait_job = 0;
         console_owner = 0;
+        gfx_window_close(jobno);  /* 回収まで済んだので窓も消す */
+        gfx_set_focus(0);         /* フォーカスは前面へ戻る */
         restore_runner(frame, 0);
         return;
     }
@@ -949,6 +964,7 @@ static void jobs_kill_all(void)
             clear_fds(fd_tables[level]);
             vm_pages_release(level);
             jobs[i].state = JOB_FREE;
+            gfx_window_close(i + 1);  /* ジョブの窓も消す (段B) */
         }
     }
     fg_save.valid = 0;
@@ -956,6 +972,7 @@ static void jobs_kill_all(void)
     fg_save.wait_job = 0;
     console_owner = 0;
     cur_runner = 0;
+    gfx_set_focus(0);
 }
 
 /* SD のファイル (目録項の位置で照合) が、どこかの段か
@@ -1114,6 +1131,7 @@ static void do_job_run(uint64_t *frame)
         copy_str(j->name, name, sizeof(j->name));
         copy_str(j->cwd, proc_cwd(), PATH_MAX);  /* cwd は引き継ぐ */
         j->state = JOB_RUNNING;
+        gfx_window_open(slot + 1, j->name);  /* ジョブの窓 (段B) */
         frame[FRAME_A0] = (uint64_t)(slot + 1);
     }
 }
@@ -1216,6 +1234,7 @@ static int do_job_wait(uint64_t *frame)
     if (j->state == JOB_DONE) {
         frame[FRAME_A0] = j->status;
         j->state = JOB_FREE;  /* 回収 */
+        gfx_window_close((int)num);  /* 窓も消す (段B) */
         return 0;
     }
     console_owner = (int)num;
@@ -1226,6 +1245,7 @@ static int do_job_wait(uint64_t *frame)
     fg_save.blocked = 1;
     fg_save.wait_job = (int)num;
     restore_runner(frame, (int)num);
+    gfx_set_focus((int)num);  /* 持ち主の窓にフォーカス (段B) */
     return 1;
 }
 
@@ -1971,6 +1991,63 @@ static int do_syscall(uint64_t *frame)
         frame[FRAME_A0] = 0;
         break;
     }
+    case SYS_GFX_INFO: {
+        /* a0 = バッファ (16 バイト)。画面と自分の窓の情報を
+         * u32 x4 で書く (doc/gfx-design.md) */
+        uint32_t out[4];
+        gfx_info(cur_runner, out);
+        if (copy_to_user(frame[FRAME_A0],
+                         (const unsigned char *)out, 16) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            frame[FRAME_A0] = 0;
+        }
+        break;
+    }
+    case SYS_GFX_CLEAR:
+        /* a0 = 色 (RGB565)。自分の窓の内容領域を消す */
+        gfx_clear(cur_runner, (uint32_t)frame[FRAME_A0]);
+        frame[FRAME_A0] = 0;
+        break;
+    case SYS_GFX_RECT:
+        /* a0 = x | (y<<16)、a1 = w | (h<<16)、a2 = 色。
+         * 座標は窓の中の相対座標 (クリップは gfx 側) */
+        gfx_rect(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 (int)(frame[FRAME_A1] & 0xFFFF),
+                 (int)(frame[FRAME_A1] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
+    case SYS_GFX_TEXT: {
+        /* a0 = x | (y<<16)、a1 = 文字列、a2 = 色 |
+         * (scale<<16)。文字列はカーネルに写してから描く
+         * (最大 48 文字。写せなければ -1) */
+        char buf[49];
+        if (copy_user_string(frame[FRAME_A1], buf, sizeof(buf)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        gfx_text(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 buf,
+                 (int)(frame[FRAME_A2] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
+    }
+    case SYS_GFX_LINE:
+        /* a0 = x0 | (y0<<16)、a1 = x1 | (y1<<16)、a2 = 色 */
+        gfx_line(cur_runner,
+                 (int)(frame[FRAME_A0] & 0xFFFF),
+                 (int)(frame[FRAME_A0] >> 16),
+                 (int)(frame[FRAME_A1] & 0xFFFF),
+                 (int)(frame[FRAME_A1] >> 16),
+                 (uint32_t)frame[FRAME_A2]);
+        frame[FRAME_A0] = 0;
+        break;
     default:
         kputs("trap: unknown syscall ");
         put_dec(num);
