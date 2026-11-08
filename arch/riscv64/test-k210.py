@@ -456,6 +456,57 @@ def main():
                  "samples=132300") and ok
     report("K21 audio i2s (tone plays, i2s line via dmesg)", ok)
 
+    print("== scenario K22: nami player (wav playback) ==")
+    # nami (音声ファイル再生プレーヤー、doc/nami-design.md)
+    # の実機確認。wavgen.elf で /sd にテスト WAV を作り
+    # (申告 samples / fnv をシリアルから拾う)、nami で
+    # 再生して、dmesg の "audio: close" 行と I2S の
+    # frames 行が申告と一致することを見る。エラー系
+    # (無いファイル / WAV でない / MP3) の終了ステータスも。
+    # 音そのものはスピーカー未接続のため確認対象外で、
+    # シリアル側の照合までが範囲 (K21 と同じ線引き)。
+    # wavgen の書き込みは 176KB を SPI の SD へ書くので
+    # 待ちは長めに取る。素材 (IwaC 製 nami) が埋め込まれて
+    # いる前提 (開発環境の標準ビルド)
+    cur = log_total()
+    send_chunked("run wavgen.elf /sd/TEST.WAV")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("wavgen: done", 90000, cursor=cur)
+    samples = fnv = None
+    if ok:
+        r = call_tool("serial_read", {"cursor": cur})
+        m = re.search(r"wavgen: samples=(\d+) fnv=([0-9a-f]{16})",
+                      r.get("text", ""))
+        if m:
+            samples, fnv = m.group(1), m.group(2)
+            print(f"   wavgen declares: samples={samples} "
+                  f"fnv={fnv}")
+        else:
+            ok = False
+    if samples is not None:
+        ok = command("run nami /sd/TEST.WAV", "nami: done",
+                     60000) and ok
+        ok = command("dmesg",
+                     f"audio: close rate=44100 channels=1 "
+                     f"samples={samples} fnv={fnv}") and ok
+        ok = command("dmesg",
+                     f"audio: i2s frames={samples}") and ok
+        ok = command("run nami /sd/NOPE.WAV",
+                     "run: exit status 1") and ok
+        ok = command("run nami /sd/BOOT.PY",
+                     "run: exit status 4") and ok
+        ok = command("write /sd/FAKE.MP3 ID3-notreal",
+                     "wrote /sd/FAKE\\.MP3") and ok
+        ok = command("run nami /sd/FAKE.MP3",
+                     "run: exit status 3") and ok
+        ok = command("rm /sd/TEST.WAV",
+                     "removed /sd/TEST\\.WAV") and ok
+        ok = command("rm /sd/FAKE.MP3",
+                     "removed /sd/FAKE\\.MP3") and ok
+    ok = command("cat /sd/BOOT.PY", "fpioa_manager") and ok
+    report("K22 nami player (wavgen -> nami, fnv via dmesg, "
+           "error statuses)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

@@ -37,6 +37,15 @@ for f in build/ikesu.elf build/player.wasm testdata/test.mp3; do
     fi
 done
 
+# nami (シナリオ AC) の素材。nami/build-nami.sh の成果物が
+# そろっているときだけ AC が有効になる (U と同じ扱い)
+nami_have=1
+for f in nami/nami.elf nami/wavgen.elf; do
+    if [ ! -f "$f" ]; then
+        nami_have=0
+    fi
+done
+
 echo "== build == (takes a few seconds; QEMU runs make Ctrl-C"
 echo "   ineffective while they run -- Ctrl-A x ends that QEMU)"
 if ! (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1; then
@@ -619,6 +628,63 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "gfx: focus r=0" \
     "[kernel] back from user program"
 report "Z gfx windows (open/draw/focus/done/close via dmesg)" $?
+
+echo "== scenario AC: nami player (optional) =="
+# nami (音声ファイル再生プレーヤー、doc/nami-design.md) の
+# 検証。素材 (nami/build-nami.sh の成果物) があるときだけ
+# 有効で、無いときは SKIP (U と同じ扱い)。virt の SD
+# イメージに入れた TEST.WAV を `run nami` で再生し、
+# dmesg の "audio: close" 行の samples / fnv が、test.wav
+# の data チャンクからホストで計算した参照と一致する
+# ことで、ファイル→読み→再生の経路を通しで見る
+# (音そのものはダミー相手なので対象外)。エラー系
+# (無いファイル / WAV でない / MP3 / 引数なし) の表示と
+# 終了ステータスも見る
+if [ "$nami_have" -eq 0 ]; then
+    echo "SKIP: AC nami player (materials not found: nami/nami.elf, nami/wavgen.elf)"
+else
+    ac_expect=$(python3 -c '
+import struct
+d = open("test.wav", "rb").read()
+pos = 12
+data = None
+while pos + 8 <= len(d):
+    cid = d[pos:pos + 4]
+    size = struct.unpack("<I", d[pos + 4:pos + 8])[0]
+    if cid == b"data":
+        data = d[pos + 8:pos + 8 + size]
+        break
+    pos += 8 + size + (size & 1)
+h = 0xcbf29ce484222325
+for b in data:
+    h ^= b
+    h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+print(len(data) // 2, "%016x" % h)')
+    ac_samples=${ac_expect% *}
+    ac_fnv=${ac_expect#* }
+    { sleep 3; printf 'run nami /sd/TEST.WAV\n'; sleep 4; \
+      printf 'dmesg\n'; sleep 2; \
+      printf 'run nami /sd/NOPE.WAV\n'; sleep 2; \
+      printf 'run nami /sd/HELLO.TXT\n'; sleep 2; \
+      printf 'write /sd/FAKE.MP3 ID3-notreal\n'; sleep 2; \
+      printf 'run nami /sd/FAKE.MP3\n'; sleep 2; \
+      printf 'run nami\n'; sleep 2; \
+      printf 'exit\n'; sleep 2; } \
+        | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+        > test-ac.log 2>&1 || true
+    out=$(strip_ticks < test-ac.log)
+    check_order "$out" "Nish, the KosabaOS shell" \
+        "nami: /sd/TEST.WAV" \
+        "nami: 44100 Hz mono, $ac_samples samples (2 s)" \
+        "nami: done" \
+        "audio: close rate=44100 channels=1 samples=$ac_samples fnv=$ac_fnv" \
+        "nami: cannot open /sd/NOPE.WAV" "run: exit status 1" \
+        "nami: unknown format" "run: exit status 4" \
+        "wrote /sd/FAKE.MP3" \
+        "nami: mp3 is not supported yet" "run: exit status 3" \
+        "usage: nami <file>" "run: exit status 2"
+    report "AC nami player (wav playback fnv + error statuses)" $?
+fi
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
