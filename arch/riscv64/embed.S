@@ -48,6 +48,11 @@ atest_prog_end:
 fptest_prog_start:
     .incbin "fptest.elf"
 fptest_prog_end:
+    .globl tone_prog_start
+    .globl tone_prog_end
+tone_prog_start:
+    .incbin "tone.elf"
+tone_prog_end:
 
     .globl slow_prog_start
     .globl slow_prog_end

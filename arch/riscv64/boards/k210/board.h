@@ -28,6 +28,11 @@
  * 経緯は doc/k210-lcd-driver.md。 */
 #define BOARD_FEATURE_LCD 1
 
+/* オーディオ (I2S0 + TM8211 DAC) の実体があるか。
+ * ドライバは boards/k210/i2s.c、設計は
+ * doc/audio-driver-design.md。 */
+#define BOARD_FEATURE_AUDIO 1
+
 /* ページフォルトはドラフト仕様では一般のアクセスフォルト
  * (1/5/7) として届く (RustSBI-k210 の medeleg 選択と同じ事情) */
 #define BOARD_DRAFT_FAULT_CODES 1

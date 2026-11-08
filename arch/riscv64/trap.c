@@ -26,6 +26,7 @@
 #include "fs.h"
 #include "fat.h"
 #include "gfx.h"
+#include "audio.h"
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -1256,14 +1257,17 @@ static int do_job_wait(uint64_t *frame)
  * リトルエンディアン、インターリーブ固定。同時に開ける
  * 流れは 1 本だけ。
  *
- * 実機のドライバ (K210 の I2S) はまだ無いので、今は両ボード
- * 共通のダミー実装: audio_write は待たずに全部受け付け、
- * 受けたバイト列の FNV-1a 64bit ハッシュと総サンプル数を
- * 貯めておき、audio_close のときにカーネルログへ 1 行残す。
- * テストは Nish の dmesg 経由でこの行を照合する (テスト専用
- * の syscall は作らない)。ダミーは rate の対応可否を検証
- * しない (対応レートは本物のドライバが決めるものなので、
- * 今は任意の rate を受ける)。 */
+ * 実体はボードで違う (doc/audio-driver-design.md):
+ *   - virt: ダミー。audio_write は待たずに全部受け付ける
+ *   - K210: boards/k210/i2s.c の I2S ドライバが実デバイス
+ *     へ送る (再生のペーシングで待つ)
+ * どちらのボードでも、受けたバイト列の FNV-1a 64bit
+ * ハッシュと総サンプル数をここで貯めておき、audio_close
+ * のときにカーネルログへ 1 行残す。テストは Nish の
+ * dmesg 経由でこの行を照合する (テスト専用 syscall は
+ * 作らない)。rate の対応可否はボード側が決める: ダミーは
+ * 検証せず任意の rate を受け、K210 のドライバは対応
+ * できない組み合わせで -1 を返し、open 自体が失敗する。 */
 
 #define FNV1A64_OFFSET 14695981039346656037ULL /* 0xcbf29ce484222325 */
 #define FNV1A64_PRIME 1099511628211ULL         /* 0x100000001b3 */
@@ -1903,6 +1907,14 @@ static int do_syscall(uint64_t *frame)
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
+#if BOARD_FEATURE_AUDIO
+        /* 実ドライバが対応できない組み合わせは -1 で、
+         * open 自体を失敗させる */
+        if (board_audio_open(frame[FRAME_A0], channels) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+#endif
         audio_open_flag = 1;
         audio_rate = frame[FRAME_A0];
         audio_channels = channels;
@@ -1913,8 +1925,10 @@ static int do_syscall(uint64_t *frame)
     }
     case SYS_AUDIO_WRITE: {
         /* a0 = サンプル列へのポインタ、a1 = サンプル数
-         * (int16 の個数)。ダミーは待たずに全部受け付け、
-         * 受けたバイト列で FNV-1a を更新する */
+         * (int16 の個数)。受けたバイト列で FNV-1a を更新
+         * しながら運ぶ。実ドライバのあるボードでは、塊
+         * ごとにドライバへも渡す (そちらはペーシングで
+         * 待つことがある) */
         uint64_t nsamples = frame[FRAME_A1];
         uint64_t nbytes;
         unsigned char buf[256];
@@ -1963,6 +1977,16 @@ static int do_syscall(uint64_t *frame)
                 audio_fnv ^= buf[i];
                 audio_fnv *= FNV1A64_PRIME;
             }
+#if BOARD_FEATURE_AUDIO
+            /* 実ドライバへも同じ塊を渡す。塊のバイト数は
+             * 常に偶数 (全体が偶数で、区切りも偶数) */
+            if (board_audio_write(buf, chunk,
+                                  audio_channels) != 0) {
+                frame[FRAME_A0] = (uint64_t)-1;
+                done = (uint64_t)-1;
+                break;
+            }
+#endif
             done += chunk;
         }
         if (done != (uint64_t)-1) {
@@ -1979,6 +2003,9 @@ static int do_syscall(uint64_t *frame)
             break;
         }
         audio_open_flag = 0;
+#if BOARD_FEATURE_AUDIO
+        board_audio_close();  /* ドライバ側の要約行を先に出す */
+#endif
         kputs("audio: close rate=");
         kput_dec(audio_rate);
         kputs(" channels=");

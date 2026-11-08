@@ -24,6 +24,10 @@
 /* LCD は無い (ステータス表示はシリアルだけ)。 */
 #define BOARD_FEATURE_LCD 0
 
+/* オーディオの実デバイスは無い (syscall 40〜42 は
+ * trap.c のダミー実装が受ける)。 */
+#define BOARD_FEATURE_AUDIO 0
+
 /* ページフォルトは現行仕様どおり独立番号 (12/13/15) で届く */
 #define BOARD_DRAFT_FAULT_CODES 0
 

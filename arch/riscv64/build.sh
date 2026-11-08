@@ -55,6 +55,9 @@ echo "build: BOARD=$BOARD"
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o atest.elf atest.c
 # fptest だけは浮動小数点の検証用に lp64d (FP レジスタ渡しの ABI)
 "$CC" -march=rv64gc -mabi=lp64d -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o fptest.elf fptest.c
+# tone は I2S 実体 (K210) の検証用 (test-k210.py K21)。
+# サイン波を double の漸化式で作るので fptest と同じ lp64d
+"$CC" -march=rv64gc -mabi=lp64d -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o tone.elf tone.c
 # slow / crash はジョブ制御 (段3) の検証用 (test.sh シナリオ X)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o slow.elf slow.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o crash.elf crash.c

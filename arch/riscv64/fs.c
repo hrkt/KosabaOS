@@ -48,6 +48,8 @@ extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
 extern unsigned char fptest_prog_end[];
+extern unsigned char tone_prog_start[];
+extern unsigned char tone_prog_end[];
 extern unsigned char slow_prog_start[];
 extern unsigned char slow_prog_end[];
 extern unsigned char crash_prog_start[];
@@ -483,6 +485,8 @@ void fs_init(void)
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,
            (uint64_t)(fptest_prog_end - fptest_prog_start));
+    fs_add("tone.elf", tone_prog_start,
+           (uint64_t)(tone_prog_end - tone_prog_start));
     fs_add("slow.elf", slow_prog_start,
            (uint64_t)(slow_prog_end - slow_prog_start));
     fs_add("crash.elf", crash_prog_start,
