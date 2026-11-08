@@ -60,6 +60,13 @@ extern unsigned char gdemo_prog_start[];
 extern unsigned char gdemo_prog_end[];
 extern unsigned char gjob_prog_start[];
 extern unsigned char gjob_prog_end[];
+#ifdef NAMI_EMBED
+/* nami の素材 (IwaC 製、build.sh が写してきたときだけ) */
+extern unsigned char nami_prog_start[];
+extern unsigned char nami_prog_end[];
+extern unsigned char wavgen_prog_start[];
+extern unsigned char wavgen_prog_end[];
+#endif
 #ifdef IKESU_EMBED
 /* Ikesu 合流テストの素材 (build.sh が写してきたときだけ) */
 extern unsigned char ikesu_prog_start[];
@@ -497,6 +504,14 @@ void fs_init(void)
            (uint64_t)(gdemo_prog_end - gdemo_prog_start));
     fs_add("gjob.elf", gjob_prog_start,
            (uint64_t)(gjob_prog_end - gjob_prog_start));
+#ifdef NAMI_EMBED
+    /* nami はコマンド名そのもの (doc/nami-design.md):
+     * `run nami <file>` で起動できるよう拡張子なしで登録 */
+    fs_add("nami", nami_prog_start,
+           (uint64_t)(nami_prog_end - nami_prog_start));
+    fs_add("wavgen.elf", wavgen_prog_start,
+           (uint64_t)(wavgen_prog_end - wavgen_prog_start));
+#endif
 #ifdef IKESU_EMBED
     fs_add("ikesu.elf", ikesu_prog_start,
            (uint64_t)(ikesu_prog_end - ikesu_prog_start));

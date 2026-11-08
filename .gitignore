@@ -6,6 +6,7 @@ run.log
 build-test.log
 test-*.log
 sd.img
+test.wav
 # Ikesu join-test materials — staged copies made by build.sh
 # from the Ikesu tree (ikesu.elf is covered by *.elf above)
 /arch/riscv64/player.wasm

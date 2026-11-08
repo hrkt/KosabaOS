@@ -90,14 +90,31 @@ if [ "$BOARD" = virt ] \
     echo "build: ikesu materials embedded (IKESU_DIR=$IKESU_DIR)"
 fi
 
+# nami (音声ファイル再生プレーヤー、doc/nami-design.md) の
+# 素材。nami は IwaC 製で、ビルドは nami/build-nami.sh が
+# 担う (iwac --kosaba --elf → nori)。Ikesu と同じ流儀で、
+# 成果物 (nami/nami.elf と nami/wavgen.elf) がそろって
+# いるときだけ写して取り込み、無いときは従来どおり
+# (test.sh のシナリオ AC は SKIP になる)
+NAMI_DEFINE=""
+rm -f nami.elf wavgen.elf
+if [ -f nami/nami.elf ] && [ -f nami/wavgen.elf ]; then
+    cp nami/nami.elf nami.elf
+    cp nami/wavgen.elf wavgen.elf
+    NAMI_DEFINE=-DNAMI_EMBED
+    echo "build: nami materials embedded"
+fi
+
 if [ "$BOARD" = virt ]; then
     # FAT ドライバのテスト相手 (boards/virt/ramdisk.c が埋め込む)。
     # SD exec の検証用に user.elf を UPROG.ELF として取り込む
-    # (doc/sd-exec-design.md 決め事6)
-    python3 make_sd_image.py sd.img UPROG.ELF=user.elf
+    # (doc/sd-exec-design.md 決め事6)。TEST.WAV は nami の
+    # 検証用 (doc/nami-design.md) に生成して取り込む
+    python3 make_test_wav.py test.wav
+    python3 make_sd_image.py sd.img UPROG.ELF=user.elf TEST.WAV=test.wav
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

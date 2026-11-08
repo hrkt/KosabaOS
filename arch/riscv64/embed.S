@@ -105,3 +105,20 @@ test_mp3_start:
     .incbin "test.mp3"
 test_mp3_end:
 #endif
+
+/* nami (音声ファイル再生プレーヤー) の素材。IwaC 製の
+ * ビルド成果物を build.sh が写してきたときだけ
+ * (-DNAMI_EMBED) 取り込む (doc/nami-design.md) */
+#ifdef NAMI_EMBED
+    .globl nami_prog_start
+    .globl nami_prog_end
+nami_prog_start:
+    .incbin "nami.elf"
+nami_prog_end:
+
+    .globl wavgen_prog_start
+    .globl wavgen_prog_end
+wavgen_prog_start:
+    .incbin "wavgen.elf"
+wavgen_prog_end:
+#endif
