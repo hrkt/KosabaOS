@@ -109,16 +109,18 @@ static int pll2_setup(void)
     i2s_spin();
     v &= ~(1u << 20);
     SYSCTL_PLL2 = v;
-    /* ロック待ち (pll_lock2 = bit17:16 が両方 1) */
+    /* ロック待ち。判定は SDK の sysctl_pll_is_lock
+     * どおり pll_lock2 (bit17:16) の下位ビットで見る
+     * (PLL0 の == 3 とは流儀が違う) */
     for (i = 0; i < 1000000; i++) {
-        if (((SYSCTL_PLL_LOCK >> 16) & 0x3u) == 0x3u) {
+        if ((SYSCTL_PLL_LOCK >> 16) & 0x1u) {
             break;
         }
     }
     v = SYSCTL_PLL2;
     v |= (1u << 25);             /* out_en を上げる */
     SYSCTL_PLL2 = v;
-    return (((SYSCTL_PLL_LOCK >> 16) & 0x3u) == 0x3u) ? 0 : -1;
+    return ((SYSCTL_PLL_LOCK >> 16) & 0x1u) ? 0 : -1;
 }
 
 /* 最初の open で 1 回だけ: ピン、クロック、リセット、

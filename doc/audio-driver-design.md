@@ -45,8 +45,9 @@ i2s.h / sysctl の実物で裏付けた値。
   (0.2% 低い)。bwadj は 12 (= clkf/2 - 1 相当)。
   設定手順は SDK の sysctl_pll_set_freq の順
   (out_en を落とす → pwrd を落とす → 値を書く →
-  pwrd → リセットパルス → pll_lock (0x50440018 の
-  bit17:16) を上限付きで待つ → out_en)。
+  pwrd → リセットパルス → pll_lock (0x50440018、
+  pll_lock2 の下位ビット。SDK の判定どおり) を
+  上限付きで待つ → out_en)。
   PLL2 の設定は最初の open で 1 回だけ。
 - サンプルレートは clk_th3 (0x50440044) の
   i2s0_clk_threshold (下位 16bit) で決まる:
