@@ -441,6 +441,21 @@ def main():
     report("K19 SD rmdir (mkdir / non-empty refused / unlink / "
            "rmdir, existing files intact)", ok)
 
+    print("== scenario K21: audio i2s (tone.elf) ==")
+    # オーディオ実体 (K210 I2S、doc/audio-driver-design.md)
+    # の実機確認。シリアルで追える範囲: tone.elf が正常
+    # 終了することと、dmesg にドライバの要約行 (frames =
+    # レート × 秒数 = 132300) と従来の close 行が出る
+    # こと。音そのもの (出ているか、音程、音量) は
+    # シリアルでは確認できないのでユーザーの耳の担当で、
+    # 残件として報告する。tone は実時間で約 3 秒鳴る
+    ok = command("run tone.elf", "tone: done", 60000)
+    ok = command("dmesg", "audio: i2s frames=132300") and ok
+    ok = command("dmesg",
+                 "audio: close rate=44100 channels=1 "
+                 "samples=132300") and ok
+    report("K21 audio i2s (tone plays, i2s line via dmesg)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
