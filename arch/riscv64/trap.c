@@ -152,24 +152,8 @@ static long sbi_set_timer(uint64_t when)
 #define put_hex kput_hex
 #define put_dec kput_dec
 
-/* tick の表示専用 (10 進)。tick は毎秒出るのでログには残さず、
- * コンソールにだけ出す (klog.c の方針) */
-static void con_dec(uint64_t x)
-{
-    char buf[20];
-    int n = 0;
-    if (x == 0) {
-        uart_putc('0');
-        return;
-    }
-    while (x > 0) {
-        buf[n++] = (char)('0' + (x % 10));
-        x /= 10;
-    }
-    while (n > 0) {
-        uart_putc(buf[--n]);
-    }
-}
+/* かつて tick 表示専用の con_dec がここにあったが、表示の
+ * 引退と一緒に外した (2026-11-10、dev-notes 参照) */
 
 /* --- タイマ -------------------------------------------------------- */
 
@@ -2145,10 +2129,10 @@ void trap_handler(uint64_t *frame, int from_user)
         if (++tick_divider >= 10) {
             tick_divider = 0;
             ticks++;
-            /* tick はコンソールだけ (ログには残さない) */
-            uart_puts("tick ");
-            con_dec(ticks);
-            uart_putc('\n');
+            /* 秒カウンタは uptime と klog 接頭辞の土台として
+             * 数え続ける。コンソールへの tick 表示は引退した
+             * (2026-11-10、dev-notes 参照)。生存表示は
+             * 時計タスクと LCD 時計が担うようになった */
         }
         if (sched_active) {
             /* 切り替えの判断 (スケジューラ段1):

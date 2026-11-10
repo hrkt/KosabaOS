@@ -3,10 +3,10 @@
 #
 # ビルドしてから QEMU を 3 つのシナリオで起動し、出力を
 # 期待する文字列の「順序どおりの出現」で検証する。
-# tick 行は割り込みのタイミングで割り込むので、検証前に
-# 取り除いて文字の流れだけを見る。
+# かつて毎秒出ていた tick 行は 2026-11-10 に引退した
+# (文字の流れを乱す strip_ticks は名残りとして残してある)。
 #
-#   シナリオ A: 起動 (ページング有効化、hello、tick)
+#   シナリオ A: 起動 (ページング有効化、hello、時計タスクの起床)
 #   シナリオ B: カーネルの echo と 'x' のページフォルトデモ
 #   シナリオ C: 'u' でユーザープログラム (挨拶、ユーザー側 echo、
 #               'q' で復帰、カーネル側 echo の再開)
@@ -80,24 +80,25 @@ report() {
     fi
 }
 
-# tick の割り込み表示を取り除く
+# かつての tick 割り込み表示を取り除く (表示自体は
+# 2026-11-10 に引退済みで、今は無害な名残り)
 strip_ticks() {
     tr -d '\000' | sed -E 's/tick [0-9]+//g'
 }
 
 echo "== scenario A: boot =="
-# 起動直後は Nish の入力待ち (割り込み不可の getc) で tick が
-# 止まるので、exit でカーネルコンソールに落ちてから tick を見る
-{ sleep 3; printf 'exit\n'; sleep 3; } \
+# タイマとスケジューラが生きている証跡は、時計タスクが
+# 約 1 秒ごとに klog に残す "clock: wake" の記録 (2 回分
+# 以上) を Nish の dmesg で見る。かつては tick のコン
+# ソール表示で見ていたが、あの表示は引退したので
+# (2026-11-10)、代わりにこの記録を使う
+{ sleep 4; printf 'dmesg\n'; sleep 1; printf 'exit\n'; sleep 2; } \
     | timeout 9 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-a.log 2>&1 || true
-raw=$(cat test-a.log)
 out=$(strip_ticks < test-a.log)
-case "$raw" in *"tick 1"*) tick_ok=0 ;; *) tick_ok=1 ;; esac
-check_order "$out" "vm: Sv39 paging on" "hello from KosabaOS (S-mode)"
-order_ok=$?
-[ "$tick_ok" -eq 0 ] && [ "$order_ok" -eq 0 ]
-report "A boot + paging + tick" $?
+check_order "$out" "vm: Sv39 paging on" "hello from KosabaOS (S-mode)" \
+    "clock: wake" "clock: wake"
+report "A boot + paging + clock task wakes" $?
 
 echo "== scenario B: kernel echo + page fault demo =="
 { sleep 4; printf 'exit\n'; sleep 2; printf 'abc'; sleep 2; printf 'x'; sleep 3; } \
