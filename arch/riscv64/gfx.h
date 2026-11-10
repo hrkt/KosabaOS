@@ -41,4 +41,12 @@ void gfx_window_close(int runner);                    /* 回収・破棄 */
 void gfx_set_focus(int runner);  /* コンソールの持ち主の変更 */
 void gfx_fg_title(const char *title);  /* 前面の窓のタイトル更新 */
 
+/* スクリーンセーバーの段2 (全面) からの復帰用
+ * (doc/screensaver-design.md): クライアント領域を
+ * デスクトップ色で消し、使用中の窓すべての枠・タイトル
+ * を描き直す。窓の中身は戻せない (カーネルは保持して
+ * いない) ので、復帰範囲はここまで。出来事ではないので
+ * klog には残さない */
+void gfx_desktop_repaint(void);
+
 #endif

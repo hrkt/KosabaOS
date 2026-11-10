@@ -105,6 +105,17 @@ if [ -f nami/nami.elf ] && [ -f nami/wavgen.elf ]; then
     echo "build: nami materials embedded"
 fi
 
+# スクリーンセーバー (doc/screensaver-design.md) のテスト用
+# 閾値。SAVER_TEST が設定されていれば -DSAVER_TEST を渡し、
+# 段1/段2 の閾値が 4 秒 / 10 秒に差し替わる (シナリオ
+# AD と K23 がこのビルドで別途ビルドし直して使う。
+# 通常ビルドの閾値は変わらない)
+SAVER_DEFINE=""
+if [ -n "${SAVER_TEST:-}" ]; then
+    SAVER_DEFINE=-DSAVER_TEST
+    echo "build: screensaver TEST thresholds (4s/10s)"
+fi
+
 if [ "$BOARD" = virt ]; then
     # FAT ドライバのテスト相手 (boards/virt/ramdisk.c が埋め込む)。
     # SD exec の検証用に user.elf を UPROG.ELF として取り込む
@@ -114,7 +125,7 @@ if [ "$BOARD" = virt ]; then
     python3 make_sd_image.py sd.img UPROG.ELF=user.elf TEST.WAV=test.wav
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $SAVER_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

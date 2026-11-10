@@ -66,4 +66,20 @@ void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
  * (proc.c の clock_body) から呼ばれる。描画はこの 1 箇所だけ */
 void lcd_tick_draw(uint64_t seconds);
 
+/* tick 表示のオフセット (スクリーンセーバー段1 用、
+ * doc/screensaver-design.md)。次の lcd_tick_draw から
+ * 効く。前回分は前回描いた位置で消されるので、表示の
+ * 移動はこの口だけで実現する */
+void lcd_tick_set_offset(int dx, int dy);
+
+/* 時計帯を丸ごと描き直す (セーバー段2 からの復帰用):
+ * 帯を地色で消し、TICK ラベルと時刻を定位置に描く */
+void lcd_tick_repaint(uint64_t seconds);
+
+/* セーバー段2 (全面) の描画口: begin で全面をセーバーの
+ * 地色で消し、以後 draw が指定位置に大きな時刻を描く
+ * (前回分は地色で消してから描く) */
+void lcd_saver2_begin(void);
+void lcd_saver2_draw(uint64_t seconds, int x, int y);
+
 #endif

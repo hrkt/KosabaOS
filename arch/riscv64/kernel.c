@@ -24,6 +24,7 @@
 #include "elf.h"
 #include "fs.h"
 #include "time.h"
+#include "saver.h"  /* 入力活動の記録とキー待ちの申告 */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"  /* ボード付属 LCD へのステータス表示 (k210 のみ) */
 
@@ -97,6 +98,9 @@ static char console_getc(void)
     while ((c = uart_try_getc()) < 0) {
         sched_poll();
     }
+    /* 入力活動 (スクリーンセーバーの物差し。コンソールの
+     * キー入力と行入力の両方がここを通る) */
+    saver_note_activity();
     return (char)c;
 }
 
@@ -258,13 +262,21 @@ void kmain(void)
 
 #if BOARD_FEATURE_LCD
     lcd_draw_text(28, 180, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
-    lcd_draw_text(28, 216, "TICK", 3, LCD_CYAN);
+    /* TICK ラベルは lcd_tick_setup が帯の一部として描く
+     * (セーバーの帯再描画を lcd.c の中で閉じるため) */
     lcd_tick_setup(118, 216, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
     lcd_tick_draw(0);
 #endif
 
     for (;;) {
-        char c = console_getc();  /* 待ちの間は時計タスクも進む */
+        char c;
+        /* トップレベルのキー待ちの間だけ、セーバーの段2
+         * (全面) に入ってよいと申告する。キーを受けたら
+         * すぐに下ろすので、行入力やコマンドの実行中に
+         * 全面で覆われることはない */
+        saver_set_console_prompt(1);
+        c = console_getc();  /* 待ちの間は時計タスクも進む */
+        saver_set_console_prompt(0);
 #if BOARD_FEATURE_SMODE_PATH
         if (c == 'x') {
             vm_fault_demo();   /* 'x' キーでページフォルトのデモ */

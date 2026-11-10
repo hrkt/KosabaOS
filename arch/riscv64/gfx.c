@@ -410,6 +410,20 @@ void gfx_fg_title(const char *title)
     draw_frame(0);
 }
 
+void gfx_desktop_repaint(void)
+{
+    int r;
+    /* クライアント領域ごとデスクトップ色に戻してから、
+     * 使用中の窓の枠・タイトルだけを描き直す。未使用の
+     * ジョブのマスはデスクトップ色のままが正しい姿 */
+    draw_fill(0, 0, PANEL_W, CLIENT_H, DESKTOP_COLOR);
+    for (r = 0; r <= JOB_MAX; r++) {
+        if (win_state[r].used) {
+            draw_frame(r);
+        }
+    }
+}
+
 void gfx_line(int runner, int x0, int y0, int x1, int y1,
               uint32_t color)
 {

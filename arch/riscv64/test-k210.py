@@ -507,6 +507,52 @@ def main():
     report("K22 nami player (wavgen -> nami, fnv via dmesg, "
            "error statuses)", ok)
 
+    print("== scenario K23: screensaver (two-stage) ==")
+    # スクリーンセーバー (doc/screensaver-design.md) の実機
+    # 確認。閾値を差し替えたビルド (SAVER_TEST: 段1 = 4 秒 /
+    # 段2 = 10 秒) が要るので、このシナリオ専用にビルドし
+    # 直して SRAM ブートからやり直す。照合は virt の AD と
+    # 同じく、Nish の入力待ちで無入力を続けた後に dmesg を
+    # 読み、遷移行が "saver: stage1 on" → "saver: stage2
+    # on" → "saver: off" (dmesg の 'd' の入力で復帰) の
+    # 順で並ぶこと。LCD で時刻表示が実際に動いて見えるか
+    # はシリアルから確認できないので目視の担当
+    r = subprocess.run(["./build.sh"], cwd=HERE,
+                       env={**os.environ, "BUILD_NO_RUN": "1",
+                            "BOARD": "k210", "SAVER_TEST": "1"},
+                       capture_output=True, text=True)
+    ok = r.returncode == 0
+    if not ok:
+        print(r.stdout[-500:], r.stderr[-500:])
+    else:
+        boot_cursor = log_total()
+        data = open(os.path.join(HERE, "kernel.bin"), "rb").read()
+        r = call_tool("flash_kflash",
+                      {"file_b64": base64.b64encode(data).decode(),
+                       "board": "dan", "sram": True,
+                       "timeout_sec": 60},
+                      timeout=120)
+        ok = bool(r.get("success_marker_found"))
+        if ok:
+            time.sleep(3)
+            ok = expect("nish>", 20000, cursor=boot_cursor)
+        if ok:
+            time.sleep(18)  # 無入力で段1 (4 秒) → 段2 (10 秒)
+            cur = log_total()
+            send_chunked("dmesg")
+            call_tool("serial_send", {"text": "", "newline": True})
+            ok = expect("saver: off", 20000, cursor=cur) and ok
+            r = call_tool("serial_read", {"cursor": cur})
+            text = r.get("text", "")
+            i1 = text.find("saver: stage1 on")
+            i2 = text.find("saver: stage2 on")
+            i3 = text.find("saver: off")
+            print(f"   saver lines: stage1@{i1} stage2@{i2} "
+                  f"off@{i3}")
+            ok = ok and 0 <= i1 < i2 < i3
+    report("K23 screensaver (stage1 -> stage2 -> off via dmesg)",
+           ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

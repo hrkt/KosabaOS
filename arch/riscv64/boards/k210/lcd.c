@@ -370,6 +370,10 @@ static uint32_t tick_x, tick_y, tick_scale;
 static uint16_t tick_fg, tick_bg;
 static int tick_digits;   /* 前回描いた文字数 (消去幅の計算用) */
 static int tick_wall;     /* 壁時計表示に切り替わったか */
+/* セーバー段1 の移動用: 今のオフセットと、最後に実際に
+ * 描いた位置 (消去はそちらで行う) */
+static int tick_off_x, tick_off_y;
+static uint32_t tick_drawn_x, tick_drawn_y;
 
 void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
                     uint16_t fg, uint16_t bg) {
@@ -379,7 +383,15 @@ void lcd_tick_setup(uint32_t x, uint32_t y, uint32_t scale,
     tick_fg = fg;
     tick_bg = bg;
     tick_digits = 0;
+    tick_off_x = 0;
+    tick_off_y = 0;
+    tick_drawn_x = x;
+    tick_drawn_y = y;
     tick_armed = 1;
+    /* 帯のラベルは帯の一部としてここで描く (従来は
+     * kernel.c が描いていた。セーバーの帯再描画をこの
+     * ファイルの中で閉じるため) */
+    lcd_draw_text(28, y, "TICK", scale, fg);
 }
 
 static void tick_two_digits(char *p, int v)
@@ -388,9 +400,11 @@ static void tick_two_digits(char *p, int v)
     p[1] = (char)('0' + v % 10);
 }
 
-void lcd_tick_draw(uint64_t seconds) {
-    if (!tick_armed) return;
-    char buf[24];
+/* 表示文字列を作る (tick と段2 のセーバーで共用)。
+ * 戻り値は文字数。壁時計への切り替わりの記録もここで
+ * 1 回だけ行う */
+static int tick_format(char *buf, uint64_t seconds)
+{
     int n = 0;
     struct datetime dt;
     if (time_read(&dt) == 0) {
@@ -426,13 +440,81 @@ void lcd_tick_draw(uint64_t seconds) {
         }
         buf[n] = '\0';
     }
+    return n;
+}
+
+void lcd_tick_draw(uint64_t seconds) {
+    if (!tick_armed) return;
+    char buf[24];
+    int n = tick_format(buf, seconds);
     /* 前回の数字を丸ごと背景で消してから描く。lcd_draw_text は
      * 点の部分しか塗らないので、消さずに重ねると前の数字が
-     * 残って数秒で真っ平らな四角になってしまう */
+     * 残って数秒で真っ平らな四角になってしまう。消す場所は
+     * 「最後に描いた位置」で、オフセットが変わっていても
+     * 前回分を正しく消せる */
     if (tick_digits > 0) {
-        lcd_fill_rect(tick_x, tick_y, 6 * tick_scale * tick_digits,
+        lcd_fill_rect(tick_drawn_x, tick_drawn_y,
+                      6 * tick_scale * (uint32_t)tick_digits,
                       7 * tick_scale, tick_bg);
     }
     tick_digits = n;
-    lcd_draw_text(tick_x, tick_y, buf, tick_scale, tick_fg);
+    tick_drawn_x = tick_x + (uint32_t)tick_off_x;
+    tick_drawn_y = tick_y + (uint32_t)tick_off_y;
+    lcd_draw_text(tick_drawn_x, tick_drawn_y, buf, tick_scale,
+                  tick_fg);
+}
+
+void lcd_tick_set_offset(int dx, int dy)
+{
+    tick_off_x = dx;
+    tick_off_y = dy;
+}
+
+void lcd_tick_repaint(uint64_t seconds)
+{
+    if (!tick_armed) return;
+    /* 帯ごと地色で消し直し、ラベルと時刻を定位置へ。
+     * セーバー段2 が帯を覆った後の復帰用 */
+    lcd_fill_rect(0, tick_y, LCD_WIDTH, LCD_HEIGHT - tick_y,
+                  tick_bg);
+    lcd_draw_text(28, tick_y, "TICK", tick_scale, tick_fg);
+    tick_off_x = 0;
+    tick_off_y = 0;
+    tick_digits = 0;
+    tick_drawn_x = tick_x;
+    tick_drawn_y = tick_y;
+    lcd_tick_draw(seconds);
+}
+
+/* ---- セーバー段2 (全面) の描画 ----
+ * 地色は暗い紺、文字は淡い水色で scale 4。文字列と
+ * 消去の作法は tick と同じ (前回分を地色で消してから
+ * 描く)。位置の歩き方は saver.c が決める */
+#define SAVER2_BG    LCD_RGB(8, 8, 24)
+#define SAVER2_FG    LCD_RGB(140, 220, 255)
+#define SAVER2_SCALE 4
+
+static uint32_t s2_prev_x, s2_prev_y;
+static int s2_prev_len;
+
+void lcd_saver2_begin(void)
+{
+    lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, SAVER2_BG);
+    s2_prev_len = 0;
+}
+
+void lcd_saver2_draw(uint64_t seconds, int x, int y)
+{
+    char buf[24];
+    int n = tick_format(buf, seconds);
+    if (s2_prev_len > 0) {
+        lcd_fill_rect(s2_prev_x, s2_prev_y,
+                      6 * SAVER2_SCALE * (uint32_t)s2_prev_len,
+                      7 * SAVER2_SCALE, SAVER2_BG);
+    }
+    s2_prev_len = n;
+    s2_prev_x = (uint32_t)x;
+    s2_prev_y = (uint32_t)y;
+    lcd_draw_text(s2_prev_x, s2_prev_y, buf, SAVER2_SCALE,
+                  SAVER2_FG);
 }

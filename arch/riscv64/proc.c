@@ -42,6 +42,7 @@
 #include "uart.h"
 #include "board.h"  /* BOARD_TIMER_HZ (sleep の時刻換算) */
 #include "klog.h"   /* 時計タスクの起床記録 (lkputs、段2) */
+#include "saver.h"  /* スクリーンセーバーの毎秒の判定 */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
 #endif
@@ -389,14 +390,22 @@ static void clock_body(void)
         lkputs("clock: wake ");
         lkput_dec(tasks[current].wakes);
         lkputc('\n');
-#if BOARD_FEATURE_LCD
         /* 表示する秒数は生の時刻 (time CSR) から数える。
          * trap.c の tick は入力待ちで割り込みが滞ると一緒に
          * 滞るが、こちらは滞らない。壁時計が有効な間は
          * lcd 側が RTC を読んで HH:MM:SS を描くので、この
          * 秒数は RTC 未設定のときの表示にだけ使われる */
-        lcd_tick_draw((r_time() - start) / BOARD_TIMER_HZ);
+        {
+            uint64_t sec = (r_time() - start) / BOARD_TIMER_HZ;
+            /* スクリーンセーバー (doc/screensaver-design.md)
+             * の判定も毎秒ここで回す。段2 の間は全面が
+             * セーバーの絵なので、帯の通常描画は抑止する */
+            if (saver_tick(sec)) {
+#if BOARD_FEATURE_LCD
+                lcd_tick_draw(sec);
 #endif
+            }
+        }
     }
 }
 

@@ -686,6 +686,54 @@ print(len(data) // 2, "%016x" % h)')
     report "AC nami player (wav playback fnv + error statuses)" $?
 fi
 
+echo "== scenario AD: screensaver (two-stage) =="
+# スクリーンセーバー (doc/screensaver-design.md) の検証。
+# 閾値を差し替えたビルド (SAVER_TEST: 段1 = 4 秒 /
+# 段2 = 10 秒) が要るので、このシナリオ専用にビルドし
+# 直して 2 つのセッションで見る (通常ビルドは最後に
+# 戻す)。virt には LCD が無いので、照合は遷移の klog 行
+# (両環境で同じ形) の順序と有無で行う:
+#   セッション 1: Nish の入力待ちで無入力を続けると
+#     "saver: stage1 on" → "saver: stage2 on" の順に出て、
+#     キー入力 (dmesg の 'd') で "saver: off" になる
+#   セッション 2: bg ジョブが走っている間は段1 には
+#     入るが段2 には入らない (dmesg を実行中に読んで、
+#     stage2 on が 1 件も無いことを数える)
+if ! (cd ../.. && SAVER_TEST=1 BUILD_NO_RUN=1 ./build.sh) \
+        > build-test-ad.log 2>&1; then
+    echo "FAIL: build for AD (see build-test-ad.log)"
+    report "AD screensaver (two-stage, dmesg order)" 1
+else
+    { sleep 3; sleep 13; \
+      printf 'dmesg\n'; sleep 2; \
+      printf 'exit\n'; sleep 1; } \
+        | timeout 26 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+        > test-ad1.log 2>&1 || true
+    out=$(strip_ticks < test-ad1.log)
+    rc=0
+    check_order "$out" "Nish, the KosabaOS shell" \
+        "saver: stage1 on" "saver: stage2 on" "saver: off" || rc=1
+    { sleep 3; printf 'run slow.elf 80 &\n'; sleep 1; \
+      sleep 13; \
+      printf 'dmesg\n'; sleep 2; \
+      printf 'fg\n'; sleep 16; \
+      printf 'exit\n'; sleep 1; } \
+        | timeout 48 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+        > test-ad2.log 2>&1 || true
+    out=$(strip_ticks < test-ad2.log)
+    n_stage1=$(printf '%s' "$out" | grep -ac 'saver: stage1 on' || true)
+    n_stage2=$(printf '%s' "$out" | grep -ac 'saver: stage2 on' || true)
+    check_order "$out" "job 1: slow.elf started" "slow done" || rc=1
+    if [ "$n_stage1" -lt 1 ] || [ "$n_stage2" -ne 0 ]; then
+        echo "  during job: stage1 x$n_stage1 / stage2 x$n_stage2" \
+             "(want stage1 >= 1, stage2 = 0)"
+        rc=1
+    fi
+    report "AD screensaver (two-stage, dmesg order)" $rc
+    # 通常ビルドに戻す (以後の利用にテスト閾値を残さない)
+    (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1 || true
+fi
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

@@ -27,6 +27,7 @@
 #include "fat.h"
 #include "gfx.h"
 #include "audio.h"
+#include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -775,6 +776,14 @@ static struct {
 static int cur_runner = 0;     /* 今走っている走者 (0 = 前面) */
 static int console_owner = 0;  /* コンソールの持ち主 (0 = 前面) */
 
+/* 前面の持ち主が SYS_GETC の待ちの中にいるか
+ * (スクリーンセーバーの段2 判定用、doc/screensaver-
+ * design.md)。持ち主の getc ポーリングループの入口で
+ * 立て、文字が返るときに落とす。ジョブへ番を渡して
+ * 止まっている間も立ったまま (前面は getc の中、という
+ * 事実は変わらないため) */
+static int fg_getc_wait;
+
 /* 文字列を固定長バッファへ写す (末尾は必ず NUL) */
 static void copy_str(char *dst, const char *src, int max)
 {
@@ -877,6 +886,24 @@ static int jobs_any_active(void)
         }
     }
     return 0;
+}
+
+/* スクリーンセーバー (saver.c) への走者状態の公開
+ * (doc/screensaver-design.md の段2 の定義)。前面が
+ * シェルの入力待ちとは「持ち主が前面で、前面の段が
+ * 根 (exec_depth == 0) で、その根が getc の待ちの中に
+ * いる」こと。子プログラムの入力待ちは数に入らない */
+int trap_saver_env(void)
+{
+    int env = 0;
+    if (jobs_any_active()) {
+        env |= TRAP_SAVER_JOBS_PRESENT;
+    }
+    if (console_owner == 0 && cur_runner == 0 && exec_depth == 0 &&
+        fg_getc_wait) {
+        env |= TRAP_SAVER_FG_SHELL_WAIT;
+    }
+    return env;
 }
 
 /* タイマ割り込みからのラウンドロビン (trap_handler が
@@ -1317,9 +1344,15 @@ static int do_syscall(uint64_t *frame)
             restore_runner(frame, next);
             return 1;
         }
+        fg_getc_wait = 1;
         for (;;) {
             int c = uart_try_getc();
             if (c >= 0) {
+                fg_getc_wait = 0;
+                /* 入力活動 (スクリーンセーバーの物差し。
+                 * セーバーが入っていれば、ここで終わって
+                 * 画面が戻ってから文字が配られる) */
+                saver_note_activity();
                 frame[FRAME_A0] = (uint64_t)(unsigned char)c;
                 break;
             }
