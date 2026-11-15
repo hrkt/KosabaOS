@@ -553,6 +553,19 @@ def main():
     report("K23 screensaver (stage1 -> stage2 -> off via dmesg)",
            ok)
 
+    print("== scenario K24: perf counters ==")
+    # perf.elf が syscall 33 (性能カウンタ読み) を呼んで、
+    # ループ前後の進み・単調・不正な種類への -1 をプログラム
+    # 側で判定し "perf ok" と出す (詳細は perf.c)。実機で
+    # cycle / instret CSR が読めることの確認も兼ねる。
+    # FAIL のときは "perf ok" が出ないので一致で判定する
+    cur = log_total()
+    send_chunked("run perf.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("perf cycles=", 10000, cursor=cur)
+    ok = expect("perf ok", 8000, cursor=cur) and ok
+    report("K24 perf counters (advance / monotonic / bad kind)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

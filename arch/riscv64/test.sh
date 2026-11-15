@@ -734,6 +734,27 @@ else
     (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1 || true
 fi
 
+echo "== scenario AE: perf counters =="
+# perf.elf が syscall 33 (性能カウンタ読み) を呼んで、
+# 100 万回のループの前後で (1) サイクル数が進む、(2) 命令数
+# がループ回数以上増える、(3) 単調 (減らない)、(4) 不正な
+# 種類には -1、をプログラム側で判定して "perf ok" と出す
+# (詳細は perf.c)。カウンタはマシン全体の通算なので
+# 絶対値は見ず、マーカーの順序と "perf FAIL" の不在で判定
+{ sleep 3; printf 'run perf.elf\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ae.log 2>&1 || true
+out=$(strip_ticks < test-ae.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "perf cycles=" "perf ok" \
+    "[kernel] back from user program" || rc=1
+case "$out" in
+    *"perf FAIL"*) echo "  unexpected: perf FAIL"; rc=1 ;;
+esac
+report "AE perf counters (advance / monotonic / bad kind)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

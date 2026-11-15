@@ -37,6 +37,12 @@ uptime_prog_start:
     .incbin "uptime.elf"
 uptime_prog_end:
 
+    .globl perf_prog_start
+    .globl perf_prog_end
+perf_prog_start:
+    .incbin "perf.elf"
+perf_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:

@@ -192,6 +192,27 @@ uint64_t trap_uptime_ms(void)
     return ticks * 1000 + (uint64_t)tick_divider * 100;
 }
 
+/* perf_read (33) 用: ハードウェアの性能カウンタを読む。
+ * 種類 0 = cycle CSR (リセット以来のサイクル数)、1 = instret
+ * CSR (実行を終えた命令数)。どちらもマシン全体の通算で、
+ * 他のタスクやカーネル、割り込みの分も含む (タスクごとの
+ * 集計ではない)。区間の前後で読んで差を取り、かかった
+ * サイクル数や命令数を測るのが使い方 (仕様は
+ * doc/syscalls.md の 33 番)。種類が不正なら (uint64_t)-1 */
+static uint64_t trap_perf_read(uint64_t kind)
+{
+    uint64_t v;
+
+    if (kind == 0) {
+        asm volatile("csrr %0, cycle" : "=r"(v));
+    } else if (kind == 1) {
+        asm volatile("csrr %0, instret" : "=r"(v));
+    } else {
+        return (uint64_t)-1;
+    }
+    return v;
+}
+
 /* fd テーブル (下の方で定義) の初期化: 根の段の表を指させる */
 static void fd_table_init(void);
 
@@ -248,6 +269,7 @@ void trap_init(void)
 #define SYS_JOB_WAIT 22
 #define SYS_KLOG_READ 30
 #define SYS_UPTIME 31
+#define SYS_PERF_READ 33
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
@@ -1931,6 +1953,12 @@ static int do_syscall(uint64_t *frame)
          * 実分解能は 100ms (タイマ割り込みの間隔)。
          * 仕様は doc/syscalls.md の 31 番 */
         frame[FRAME_A0] = trap_uptime_ms();
+        break;
+    case SYS_PERF_READ:
+        /* a0 = 種類 (0 = サイクル数、1 = 実行命令数)。
+         * カウンタの現在値 (64 ビット) を a0 に返す。
+         * 不正な種類は -1。仕様は doc/syscalls.md の 33 番 */
+        frame[FRAME_A0] = trap_perf_read(frame[FRAME_A0]);
         break;
     case SYS_AUDIO_OPEN: {
         /* a0 = サンプルレート (Hz)、a1 = チャンネル数

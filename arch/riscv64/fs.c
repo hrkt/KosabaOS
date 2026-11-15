@@ -44,6 +44,8 @@ extern unsigned char eat_prog_start[];
 extern unsigned char eat_prog_end[];
 extern unsigned char uptime_prog_start[];
 extern unsigned char uptime_prog_end[];
+extern unsigned char perf_prog_start[];
+extern unsigned char perf_prog_end[];
 extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
@@ -488,6 +490,8 @@ void fs_init(void)
            (uint64_t)(eat_prog_end - eat_prog_start));
     fs_add("uptime.elf", uptime_prog_start,
            (uint64_t)(uptime_prog_end - uptime_prog_start));
+    fs_add("perf.elf", perf_prog_start,
+           (uint64_t)(perf_prog_end - perf_prog_start));
     fs_add("atest.elf", atest_prog_start,
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,
