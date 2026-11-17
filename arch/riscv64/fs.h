@@ -47,5 +47,8 @@ uint64_t fs_read_at(struct fs_file *f, uint64_t pos,
                     unsigned char *dst, uint64_t n);  /* 位置を指定して読む */
 uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
                        uint64_t n);          /* 末尾へ書く (育てながら) */
+uint64_t fs_write_at(struct fs_file *f, uint64_t pos,
+                     const unsigned char *src,
+                     uint64_t n);  /* 位置を指定して書く (段3) */
 
 #endif

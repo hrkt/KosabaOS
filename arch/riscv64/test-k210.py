@@ -566,6 +566,21 @@ def main():
     ok = expect("perf ok", 8000, cursor=cur) and ok
     report("K24 perf counters (advance / monotonic / bad kind)", ok)
 
+    print("== scenario K25: seek + positioned write ==")
+    # seek.elf が syscall 17 (lseek) と位置指定 write を
+    # RAM FS と実カード (FAT) の両方で試し、途中への上書き・
+    # 終端後の 0 埋め・ランダムアクセス読み・エラー系を
+    # プログラム側で判定して "seek ok" と出す (詳細は
+    # seek.c)。SD 側のテストファイルはプログラムが最後に
+    # 消す。FAIL のときは "seek ok" が出ないので一致で判定
+    cur = log_total()
+    send_chunked("run seek.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("seek ram ok", 10000, cursor=cur)
+    ok = expect("seek sd ok", 8000, cursor=cur) and ok
+    ok = expect("seek ok", 5000, cursor=cur) and ok
+    report("K25 seek + positioned write (ram + sd)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

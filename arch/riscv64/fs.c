@@ -46,6 +46,8 @@ extern unsigned char uptime_prog_start[];
 extern unsigned char uptime_prog_end[];
 extern unsigned char perf_prog_start[];
 extern unsigned char perf_prog_end[];
+extern unsigned char seek_prog_start[];
+extern unsigned char seek_prog_end[];
 extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
@@ -171,21 +173,34 @@ uint64_t fs_read_at(struct fs_file *f, uint64_t pos,
     return done;
 }
 
-uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
-                       uint64_t n)
+/* pos の位置へ n バイト書く中核。pos <= f->size (frontier
+ * への書き込み) が前提。src が 0 のときは 0 で埋める
+ * (seek で空けた間の穴埋め用)。鎖を育てながら書き、
+ * f->size は書いた範囲の末尾まで伸びる (上書きでは
+ * 変わらない)。書けたバイト数を返す */
+static uint64_t write_span(struct fs_file *f, uint64_t pos,
+                           const unsigned char *src, uint64_t n)
 {
     uint64_t done = 0;
 
     while (done < n) {
-        uint64_t pos = f->size;
+        uint64_t p = pos + done;
         uint64_t off, room, j;
-        uint32_t b = chain_seek(f, pos, &off);
+        uint32_t b = chain_seek(f, p, &off);
 
         if (b == FS_NO_BLOCK) {
-            /* 末尾の次が無い = 鎖を 1 ブロック伸ばす */
+            /* frontier の次が無い = 鎖を 1 ブロック伸ばす */
             uint32_t nb = block_alloc();
+            unsigned char *bp;
             if (nb == FS_NO_BLOCK) {
                 break;  /* arena いっぱい。書けた分だけ返す */
+            }
+            /* 新しいブロックは 0 で消しておく。サイズの内側に
+             * なる部分 (穴や末尾の端数) が未初期化のまま
+             * 読まれるのを防ぐため */
+            bp = block_ptr(nb);
+            for (j = 0; j < FS_BLOCK_SIZE; j++) {
+                bp[j] = 0;
             }
             if (f->first_block == FS_NO_BLOCK) {
                 f->first_block = nb;
@@ -205,12 +220,39 @@ uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
             room = n - done;
         }
         for (j = 0; j < room; j++) {
-            block_ptr(b)[off + j] = src[done + j];
+            block_ptr(b)[off + j] = src ? src[done + j] : 0;
         }
-        f->size += room;
         done += room;
+        if (pos + done > f->size) {
+            f->size = pos + done;
+        }
     }
     return done;
+}
+
+/* 位置を指定して書く (FS 再設計 段3)。既存データの上なら
+ * 上書き、末尾なら伸びる。終端より後ろへの書き込みは、
+ * 間を 0 で埋めてから書く */
+uint64_t fs_write_at(struct fs_file *f, uint64_t pos,
+                     const unsigned char *src, uint64_t n)
+{
+    if (pos > f->size) {
+        /* 間の長さは先に確定させる。write_span が f->size を
+         * 伸ばすので、呼び出し後に pos - f->size を計算すると
+         * 0 になってしまう */
+        uint64_t gap = pos - f->size;
+
+        if (write_span(f, f->size, 0, gap) != gap) {
+            return 0;  /* 間を埋め切れなかった (容量いっぱい) */
+        }
+    }
+    return write_span(f, pos, src, n);
+}
+
+uint64_t fs_write_data(struct fs_file *f, const unsigned char *src,
+                       uint64_t n)
+{
+    return fs_write_at(f, f->size, src, n);
 }
 
 /* --- ファイル表 ----------------------------------------------------- */
@@ -492,6 +534,8 @@ void fs_init(void)
            (uint64_t)(uptime_prog_end - uptime_prog_start));
     fs_add("perf.elf", perf_prog_start,
            (uint64_t)(perf_prog_end - perf_prog_start));
+    fs_add("seek.elf", seek_prog_start,
+           (uint64_t)(seek_prog_end - seek_prog_start));
     fs_add("atest.elf", atest_prog_start,
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,

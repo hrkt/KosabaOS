@@ -43,6 +43,12 @@ perf_prog_start:
     .incbin "perf.elf"
 perf_prog_end:
 
+    .globl seek_prog_start
+    .globl seek_prog_end
+seek_prog_start:
+    .incbin "seek.elf"
+seek_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:

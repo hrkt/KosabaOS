@@ -1067,10 +1067,10 @@ static int chain_grow(struct fat_file *f, uint64_t need)
     return 0;
 }
 
-uint64_t fat_write_data(struct fat_file *f,
-                        const unsigned char *src, uint64_t n)
+uint64_t fat_write_at(struct fat_file *f, uint64_t pos,
+                      const unsigned char *src, uint64_t n)
 {
-    uint64_t pos, written;
+    uint64_t written;
 
     if (!f->has_dir || fat_ensure_mounted() != 0 || n == 0) {
         return 0;
@@ -1081,7 +1081,6 @@ uint64_t fat_write_data(struct fat_file *f,
         f->tail_cluster = chain_last(f->first_cluster, &cnt);
         f->capacity = cnt * (uint64_t)sec_per_cluster * SECTOR;
     }
-    pos = f->size;
     if (chain_grow(f, pos + n) != 0 && f->capacity <= pos) {
         if (f->first_cluster != 0) {
             f->dirty = 1;  /* 確保だけ進んだ分は close で残す */
@@ -1091,12 +1090,40 @@ uint64_t fat_write_data(struct fat_file *f,
     if (pos + n > f->capacity) {
         n = f->capacity - pos;  /* 育った分まで */
     }
+    /* 終端より後ろへの書き込みは、間を 0 で埋めてから
+     * (FS 再設計 段3。鎖の容量の範囲内であることは上で
+     * 保証済み) */
+    if (pos > f->size) {
+        static const unsigned char zeros[256] = { 0 };
+        uint64_t gap = pos - f->size;
+
+        while (gap > 0) {
+            uint64_t chunk = gap > sizeof(zeros)
+                                 ? sizeof(zeros) : gap;
+            uint64_t w = chain_write_bytes(f->first_cluster,
+                                           f->size, zeros, chunk);
+            if (w == 0) {
+                return 0;
+            }
+            f->size += w;
+            gap -= w;
+        }
+        f->dirty = 1;
+    }
     written = chain_write_bytes(f->first_cluster, pos, src, n);
     if (written > 0) {
-        f->size = pos + written;
+        if (pos + written > f->size) {
+            f->size = pos + written;
+        }
         f->dirty = 1;
     }
     return written;
+}
+
+uint64_t fat_write_data(struct fat_file *f,
+                        const unsigned char *src, uint64_t n)
+{
+    return fat_write_at(f, f->size, src, n);
 }
 
 int fat_close_write(struct fat_file *f)
