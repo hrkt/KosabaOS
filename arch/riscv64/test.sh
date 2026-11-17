@@ -755,6 +755,24 @@ case "$out" in
 esac
 report "AE perf counters (advance / monotonic / bad kind)" $rc
 
+echo "== scenario AG: ima status display =="
+# ima.elf が引数の単語を大文字化して折り返し、gfx_text で
+# 前面窓に描く (詳細は ima.c / doc/ima-design.md。シナリオ
+# AF は fs-seek ブランチが使っているので、こちらは AG)。
+# virt では実描画が無いので、ima が出す行と dmesg の
+# gfx text ログ (描いた文字列と scale) で判定する
+{ sleep 3; printf 'run ima.elf fs-seek | seek merge\n'; sleep 3; \
+  printf 'dmesg\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ag.log 2>&1 || true
+out=$(strip_ticks < test-ag.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "ima: FS-SEEK" "ima: SEEK MERGE" "ima: done" \
+    '"FS-SEEK" scale=4' '"SEEK MERGE" scale=4' || rc=1
+report "AG ima status display (wrap / uppercase / gfx text)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

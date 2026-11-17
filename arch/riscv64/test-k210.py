@@ -566,6 +566,19 @@ def main():
     ok = expect("perf ok", 8000, cursor=cur) and ok
     report("K24 perf counters (advance / monotonic / bad kind)", ok)
 
+    print("== scenario K26: ima status display ==")
+    # ima.elf が引数を大文字化して LCD の前面窓に大きく描く
+    # (doc/ima-design.md。K25 は fs-seek ブランチの seek 用)。
+    # 画素そのものは目視の領分なので、ここでは ima が
+    # コンソールへ出す行で判定する
+    cur = log_total()
+    send_chunked("run ima.elf k210-counters | perf ok")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("ima: K210-COUNTERS", 10000, cursor=cur)
+    ok = expect("ima: PERF OK", 8000, cursor=cur) and ok
+    ok = expect("ima: done", 5000, cursor=cur) and ok
+    report("K26 ima status display (console lines)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

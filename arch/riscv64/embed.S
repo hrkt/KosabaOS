@@ -43,6 +43,12 @@ perf_prog_start:
     .incbin "perf.elf"
 perf_prog_end:
 
+    .globl ima_prog_start
+    .globl ima_prog_end
+ima_prog_start:
+    .incbin "ima.elf"
+ima_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:
