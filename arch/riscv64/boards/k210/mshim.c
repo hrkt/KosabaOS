@@ -10,8 +10,12 @@
  *      mtimecmp を書き、STIP を消して戻る
  *   3. タイマ転送: MTI が来たら mip.STIP を立てて S へ知らせる
  *      (mideleg で STI を S に委譲してある)
- *   4. rdtime のエミュレーション: S では csrr time が違法命令に
- *      なるので、命令を読んで mtime を返す (probe4 で確認)
+ *   4. カウンタ読みのエミュレーション: S では csrr time が
+ *      違法命令になるので、命令を読んで mtime を返す
+ *      (probe4 で確認)。同じ仕組みで cycle / instret も
+ *      エミュレーションする (perf_read = syscall 33 の実機側
+ *      の受け口。mcycle / minstret は M では直接読める
+ *      ことがベンチ spike で確認済み)
  *   5. 浮動小数点の土台: mstatus.FS を Initial にし、fcsr を
  *      初期化する (違法命令は S へ委譲されないので、土台は
  *      M 側で用意しないと FP 命令がここで止まる)
@@ -237,7 +241,7 @@ void mshim_handler(uint64_t *tf)
         fatal("misaligned load/store (not emulated)");
     }
 
-    if (cause == 2) {  /* 違法命令: rdtime だけエミュレーション */
+    if (cause == 2) {  /* 違法命令: カウンタ読みをエミュレーション */
         uint64_t mp = r_mepc();
         /* mepc は 2 バイト境界のことがあるので 16bit ずつ読む。
          * S の住所は恒等マップなので M からそのまま読める */
@@ -246,6 +250,22 @@ void mshim_handler(uint64_t *tf)
         if ((ins & 0xFFFFF07Fu) == 0xC0102073u) {  /* csrr rd, time */
             int rd = (int)((ins >> 7) & 0x1F);
             set_frame_rd(tf, rd, CLINT_MTIME);
+            w_mepc(mp + 4);
+            return;
+        }
+        if ((ins & 0xFFFFF07Fu) == 0xC0002073u) {  /* csrr rd, cycle */
+            int rd = (int)((ins >> 7) & 0x1F);
+            uint64_t v;
+            __asm__ volatile("csrr %0, mcycle" : "=r"(v));
+            set_frame_rd(tf, rd, v);
+            w_mepc(mp + 4);
+            return;
+        }
+        if ((ins & 0xFFFFF07Fu) == 0xC0202073u) {  /* csrr rd, instret */
+            int rd = (int)((ins >> 7) & 0x1F);
+            uint64_t v;
+            __asm__ volatile("csrr %0, minstret" : "=r"(v));
+            set_frame_rd(tf, rd, v);
             w_mepc(mp + 4);
             return;
         }
