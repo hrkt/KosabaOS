@@ -55,6 +55,12 @@ seek_prog_start:
     .incbin "seek.elf"
 seek_prog_end:
 
+    .globl oled_prog_start
+    .globl oled_prog_end
+oled_prog_start:
+    .incbin "oled.elf"
+oled_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:

@@ -594,6 +594,21 @@ def main():
     ok = expect("ima: done", 5000, cursor=cur) and ok
     report("K26 ima status display (console lines)", ok)
 
+    print("== scenario K27: oled display ==")
+    # oled.elf が syscall 48 で SSD1306 OLED に出す
+    # (doc/oled-design.md)。モジュール未接続の基板では
+    # "oled: no display" になるので、その場合は FAIL に
+    # せず注記だけ出す。画素は目視の領分
+    cur = log_total()
+    send_chunked("run oled.elf k210 | oled ok")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("oled: done", 10000, cursor=cur)
+    if not ok:
+        ok = expect("oled: no display", 3000, cursor=cur)
+        if ok:
+            print("  note: OLED module not attached (no display)")
+    report("K27 oled display (console lines)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
