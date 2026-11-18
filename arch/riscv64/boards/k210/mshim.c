@@ -295,16 +295,20 @@ static int write_byte_va(uint64_t va, uint8_t v)
 }
 
 /* ---- トラップ検出の記録 (カーネルが klog へ drain する) --------------
- * シムは klog を直接触らない。先頭 MSHIM_LOG_MAX 件だけ
- * 詳細 {cause, pc, addr} を残し、累計は別に数える。
- * drain は S モードのカーネルから呼ばれる (このファイルの
- * 関数だが、実行は通常の C として S でもそのまま動く) */
+ * シムは klog を直接触らない。詳細 {cause, pc, addr} は
+ * 直近 MSHIM_LOG_MAX 件のリングに残し、累計は別に数える。
+ * (当初は先頭 8 件だけだったが、それだと最初のプログラム
+ * で満杯になり、後から来る転送の記録が残らなかった。
+ * 2026-11-19 の K29 で発覚してリングに直した)
+ * drain は S モードのカーネルから呼ばれ、klog にだけ書く
+ * (コンソールには出さない。このファイルの関数だが、実行は
+ * 通常の C として S でもそのまま動く) */
 
 #define MSHIM_LOG_MAX 8
 static struct {
     uint64_t cause, pc, addr;
 } mshim_log_recs[MSHIM_LOG_MAX];
-static volatile uint32_t mshim_log_count;   /* 記録済み件数 */
+static volatile uint32_t mshim_log_count;   /* 記録した総件数 */
 static volatile uint64_t mshim_emu_total;   /* エミュレーション累計 */
 
 /* cause に MSHIM_LOG_FORWARDED を重ねると「段2 でカーネルへ
@@ -313,41 +317,45 @@ static volatile uint64_t mshim_emu_total;   /* エミュレーション累計 */
 
 static void mshim_log_push(uint64_t cause, uint64_t pc, uint64_t addr)
 {
-    if (mshim_log_count < MSHIM_LOG_MAX) {
-        mshim_log_recs[mshim_log_count].cause = cause;
-        mshim_log_recs[mshim_log_count].pc = pc;
-        mshim_log_recs[mshim_log_count].addr = addr;
-        mshim_log_count++;   /* 中身を書いてから件数を進める */
-    }
+    uint32_t slot = mshim_log_count % MSHIM_LOG_MAX;
+    mshim_log_recs[slot].cause = cause;
+    mshim_log_recs[slot].pc = pc;
+    mshim_log_recs[slot].addr = addr;
+    mshim_log_count++;   /* 中身を書いてから件数を進める */
 }
 
 void board_drain_trap_log(void)
 {
     static uint32_t drained;
     static uint64_t last_total;
-    while (drained < mshim_log_count && drained < MSHIM_LOG_MAX) {
-        uint64_t cause = mshim_log_recs[drained].cause;
-        uint64_t pc = mshim_log_recs[drained].pc;
-        uint64_t addr = mshim_log_recs[drained].addr;
+    /* drain が 1 周分より遅れたら、残っている最古に追いつく
+     * (上書きされた記録は諦める) */
+    if (mshim_log_count - drained > MSHIM_LOG_MAX)
+        drained = mshim_log_count - MSHIM_LOG_MAX;
+    while (drained < mshim_log_count) {
+        uint32_t slot = drained % MSHIM_LOG_MAX;
+        uint64_t cause = mshim_log_recs[slot].cause;
+        uint64_t pc = mshim_log_recs[slot].pc;
+        uint64_t addr = mshim_log_recs[slot].addr;
         drained++;
         if (cause & MSHIM_LOG_FORWARDED) {
-            kputs("trap: forwarded to kernel cause=");
-            kput_dec(cause & ~MSHIM_LOG_FORWARDED);
+            lkputs("trap: forwarded to kernel cause=");
+            lkput_dec(cause & ~MSHIM_LOG_FORWARDED);
         } else {
-            kputs("trap: misaligned emulated cause=");
-            kput_dec(cause);
+            lkputs("trap: misaligned emulated cause=");
+            lkput_dec(cause);
         }
-        kputs(" pc=");
-        kput_hex(pc);
-        kputs(" addr=");
-        kput_hex(addr);
-        kputc('\n');
+        lkputs(" pc=");
+        lkput_hex(pc);
+        lkputs(" addr=");
+        lkput_hex(addr);
+        lkputc('\n');
     }
     if (mshim_emu_total != last_total) {
         last_total = mshim_emu_total;
-        kputs("trap: misaligned emulated total=");
-        kput_dec(last_total);
-        kputc('\n');
+        lkputs("trap: misaligned emulated total=");
+        lkput_dec(last_total);
+        lkputc('\n');
     }
 }
 

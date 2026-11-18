@@ -155,6 +155,16 @@ void kput_hex(uint64_t x)
     }
 }
 
+void lkput_hex(uint64_t x)
+{
+    int i;
+    lkputs("0x");
+    for (i = 60; i >= 0; i -= 4) {
+        int d = (int)((x >> i) & 0xF);
+        lkputc((char)(d < 10 ? '0' + d : 'a' + (d - 10)));
+    }
+}
+
 uint64_t klog_total(void)
 {
     return klog_written;
