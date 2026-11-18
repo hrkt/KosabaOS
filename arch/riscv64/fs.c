@@ -54,6 +54,8 @@ extern unsigned char oled_prog_start[];
 extern unsigned char oled_prog_end[];
 extern unsigned char misalign_prog_start[];
 extern unsigned char misalign_prog_end[];
+extern unsigned char badinsn_prog_start[];
+extern unsigned char badinsn_prog_end[];
 extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
@@ -548,6 +550,8 @@ void fs_init(void)
            (uint64_t)(oled_prog_end - oled_prog_start));
     fs_add("misalign.elf", misalign_prog_start,
            (uint64_t)(misalign_prog_end - misalign_prog_start));
+    fs_add("badinsn.elf", badinsn_prog_start,
+           (uint64_t)(badinsn_prog_end - badinsn_prog_start));
     fs_add("atest.elf", atest_prog_start,
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,

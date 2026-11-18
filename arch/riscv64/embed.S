@@ -67,6 +67,12 @@ misalign_prog_start:
     .incbin "misalign.elf"
 misalign_prog_end:
 
+    .globl badinsn_prog_start
+    .globl badinsn_prog_end
+badinsn_prog_start:
+    .incbin "badinsn.elf"
+badinsn_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:

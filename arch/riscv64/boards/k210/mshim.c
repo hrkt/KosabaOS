@@ -307,9 +307,12 @@ static struct {
 static volatile uint32_t mshim_log_count;   /* 記録済み件数 */
 static volatile uint64_t mshim_emu_total;   /* エミュレーション累計 */
 
+/* cause に MSHIM_LOG_FORWARDED を重ねると「段2 でカーネルへ
+ * 転送した」記録になる (drain 側で文言を変える) */
+#define MSHIM_LOG_FORWARDED 0x100ULL
+
 static void mshim_log_push(uint64_t cause, uint64_t pc, uint64_t addr)
 {
-    mshim_emu_total++;
     if (mshim_log_count < MSHIM_LOG_MAX) {
         mshim_log_recs[mshim_log_count].cause = cause;
         mshim_log_recs[mshim_log_count].pc = pc;
@@ -327,8 +330,13 @@ void board_drain_trap_log(void)
         uint64_t pc = mshim_log_recs[drained].pc;
         uint64_t addr = mshim_log_recs[drained].addr;
         drained++;
-        kputs("trap: misaligned emulated cause=");
-        kput_dec(cause);
+        if (cause & MSHIM_LOG_FORWARDED) {
+            kputs("trap: forwarded to kernel cause=");
+            kput_dec(cause & ~MSHIM_LOG_FORWARDED);
+        } else {
+            kputs("trap: misaligned emulated cause=");
+            kput_dec(cause);
+        }
         kputs(" pc=");
         kput_hex(pc);
         kputs(" addr=");
@@ -507,8 +515,70 @@ static int emulate_misaligned(uint64_t *tf, uint64_t cause)
                 return -1;
         }
     }
+    mshim_emu_total++;
     mshim_log_push(cause, epc, addr);
     w_mepc(epc + (uint64_t)ilen);
+    return 0;
+}
+
+/* ---- 段2: エミュレーションできないトラップの S への転送 -------------
+ * U モード由来のトラップは、S 側の CSRs (sepc / scause /
+ * stval / sstatus) を本物のトラップと同じ形に仕立て、
+ * mret の行き先を trap.S のユーザー用入口 (trap_entry_user)
+ * へ差し替える。レジスタと sp は mshim_entry の通常の復帰が
+ * ユーザーのものを戻すので、入口から見ると本物のユーザー
+ * トラップと区別がつかない。カーネル側は既存の
+ * 「ユーザープログラムの例外」経路がそのプログラムだけを
+ * 終わらせる (trap.c)。S 由来のトラップは転送しない
+ * (カーネル自身のバグを握りつぶさない) */
+
+extern void trap_entry_user(void);  /* trap.S のユーザー用入口 */
+
+static uint64_t r_mstatus(void)
+{
+    uint64_t v;
+    __asm__ volatile("csrr %0, mstatus" : "=r"(v));
+    return v;
+}
+
+static void w_mstatus(uint64_t v)
+{
+    __asm__ volatile("csrw mstatus, %0" :: "r"(v));
+}
+
+static uint64_t r_mtval(void)
+{
+    uint64_t v;
+    __asm__ volatile("csrr %0, mtval" : "=r"(v));
+    return v;
+}
+
+static uint64_t r_sstatus(void)
+{
+    uint64_t v;
+    __asm__ volatile("csrr %0, sstatus" : "=r"(v));
+    return v;
+}
+
+static int forward_to_kernel(uint64_t cause)
+{
+    uint64_t ms = r_mstatus();
+    uint64_t ss;
+    if (((ms >> 11) & 3) != 0)
+        return -1;                   /* U 由来でない */
+    mshim_log_push(cause | MSHIM_LOG_FORWARDED, r_mepc(), r_mtval());
+    __asm__ volatile("csrw scause, %0" :: "r"(cause));
+    __asm__ volatile("csrw sepc, %0" :: "r"(r_mepc()));
+    __asm__ volatile("csrw stval, %0" :: "r"(r_mtval()));
+    ss = r_sstatus();
+    ss &= ~(1ULL << 8);              /* SPP = U から */
+    ss |= (1ULL << 5);               /* SPIE = 1 (元の許可状態) */
+    ss &= ~(1ULL << 1);              /* SIE = 0 (入口の作法) */
+    __asm__ volatile("csrw sstatus, %0" :: "r"(ss));
+    ms &= ~(3ULL << 11);
+    ms |= (1ULL << 11);              /* MPP = S */
+    w_mstatus(ms);
+    w_mepc((uint64_t)trap_entry_user);
     return 0;
 }
 
@@ -543,19 +613,29 @@ void mshim_handler(uint64_t *tf)
         /* 境界にそろっていない読み (4) / 書き (6)。ドラフト仕様の
          * K210 では S へ委譲できず M に来る。整数の load/store は
          * エミュレーションして続行させる。対象外 (浮動小数点、
-         * 変換できないアドレス) は当面ここで止まる (段2 で
-         * S へ転送してプログラムだけ落とす予定) */
+         * 変換できないアドレス) は U 由来なら S へ転送して
+         * プログラムだけ落とす (段2) */
         if (emulate_misaligned(tf, cause) == 0)
+            return;
+        if (forward_to_kernel(cause) == 0)
             return;
         fatal("misaligned load/store (not emulated)");
     }
 
     if (cause == 2) {  /* 違法命令: カウンタ読みをエミュレーション */
         uint64_t mp = r_mepc();
-        /* mepc は 2 バイト境界のことがあるので 16bit ずつ読む。
-         * S の住所は恒等マップなので M からそのまま読める */
-        uint32_t ins = *(volatile uint16_t *)mp |
-                       ((uint32_t)*(volatile uint16_t *)(mp + 2) << 16);
+        uint64_t ipa;
+        uint32_t ins;
+        /* 命令を読む。U 由来では mepc はユーザー仮想アドレス
+         * なので、物理を直読みせずページ表で変換してから読む
+         * (S 由来の恒等マップも同じ経路で辿れる) */
+        if (va_to_pa(mp, &ipa) != 0) {
+            if (forward_to_kernel(cause) == 0)
+                return;
+            fatal("illegal instruction (unmapped pc)");
+        }
+        ins = *(volatile uint16_t *)ipa |
+              ((uint32_t)*(volatile uint16_t *)(ipa + 2) << 16);
         if ((ins & 0xFFFFF07Fu) == 0xC0102073u) {  /* csrr rd, time */
             int rd = (int)((ins >> 7) & 0x1F);
             set_frame_rd(tf, rd, CLINT_MTIME);
@@ -578,8 +658,15 @@ void mshim_handler(uint64_t *tf)
             w_mepc(mp + 4);
             return;
         }
+        /* カウンタ読み以外の違法命令: U 由来なら S へ転送 */
+        if (forward_to_kernel(cause) == 0)
+            return;
         fatal("illegal instruction");
     }
 
+    /* 想定外の例外も、U 由来なら S へ転送してプログラムだけ
+     * 落とす。それ以外 (S 由来) は今までどおり止める */
+    if (forward_to_kernel(cause) == 0)
+        return;
     fatal("unexpected trap");
 }
