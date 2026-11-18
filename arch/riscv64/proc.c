@@ -43,6 +43,7 @@
 #include "board.h"  /* BOARD_TIMER_HZ (sleep の時刻換算) */
 #include "klog.h"   /* 時計タスクの起床記録 (lkputs、段2) */
 #include "saver.h"  /* スクリーンセーバーの毎秒の判定 */
+#include "wdt.h"    /* ウォッチドッグの餌やり (段3) */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
 #endif
@@ -384,6 +385,9 @@ static void clock_body(void)
 
     for (;;) {
         task_sleep_ms(1000);
+        /* ウォッチドッグの餌やり: 時計タスクが起き続けている
+         * ことがスケジューラ生存の証拠になる (段3) */
+        board_wdt_feed();
         /* 起きたことはログにだけ残す (コンソールには出さない)。
          * virt ではこれが観測手段になり、実機でも dmesg と
          * ps (wakes) で「待ちの間も起きていた」ことが追える */
