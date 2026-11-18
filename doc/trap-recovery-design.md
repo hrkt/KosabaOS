@@ -59,6 +59,15 @@ cause 4 (load misaligned) / 6 (store misaligned) の命令を
 (それで PASS)、実機では修正前は基板が止まり、修正後は
 "misalign ok" が出る。test-k210.py に K28 として追加。
 
+**検出の記録 (2026-11-19、ユーザーの追加指示)**:
+エミュレーションしたら、そのことを後から分かるように
+カーネルログ (dmesg) に残す。M シムは klog を直接触ら
+ない: シムは自分の小さな記録領域 (先頭 8 件の詳細
+{cause, pc, addr} と累計カウンタ) に書き、カーネルが
+trap 入口のついでに drain して klog へ移す
+(board_drain_trap_log、traplog.h)。段2 の転送も同じ
+記録経路に乗せる。
+
 ## 段2: エミュレーションできないトラップはプログラムだけ終了
 
 段1 で扱えないトラップ (FP の misaligned、想定外の

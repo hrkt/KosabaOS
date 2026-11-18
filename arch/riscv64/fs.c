@@ -50,6 +50,8 @@ extern unsigned char ima_prog_start[];
 extern unsigned char ima_prog_end[];
 extern unsigned char seek_prog_start[];
 extern unsigned char seek_prog_end[];
+extern unsigned char misalign_prog_start[];
+extern unsigned char misalign_prog_end[];
 extern unsigned char atest_prog_start[];
 extern unsigned char atest_prog_end[];
 extern unsigned char fptest_prog_start[];
@@ -540,6 +542,8 @@ void fs_init(void)
            (uint64_t)(ima_prog_end - ima_prog_start));
     fs_add("seek.elf", seek_prog_start,
            (uint64_t)(seek_prog_end - seek_prog_start));
+    fs_add("misalign.elf", misalign_prog_start,
+           (uint64_t)(misalign_prog_end - misalign_prog_start));
     fs_add("atest.elf", atest_prog_start,
            (uint64_t)(atest_prog_end - atest_prog_start));
     fs_add("fptest.elf", fptest_prog_start,

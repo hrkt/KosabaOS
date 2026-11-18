@@ -795,6 +795,23 @@ check_order "$out" "Nish, the KosabaOS shell" \
     '"FS-SEEK" scale=4' '"SEEK MERGE" scale=4' || rc=1
 report "AG ima status display (wrap / uppercase / gfx text)" $rc
 
+echo "== scenario AJ: misaligned access =="
+# misalign.elf が境界にそろっていない ld / sd などを実行し、
+# 値が正しく読み書きできるかを確認する (詳細は misalign.c /
+# doc/trap-recovery-design.md。AH / AI は oled ブランチの
+# シナリオで、マージ後に間に来るのでこちらは AJ)。
+# virt (QEMU) は misaligned を許容するので素通りが正解。
+# K210 では M シムのエミュレーションが効く (実機は K28)
+{ sleep 3; printf 'run misalign.elf\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-aj.log 2>&1 || true
+out=$(strip_ticks < test-aj.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "misalign ok" || rc=1
+report "AJ misaligned access (emulation smoke)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

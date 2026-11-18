@@ -594,6 +594,22 @@ def main():
     ok = expect("ima: done", 5000, cursor=cur) and ok
     report("K26 ima status display (console lines)", ok)
 
+    print("== scenario K28: misaligned emulation ==")
+    # misalign.elf の misaligned な ld / sd を M シムが
+    # エミュレーションして続行できることと、検出が dmesg に
+    # 残ることを確認する (doc/trap-recovery-design.md。
+    # K27 は oled ブランチ用で、マージ後に間に来る)。
+    # 修正前のカーネルでは最初の sd で基板が止まる
+    cur = log_total()
+    send_chunked("run misalign.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("misalign ok", 10000, cursor=cur)
+    cur2 = log_total()
+    send_chunked("dmesg")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("misaligned emulated", 8000, cursor=cur2) and ok
+    report("K28 misaligned emulation + trap log", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")

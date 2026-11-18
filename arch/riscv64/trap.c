@@ -28,6 +28,7 @@
 #include "gfx.h"
 #include "audio.h"
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
+#include "traplog.h" /* M シムのトラップ記録の drain (k210) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -2199,6 +2200,10 @@ void trap_handler(uint64_t *frame, int from_user)
     uint64_t scause = r_scause();
     int is_interrupt = (int)(scause >> 63);
     uint64_t code = scause & 0xFF;
+
+    /* M シムがエミュレーションしたトラップの記録を klog へ
+     * 移す (k210 のみ実体あり。doc/trap-recovery-design.md) */
+    board_drain_trap_log();
 
     /* スケジューリング中に割り込まれたら、このタスクの
      * sepc / sstatus を退避しておく (CSR は CPU に 1 組だけ

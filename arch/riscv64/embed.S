@@ -55,6 +55,12 @@ seek_prog_start:
     .incbin "seek.elf"
 seek_prog_end:
 
+    .globl misalign_prog_start
+    .globl misalign_prog_end
+misalign_prog_start:
+    .incbin "misalign.elf"
+misalign_prog_end:
+
     .globl atest_prog_start
     .globl atest_prog_end
 atest_prog_start:
