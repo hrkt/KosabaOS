@@ -264,6 +264,7 @@ void trap_init(void)
 #define SYS_RMDIR 14
 #define SYS_CHDIR 15
 #define SYS_GETCWD 16
+#define SYS_LSEEK 17
 #define SYS_JOB_RUN 20
 #define SYS_JOB_LIST 21
 #define SYS_JOB_WAIT 22
@@ -1895,18 +1896,58 @@ static int do_syscall(uint64_t *frame)
                 break;
             }
             /* 書き先は RAM FS か SD (FAT) かで振り分ける。
-             * どちらも「末尾へ書く」意味づけは同じ */
+             * どちらも「fd の現在位置へ書く」意味づけは同じ
+             * (位置指定の書き込み、FS 再設計 段3) */
             w = fd_table[fd].is_sd
-                    ? fat_write_data(&fd_table[fd].fat, buf, chunk)
-                    : fs_write_data(fd_table[fd].file, buf, chunk);
+                    ? fat_write_at(&fd_table[fd].fat,
+                                   fd_table[fd].pos + done, buf, chunk)
+                    : fs_write_at(fd_table[fd].file,
+                                  fd_table[fd].pos + done, buf, chunk);
             done += w;
             if (w < chunk) {
                 break;  /* 容量いっぱい */
             }
         }
         if (done != (uint64_t)-1) {
+            fd_table[fd].pos += done;
             frame[FRAME_A0] = done;
         }
+        break;
+    }
+    case SYS_LSEEK: {
+        /* a0 = fd、a1 = オフセット (符号付き)、a2 = 基準
+         * (0 = 先頭、1 = 現在位置、2 = 末尾)。新しい位置を
+         * a0 に返す。結果が負になる移動・基準の不正・fd の
+         * 不正は -1 で、そのとき位置は変わらない。末尾より
+         * 後にも動かせる (書かずに閉じればファイルは伸び
+         * ない)。仕様は doc/syscalls.md の 17 番 */
+        uint64_t fd = frame[FRAME_A0];
+        int64_t off = (int64_t)frame[FRAME_A1];
+        int64_t base, np;
+
+        if (fd >= MAX_FD || !fd_table[fd].used) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        if (frame[FRAME_A2] == 0) {
+            base = 0;
+        } else if (frame[FRAME_A2] == 1) {
+            base = (int64_t)fd_table[fd].pos;
+        } else if (frame[FRAME_A2] == 2) {
+            base = (int64_t)(fd_table[fd].is_sd
+                                 ? fd_table[fd].fat.size
+                                 : fd_table[fd].file->size);
+        } else {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        np = base + off;
+        if (np < 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        fd_table[fd].pos = (uint64_t)np;
+        frame[FRAME_A0] = (uint64_t)np;
         break;
     }
     case SYS_KLOG_READ: {

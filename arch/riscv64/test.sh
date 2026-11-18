@@ -755,6 +755,28 @@ case "$out" in
 esac
 report "AE perf counters (advance / monotonic / bad kind)" $rc
 
+echo "== scenario AF: seek + positioned write =="
+# seek.elf が syscall 17 (lseek) と位置指定 write を、
+# RAM FS と SD (FAT) の両方で試す: 途中への上書き (大きさ
+# 不変)、終端より後ろへの書き込み (間は 0 埋め)、読み側の
+# ランダムアクセス、エラー系 (負になる seek と不正な基準
+# は -1 で位置不変) をプログラム側で判定して "seek ok" と
+# 出す (詳細は seek.c)。マーカーの順序と "seek FAIL" の
+# 不在で判定する
+{ sleep 3; printf 'run seek.elf\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-af.log 2>&1 || true
+out=$(strip_ticks < test-af.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "seek ram ok" "seek sd ok" "seek ok" \
+    "[kernel] back from user program" || rc=1
+case "$out" in
+    *"seek FAIL"*) echo "  unexpected: seek FAIL"; rc=1 ;;
+esac
+report "AF seek + positioned write (ram + sd)" $rc
+
 echo "== scenario AG: ima status display =="
 # ima.elf が引数の単語を大文字化して折り返し、gfx_text で
 # 前面窓に描く (詳細は ima.c / doc/ima-design.md。シナリオ

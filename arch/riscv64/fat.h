@@ -61,6 +61,12 @@ int fat_create(const char *path, struct fat_file *out);
 uint64_t fat_write_data(struct fat_file *f,
                         const unsigned char *src, uint64_t n);
 
+/* 位置を指定して書く (fs_write_at と同じ意味づけ、段3)。
+ * 既存データの上なら上書き、終端より後ろなら間を 0 で
+ * 埋めてから書く */
+uint64_t fat_write_at(struct fat_file *f, uint64_t pos,
+                      const unsigned char *src, uint64_t n);
+
 /* 書き込みの締め: FAT を書き戻し、目録項へサイズと開始
  * クラスタと日時を書き、FSInfo の空き数を更新する。
  * 成功 0、失敗 -1 */
