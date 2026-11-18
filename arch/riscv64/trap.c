@@ -28,6 +28,7 @@
 #include "gfx.h"
 #include "audio.h"
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
+#include "ssd1315.h" /* OLED 表示 (syscall 48 / 49) */
 #include "traplog.h" /* M シムのトラップ記録の drain (k210) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
@@ -280,6 +281,8 @@ void trap_init(void)
 #define SYS_GFX_RECT 45
 #define SYS_GFX_TEXT 46
 #define SYS_GFX_LINE 47
+#define SYS_OLED_TEXT 48
+#define SYS_OLED_CLEAR 49
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -2177,6 +2180,22 @@ static int do_syscall(uint64_t *frame)
                  (int)(frame[FRAME_A1] >> 16),
                  (uint32_t)frame[FRAME_A2]);
         frame[FRAME_A0] = 0;
+        break;
+    case SYS_OLED_TEXT: {
+        /* a0 = 文字列。消去してから描いて転送する
+         * (doc/oled-design.md)。最大 175 文字 (8 行 x 21 文字
+         * + 改行の合図)。写せなければ -1、OLED が無くても -1 */
+        char buf[176];
+        if (copy_user_string(frame[FRAME_A0], buf, sizeof(buf)) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        frame[FRAME_A0] = (uint64_t)oled_text_multi(buf);
+        break;
+    }
+    case SYS_OLED_CLEAR:
+        /* OLED を消去して転送する。無いときは -1 */
+        frame[FRAME_A0] = (uint64_t)oled_clear_flush();
         break;
     default:
         kputs("trap: unknown syscall ");

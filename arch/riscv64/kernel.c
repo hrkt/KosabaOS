@@ -23,6 +23,7 @@
 #include "proc.h"
 #include "elf.h"
 #include "fs.h"
+#include "ssd1315.h"
 #include "time.h"
 #include "saver.h"  /* 入力活動の記録とキー待ちの申告 */
 #if BOARD_FEATURE_LCD
@@ -215,6 +216,8 @@ void kmain(void)
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
     sched_start();  /* 時計タスクの常駐開始 (スケジューラ段2)。
                      * 以後、入力待ちの間も時計が進む */
+    oled_bootstrap();  /* OLED (SSD1306) の起動表示。無くても
+                        * 起動は続ける (doc/oled-design.md) */
 #endif
 #if BOARD_FEATURE_MMODE_TRAP
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */

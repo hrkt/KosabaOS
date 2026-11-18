@@ -795,6 +795,37 @@ check_order "$out" "Nish, the KosabaOS shell" \
     '"FS-SEEK" scale=4' '"SEEK MERGE" scale=4' || rc=1
 report "AG ima status display (wrap / uppercase / gfx text)" $rc
 
+echo "== scenario AH: oled boot display =="
+# 起動時に oled_bootstrap が SSD1315 を初期化して
+# "KOSABAOS / OLED OK" を出す (doc/oled-design.md)。
+# virt の I2C はダミー (常に成功) なので、klog の
+# oled 行を dmesg で判定する。実機でモジュールが無い
+# ときは "oled: no ack" になる (そちらは K27 の領分外)
+{ sleep 3; printf 'dmesg\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ah.log 2>&1 || true
+out=$(strip_ticks < test-ah.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "oled: init ok" 'oled: text "KOSABAOS"' 'oled: text "OLED OK"' || rc=1
+report "AH oled boot display (init + text via dmesg)" $rc
+
+echo "== scenario AI: oled_text syscall =="
+# oled.elf が syscall 48 で文字列を OLED に出す
+# (doc/oled-design.md)。virt では klog の oled text 行と
+# コンソールの "oled: done" で判定する
+{ sleep 3; printf 'run oled.elf hello | new display\n'; sleep 3; \
+  printf 'dmesg\n'; sleep 2; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ai.log 2>&1 || true
+out=$(strip_ticks < test-ai.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "oled: done" 'oled: text "HELLO"' 'oled: text "NEW DISPLAY"' || rc=1
+report "AI oled_text syscall (oled.elf via dmesg)" $rc
+
 echo "== scenario AJ: misaligned access =="
 # misalign.elf が境界にそろっていない ld / sd などを実行し、
 # 値が正しく読み書きできるかを確認する (詳細は misalign.c /
