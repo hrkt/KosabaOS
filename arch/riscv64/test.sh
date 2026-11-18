@@ -843,6 +843,24 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "misalign ok" || rc=1
 report "AJ misaligned access (emulation smoke)" $rc
 
+echo "== scenario AK: unemulatable trap (forwarding) =="
+# badinsn.elf が違法命令を実行する。virt では最初から S へ
+# 届き、K210 では段2 の転送で届く。どちらでも落ちるのは
+# プログラムだけで、Nish が生きて次のプログラムを実行
+# できることを確認する ("SURVIVED" が出たら通り抜けて
+# いて失敗。詳細は doc/trap-recovery-design.md)
+{ sleep 3; printf 'run badinsn.elf\n'; sleep 3; \
+  printf 'run misalign.elf\n'; sleep 3; \
+  printf 'exit\n'; sleep 2; } \
+    | timeout 15 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ak.log 2>&1 || true
+out=$(strip_ticks < test-ak.log)
+rc=0
+check_order "$out" "Nish, the KosabaOS shell" \
+    "badinsn: before" "user program fault" "misalign ok" || rc=1
+case "$out" in *SURVIVED*) rc=1;; esac
+report "AK unemulatable trap (program dies, shell survives)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

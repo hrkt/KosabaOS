@@ -624,6 +624,31 @@ def main():
     ok = expect("misaligned emulated", 8000, cursor=cur2) and ok
     report("K28 misaligned emulation + trap log", ok)
 
+    print("== scenario K29: forwarded trap ==")
+    # badinsn.elf の違法命令と FP misaligned が、段2 の転送で
+    # カーネルへ届いてプログラムだけが落ちること、転送が
+    # dmesg に残ること、Nish が生き続けることを確認する
+    # (doc/trap-recovery-design.md)
+    cur = log_total()
+    send_chunked("run badinsn.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("badinsn: before", 10000, cursor=cur)
+    ok = expect("user program fault", 8000, cursor=cur) and ok
+    cur = log_total()
+    send_chunked("run badinsn.elf fp")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("badinsn: before", 10000, cursor=cur) and ok
+    ok = expect("user program fault", 8000, cursor=cur) and ok
+    cur = log_total()
+    send_chunked("run misalign.elf")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("misalign ok", 10000, cursor=cur) and ok
+    cur = log_total()
+    send_chunked("dmesg")
+    call_tool("serial_send", {"text": "", "newline": True})
+    ok = expect("forwarded to kernel", 8000, cursor=cur) and ok
+    report("K29 forwarded trap (program dies, shell survives)", ok)
+
     print("== summary ==")
     if fails == 0:
         print("ALL PASS")
