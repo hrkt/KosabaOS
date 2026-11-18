@@ -1,8 +1,0 @@
-build: CC=/home/hatch/workspace/kosaba-os/tools/riscv-gcc/bin/riscv-none-elf-gcc
-build: QEMU=/home/hatch/workspace/kosaba-os/tools/qemu/qemu-system-riscv64
-build: BOARD=virt
-build: ikesu materials embedded (IKESU_DIR=../../../../ikesu)
-build: screensaver TEST thresholds (4s/10s)
-wrote test.wav
-wrote sd.img
-/home/hatch/workspace/kosaba-os/tools/xpack-riscv-none-elf-gcc-15.2.0-1/bin/../lib/gcc/riscv-none-elf/15.2.0/../../../../riscv-none-elf/bin/ld: warning: kernel.elf has a LOAD segment with RWX permissions
