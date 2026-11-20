@@ -15,10 +15,14 @@
  *
  * プロトコルの要点:
  *   フレーム = SOH(1) + seq(1B) + len(2B LE) +
- *              payload(0..1024) + CRC-16(2B BE)
- *   終了フレームは先頭が ETX(3)、len = 0
- *   CRC は CCITT-FALSE (poly 0x1021、初期値 0xFFFF)、
- *   対象は seq + len + payload
+ *              payload(0..1024) + CRC-16(2B LE)
+ *   終了フレームは先頭が ETX(3)、len = 0、seq は
+ *   最後のデータブロックの次。ACK は返さず、close
+ *   して DONE 行を印字する (送り側は NAK を受けたら
+ *   終了フレームを再送する)
+ *   CRC は CCITT-FALSE (poly 0x1021、初期値 0xFFFF、
+ *   検算値: "123456789" → 0x29B1)、対象は seq + len
+ *   + payload、フィールドは下位バイト先 (LE)
  *   ACK = 0x06 + seq、NAK = 0x15 + 期待 seq
  *   seq == 期待値 - 1 の重複フレームは書かずに ACK
  *
@@ -211,8 +215,9 @@ int32 main(int32 argc, char **argv)
             g_buf[i] = (char)getb();
             i = i + 1;
         }
-        crchi = getb();
+        /* CRC フィールドは下位バイト先 (LE) */
         crclo = getb();
+        crchi = getb();
 
         crc = 65535;
         crc = crc_add(crc, seq);
@@ -229,11 +234,13 @@ int32 main(int32 argc, char **argv)
         }
 
         if (start == 3) {
-            if (len != 0) {
+            /* 終了フレーム: ACK は返さない。seq が期待値と
+             * 合うときだけ終わる (合わなければ NAK。送り
+             * 側は終了フレームを再送してくる) */
+            if (len != 0 || seq != expect) {
                 send_nak(expect);
                 continue;
             }
-            send_ack(seq);
             done = 1;
         } else if (seq == expect) {
             off = 0;

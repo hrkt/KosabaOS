@@ -31,8 +31,9 @@ def frame(start: int, seq: int, payload: bytes,
     crc = crc16(head + payload)
     if bad_crc:
         crc ^= 0x00FF
+    # CRC フィールドは下位バイト先 (LE)
     return (bytes([start]) + head + payload
-            + bytes([(crc >> 8) & 0xFF, crc & 0xFF]))
+            + bytes([crc & 0xFF, (crc >> 8) & 0xFF]))
 
 
 def main() -> None:
