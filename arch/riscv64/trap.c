@@ -1380,6 +1380,161 @@ static uint64_t audio_channels;  /* 1 または 2 */
 static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
 
+#if BOARD_FEATURE_AUDIO
+/* --- リングバッファとフィーダ (追補3) -------------------------------
+ * I2S の FIFO は 8 フレーム (約 0.18ms) しかなく、書き手が
+ * 少しでも手を止めると枯れる。そこで audio_write はまず
+ * カーネルのリングへ写すだけにして即座に戻り、FIFO への
+ * 供給はタイマ割り込みのフィーダが 100µs ごとに担う。
+ * 書き手とフィーダはこのリングでだけつながる。
+ *
+ * 並行性の整理: 書き手 (リングへ入れる側) と汲み手
+ * (ポンプ) はどちらも syscall 文脈 = SIE が落ちている文脈
+ * でだけ動き、割り込み文脈のフィーダとは重ならない。
+ * 切り替えは sched_poll の地点でだけ起き、そこの外側では
+ * head / count の読み書きは割られない。書き手はバイトを
+ * 写し終えてから count を増やす (公開の順序)。汲み手同士
+ * (フィーダとポンプ) がフレームの順を前後させることは
+ * あっても (1 フレーム分、聞き分けられない)、リングの
+ * 帳尻は崩れない */
+#define AUDIO_RING_BYTES 32768u  /* 2 の冪。ステレオで約 186ms 分 */
+#define AUDIO_RING_MASK  (AUDIO_RING_BYTES - 1)
+#define AUDIO_FEED_TICKS (TIMER_HZ / 10000)  /* フィード間隔 100µs */
+
+static unsigned char audio_ring[AUDIO_RING_BYTES];
+static uint64_t audio_ring_head;   /* 汲み手の読み位置 */
+static uint64_t audio_ring_tail;   /* 書き手の書き位置 */
+static uint64_t audio_ring_count;  /* 入っているバイト数 */
+static uint64_t audio_underruns;   /* リングが空だったフィード回数 */
+static int audio_stream_live;      /* 1 フレームでも流れたら 1 */
+
+/* 次にタイマを張る時刻: 本来の 100ms 刻みとフィード刻みの
+ * 早い方。audio が開いていないときは従来どおり 100ms 刻み */
+static uint64_t timer_arm_value(void)
+{
+    uint64_t feed = r_time() + AUDIO_FEED_TICKS;
+    if (audio_open_flag && feed < next_deadline) {
+        return feed;
+    }
+    return next_deadline;
+}
+
+/* リングの先頭 1 フレームを読む (位置は進めない)。
+ * 1 フレーム分に足りなければ 0 (フレームの途中までの
+ * 書き込みは次の write を待つ) */
+static int ring_peek_frame(uint16_t *l, uint16_t *r)
+{
+    uint64_t h = audio_ring_head;
+    if (audio_channels == 1) {
+        uint16_t s;
+        if (audio_ring_count < 2) {
+            return 0;
+        }
+        s = (uint16_t)audio_ring[h];
+        s |= (uint16_t)((uint16_t)audio_ring[(h + 1) &
+                                             AUDIO_RING_MASK] << 8);
+        *l = s;
+        *r = s;  /* モノラルは左右へ複製 (仕様側の決定) */
+        return 1;
+    }
+    if (audio_ring_count < 4) {
+        return 0;
+    }
+    *l = (uint16_t)audio_ring[h];
+    *l |= (uint16_t)((uint16_t)audio_ring[(h + 1) &
+                                          AUDIO_RING_MASK] << 8);
+    *r = (uint16_t)audio_ring[(h + 2) & AUDIO_RING_MASK];
+    *r |= (uint16_t)((uint16_t)audio_ring[(h + 3) &
+                                          AUDIO_RING_MASK] << 8);
+    return 1;
+}
+
+/* 先頭 1 フレームを捨てる (流し終えた分) */
+static void ring_drop_frame(void)
+{
+    uint64_t n = (audio_channels == 1) ? 2 : 4;
+    audio_ring_head = (audio_ring_head + n) & AUDIO_RING_MASK;
+    audio_ring_count -= n;
+}
+
+/* リングから 1 フレームを取り出す */
+static int ring_pop_frame(uint16_t *l, uint16_t *r)
+{
+    if (!ring_peek_frame(l, r)) {
+        return 0;
+    }
+    ring_drop_frame();
+    return 1;
+}
+
+/* フィーダ (タイマ割り込み文脈): FIFO に空きがある間、
+ * リングから流す。リングが空で、既に流れ始めているなら
+ * 無音を 1 フレームだけ流して DAC を飢えさせず、
+ * アンダーランとして数える */
+static void audio_feed(void)
+{
+    int i;
+    for (i = 0; i < 32; i++) {
+        uint16_t l, r;
+        if (ring_peek_frame(&l, &r)) {
+            if (!board_audio_try_push(l, r)) {
+                break;  /* FIFO は満ちている (フレームは残す) */
+            }
+            ring_drop_frame();
+            audio_stream_live = 1;
+        } else {
+            if (audio_stream_live &&
+                board_audio_try_push(0, 0)) {
+                audio_underruns++;
+            }
+            break;
+        }
+    }
+}
+
+/* ポンプ (syscall 文脈): リングから最大 32 フレームを、
+ * FIFO の空きを待ちながら流す。待ちでは sched_poll() で
+ * カーネルタスクへ番を渡す (従来の i2s_push_frame と
+ * 同じ作法)。戻り値は流したフレーム数 */
+static int ring_pump_some(void)
+{
+    int done = 0;
+    while (done < 32) {
+        uint16_t l, r;
+        uint32_t spin = 0;
+        if (!ring_pop_frame(&l, &r)) {
+            break;
+        }
+        while (!board_audio_try_push(l, r)) {
+            if ((++spin & 0x3FF) == 0) {
+                sched_poll();
+            }
+        }
+        audio_stream_live = 1;
+        done++;
+    }
+    return done;
+}
+
+/* 塊をリングへ入れる。満杯なら自分で汲み出して空きを
+ * 作る (syscall 文脈ではフィーダが走らないので、待つ
+ * だけでは空かない) */
+static void ring_enqueue(const unsigned char *buf, uint64_t n)
+{
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        while (audio_ring_count >= AUDIO_RING_BYTES) {
+            if (ring_pump_some() == 0) {
+                sched_poll();
+            }
+        }
+        audio_ring[audio_ring_tail] = buf[i];
+        audio_ring_tail = (audio_ring_tail + 1) & AUDIO_RING_MASK;
+        audio_ring_count++;
+    }
+}
+#endif /* BOARD_FEATURE_AUDIO */
+
 /* 16 進 16 桁 (小文字、ゼロ埋め、0x なし) をログへ出す。
  * kput_hex は 0x 接頭辞が付くので fnv の表示には使えない */
 static void kput_hex16(uint64_t x)
@@ -2074,6 +2229,16 @@ static int do_syscall(uint64_t *frame)
         audio_channels = channels;
         audio_fnv = FNV1A64_OFFSET;
         audio_samples = 0;
+#if BOARD_FEATURE_AUDIO
+        /* リングを空にして、フィーダの刻みでタイマを
+         * 張り直す (追補3) */
+        audio_ring_head = 0;
+        audio_ring_tail = 0;
+        audio_ring_count = 0;
+        audio_underruns = 0;
+        audio_stream_live = 0;
+        sbi_set_timer(timer_arm_value());
+#endif
         frame[FRAME_A0] = 0;
         break;
     }
@@ -2081,8 +2246,7 @@ static int do_syscall(uint64_t *frame)
         /* a0 = サンプル列へのポインタ、a1 = サンプル数
          * (int16 の個数)。受けたバイト列で FNV-1a を更新
          * しながら運ぶ。実ドライバのあるボードでは、塊
-         * ごとにドライバへも渡す (そちらはペーシングで
-         * 待つことがある) */
+         * ごとにリングバッファへ入れる (追補3) */
         uint64_t nsamples = frame[FRAME_A1];
         uint64_t nbytes;
         unsigned char buf[256];
@@ -2125,14 +2289,11 @@ static int do_syscall(uint64_t *frame)
                 audio_fnv *= FNV1A64_PRIME;
             }
 #if BOARD_FEATURE_AUDIO
-            /* 実ドライバへも同じ塊を渡す。塊のバイト数は
-             * 常に偶数 (全体が偶数で、区切りも偶数) */
-            if (board_audio_write(buf, chunk,
-                                  audio_channels) != 0) {
-                frame[FRAME_A0] = (uint64_t)-1;
-                done = (uint64_t)-1;
-                break;
-            }
+            /* 同じ塊をリングへ入れる (追補3)。FIFO への
+             * 供給はフィーダとポンプが担うので、ここは
+             * 原則として待たない。塊のバイト数は常に偶数
+             * (全体が偶数で、区切りも偶数) */
+            ring_enqueue(buf, chunk);
 #endif
             done += chunk;
         }
@@ -2149,6 +2310,22 @@ static int do_syscall(uint64_t *frame)
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
+#if BOARD_FEATURE_AUDIO
+        /* リングに残っている分を全部流してから閉じる
+         * (追補3)。流し切る間は open のままにして、
+         * フィーダにも手伝わせる。フレームに満たない
+         * 半端な残りは従来どおり捨てる */
+        while (audio_ring_count >= (audio_channels == 1 ? 2u : 4u)) {
+            if (ring_pump_some() == 0) {
+                sched_poll();
+            }
+        }
+        audio_ring_count = 0;
+        audio_ring_head = audio_ring_tail;
+        kputs("audio: ring under=");
+        kput_dec(audio_underruns);
+        kputc('\n');
+#endif
         audio_open_flag = 0;
 #if BOARD_FEATURE_AUDIO
         board_audio_close();  /* ドライバ側の要約行を先に出す */
@@ -2261,6 +2438,21 @@ void trap_handler(uint64_t *frame, int from_user)
     int is_interrupt = (int)(scause >> 63);
     uint64_t code = scause & 0xFF;
 
+#if BOARD_FEATURE_AUDIO
+    /* フィード専用の早いタイマ (追補3): 100ms の本刻みが
+     * まだ来ていない割り込みは、FIFO への供給だけをして
+     * 戻る。本刻みの仕事 (起床判定、tick、切り替え) は
+     * 何もしない。トラップ状態の退避も、切り替えが無い
+     * ので要らない */
+    if (is_interrupt && code == 5 && r_time() < next_deadline) {
+        if (audio_open_flag) {
+            audio_feed();
+        }
+        sbi_set_timer(timer_arm_value());
+        return;
+    }
+#endif
+
     /* M シムがエミュレーションしたトラップの記録を klog へ
      * 移す (k210 のみ実体あり。doc/trap-recovery-design.md) */
     board_drain_trap_log();
@@ -2273,9 +2465,15 @@ void trap_handler(uint64_t *frame, int from_user)
     }
 
     if (is_interrupt && code == 5) {
-        /* スーパーバイザ・タイマ割り込み (100ms ごと) */
+        /* スーパーバイザ・タイマ割り込み (100ms ごと。
+         * audio 再生中はフィード刻みも混ざるが、そちらは
+         * 上の早い道で戻っている) */
         next_deadline += TIMER_INTERVAL;
+#if BOARD_FEATURE_AUDIO
+        sbi_set_timer(timer_arm_value());
+#else
         sbi_set_timer(next_deadline);
+#endif
         if (++tick_divider >= 10) {
             tick_divider = 0;
             ticks++;

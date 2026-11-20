@@ -16,11 +16,11 @@
 /* 開く。対応できないレートなら -1 (open 自体を失敗させる) */
 int board_audio_open(uint64_t rate, uint64_t channels);
 
-/* 受けた塊 (nbytes バイト、形式は open で宣言したもの) を
- * 最後までデバイスへ送る。再生のペーシングで待つことが
- * ある。失敗は -1 */
-int board_audio_write(const unsigned char *buf, uint64_t nbytes,
-                      uint64_t channels);
+/* 1 フレーム (左右 1 組) を FIFO へ入れる。空きが無ければ
+ * 待たずに 0 を返す (入れたら 1)。供給は共通コードの
+ * リングバッファ + フィーダが担い、ドライバは「今入るか」
+ * だけに答える (doc/audio-driver-design.md 追補3) */
+int board_audio_try_push(uint16_t l, uint16_t r);
 
 /* 閉じる。ドライバ側の記録 (K210 では i2s の要約行) は
  * ここでカーネルログへ出す */

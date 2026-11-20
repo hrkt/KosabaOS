@@ -12,9 +12,10 @@
  *   - 源クロック PLL2 は 45.0667MHz に固定する
  *     (45.1584MHz ちょうどは分周フィールドでは
  *     作れない。最良の組み合わせで 0.2% 低い)
- *   - DMA は使わず FIFO へポーリングで書く。満杯の
- *     待ちでは sched_poll() を挟み、カーネルタスク
- *     (時計) を止めない */
+ *   - DMA は使わない。FIFO への供給は共通コードの
+ *     リングバッファ + フィーダ (trap.c) が担い、この
+ *     ドライバは board_audio_try_push で「今 1 フレーム
+ *     入るか」にだけ答える (追補3) */
 
 #include <stdint.h>
 #include "audio.h"
@@ -211,53 +212,29 @@ int board_audio_open(uint64_t rate, uint64_t channels)
     return 0;
 }
 
-/* 1 フレーム (左右 1 組) を FIFO へ。空きが無ければ
- * ポーリングで待つ。その間もカーネルタスクが走れる
- * よう、待ちの合間に sched_poll() を挟む (getc の
- * 待ちと同じ作法)。ポーリングは速いので、スケジューラ
- * へは 1024 回に 1 回だけ顔を出す */
-static void i2s_push_frame(uint16_t l, uint16_t r)
+/* 1 フレーム (左右 1 組) を FIFO へ。空きが無ければ待たずに
+ * 0 を返す (入れたら 1)。供給のペーシングは共通コードの
+ * リングバッファ + フィーダ (trap.c) が持ち、ドライバは
+ * 「今入るか」だけに答える (doc/audio-driver-design.md
+ * 追補3)。waits は「空きが無くて断られた回数」の数えに
+ * 意味が変わった */
+int board_audio_try_push(uint16_t l, uint16_t r)
 {
-    uint32_t spin = 0;
-    while ((I2S_CH1_ISR & ISR_TXFE) == 0) {
+    if (!i2s_open_flag) {
+        return 0;
+    }
+    if (I2S_CH1_ISR & ISR_TXFO) {
+        stat_over++;
+        (void)I2S_CH1_TOR;  /* 読むと消える */
+    }
+    if ((I2S_CH1_ISR & ISR_TXFE) == 0) {
         stat_waits++;
-        if (I2S_CH1_ISR & ISR_TXFO) {
-            stat_over++;
-            (void)I2S_CH1_TOR;  /* 読むと消える */
-        }
-        if ((++spin & 0x3FF) == 0) {
-            sched_poll();
-        }
+        return 0;
     }
     I2S_CH1_LTHR = (uint32_t)l;
     I2S_CH1_RTHR = (uint32_t)r;
     stat_frames++;
-}
-
-int board_audio_write(const unsigned char *buf, uint64_t nbytes,
-                      uint64_t channels)
-{
-    uint64_t i;
-    if (!i2s_open_flag || (nbytes & 1) != 0) {
-        return -1;
-    }
-    if (channels == 1) {
-        /* モノラルは左右へ複製 (仕様側の決定) */
-        for (i = 0; i + 1 < nbytes; i += 2) {
-            uint16_t s = (uint16_t)(buf[i] |
-                                    ((uint16_t)buf[i + 1] << 8));
-            i2s_push_frame(s, s);
-        }
-    } else {
-        for (i = 0; i + 3 < nbytes; i += 4) {
-            uint16_t l = (uint16_t)(buf[i] |
-                                    ((uint16_t)buf[i + 1] << 8));
-            uint16_t r = (uint16_t)(buf[i + 2] |
-                                    ((uint16_t)buf[i + 3] << 8));
-            i2s_push_frame(l, r);
-        }
-    }
-    return 0;
+    return 1;
 }
 
 void board_audio_close(void)
