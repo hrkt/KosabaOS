@@ -13,3 +13,4 @@ test.wav
 /arch/riscv64/test.mp3
 arch/riscv64/build-test-ad.log
 arch/riscv64/test-*.log
+__pycache__/
