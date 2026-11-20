@@ -26,4 +26,11 @@ int board_audio_write(const unsigned char *buf, uint64_t nbytes,
  * ここでカーネルログへ出す */
 void board_audio_close(void);
 
+/* いま audio が開いているか (共通コード trap.c が持つ
+ * open 状態を読む口)。I2S の FIFO は 1ms 分も無いので、
+ * 再生中に ms 単位で CPU を占有する仕事 (時計帯の LCD
+ * 再描画、tick のコンソール印字) が入ると DAC が飢えて
+ * 音が周期的に欠ける。そちら側が後回しにするために使う */
+int audio_is_open(void);
+
 #endif

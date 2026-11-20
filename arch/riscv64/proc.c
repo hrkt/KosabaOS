@@ -44,6 +44,7 @@
 #include "klog.h"   /* 時計タスクの起床記録 (lkputs、段2) */
 #include "saver.h"  /* スクリーンセーバーの毎秒の判定 */
 #include "wdt.h"    /* ウォッチドッグの餌やり (段3) */
+#include "audio.h"  /* 再生中は時計帯の再描画を後回しにする */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
 #endif
@@ -406,7 +407,15 @@ static void clock_body(void)
              * セーバーの絵なので、帯の通常描画は抑止する */
             if (saver_tick(sec)) {
 #if BOARD_FEATURE_LCD
-                lcd_tick_draw(sec);
+                /* オーディオ再生中は再描画を後回しにする:
+                 * 再描画の数 ms の間 I2S FIFO (1ms 分も
+                 * 無い) への供給が止まり、毎秒の起床の
+                 * たびに音が欠ける (Ikesu 連携 2026-11-20)。
+                 * 餌やりと起床記録は通常どおり行うので、
+                 * 時計表示が数秒遅れるだけ */
+                if (!audio_is_open()) {
+                    lcd_tick_draw(sec);
+                }
 #endif
             }
         }

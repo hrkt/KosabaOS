@@ -1328,6 +1328,12 @@ static int do_job_wait(uint64_t *frame)
 
 static int audio_open_flag;      /* 1 = 開いている */
 static uint64_t audio_rate;      /* audio_open の a0 の保持 */
+
+/* audio.h の口: 再生中かどうかを共通コードへ返す */
+int audio_is_open(void)
+{
+    return audio_open_flag;
+}
 static uint64_t audio_channels;  /* 1 または 2 */
 static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
@@ -2238,10 +2244,15 @@ void trap_handler(uint64_t *frame, int from_user)
         if (++tick_divider >= 10) {
             tick_divider = 0;
             ticks++;
-            /* tick はコンソールだけ (ログには残さない) */
-            uart_puts("tick ");
-            con_dec(ticks);
-            uart_putc('\n');
+            /* tick はコンソールだけ (ログには残さない)。
+             * オーディオ再生中は印字を省く: 割り込み文脈で
+             * UART の送信待ちに入ると、その間 I2S FIFO へ
+             * 誰も供給できず音が欠ける (数え自体は続ける) */
+            if (!audio_is_open()) {
+                uart_puts("tick ");
+                con_dec(ticks);
+                uart_putc('\n');
+            }
         }
         if (sched_active) {
             /* 切り替えの判断 (スケジューラ段1):
