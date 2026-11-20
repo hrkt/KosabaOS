@@ -158,3 +158,14 @@ wavgen_prog_start:
     .incbin "wavgen.elf"
 wavgen_prog_end:
 #endif
+
+/* recv (シリアル受信) の素材。IwaC 製のビルド成果物を
+ * build.sh が写してきたときだけ (-DRECV_EMBED) 取り込む
+ * (doc/recv-design.md) */
+#ifdef RECV_EMBED
+    .globl recv_prog_start
+    .globl recv_prog_end
+recv_prog_start:
+    .incbin "recv.elf"
+recv_prog_end:
+#endif

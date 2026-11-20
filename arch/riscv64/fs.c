@@ -72,6 +72,11 @@ extern unsigned char gdemo_prog_start[];
 extern unsigned char gdemo_prog_end[];
 extern unsigned char gjob_prog_start[];
 extern unsigned char gjob_prog_end[];
+#ifdef RECV_EMBED
+/* recv の素材 (IwaC 製、build.sh が写してきたときだけ) */
+extern unsigned char recv_prog_start[];
+extern unsigned char recv_prog_end[];
+#endif
 #ifdef NAMI_EMBED
 /* nami の素材 (IwaC 製、build.sh が写してきたときだけ) */
 extern unsigned char nami_prog_start[];
@@ -568,6 +573,10 @@ void fs_init(void)
            (uint64_t)(gdemo_prog_end - gdemo_prog_start));
     fs_add("gjob.elf", gjob_prog_start,
            (uint64_t)(gjob_prog_end - gjob_prog_start));
+#ifdef RECV_EMBED
+    fs_add("recv.elf", recv_prog_start,
+           (uint64_t)(recv_prog_end - recv_prog_start));
+#endif
 #ifdef NAMI_EMBED
     /* nami はコマンド名そのもの (doc/nami-design.md):
      * `run nami <file>` で起動できるよう拡張子なしで登録 */

@@ -46,6 +46,13 @@ for f in nami/nami.elf nami/wavgen.elf; do
     fi
 done
 
+# recv (シナリオ AL) の素材。recv/build-recv.sh の成果物が
+# あるときだけ AL が有効になる (AC と同じ扱い)
+recv_have=1
+if [ ! -f recv/recv.elf ]; then
+    recv_have=0
+fi
+
 echo "== build == (takes a few seconds; QEMU runs make Ctrl-C"
 echo "   ineffective while they run -- Ctrl-A x ends that QEMU)"
 if ! (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1; then
@@ -860,6 +867,36 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "badinsn: before" "user program fault" "misalign ok" || rc=1
 case "$out" in *SURVIVED*) rc=1;; esac
 report "AK unemulatable trap (program dies, shell survives)" $rc
+
+echo "== scenario AL: serial file receive (recv.elf) =="
+# recv.elf がコンソールからフレーム列を受けて /sd へ書く。
+# 送信ストリームは recv/mkstream.py が作る (重複フレーム
+# と CRC 不正 + 再送を 1 回ずつ混ぜてある)。受け側の
+# 印字する DONE の size/fnv が送った payload と一致
+# することと、最初の ACK (0x06 0x00) が生ログに出る
+# ことを見る (doc/recv-design.md)
+if [ "$recv_have" -eq 1 ]; then
+    python3 recv/mkstream.py > test-al-stream.bin 2> test-al-expect.txt
+    exp_size=$(sed -n 's/.*size=\([0-9]*\).*/\1/p' test-al-expect.txt)
+    exp_fnv=$(sed -n 's/.*fnv=\([0-9a-f]*\).*/\1/p' test-al-expect.txt)
+    # このシナリオだけ -nographic を使わない: -nographic の
+    # stdio mux は Ctrl-A (0x01) をエスケープとして食べて
+    # しまい、プロトコルの SOH が届かない (実機の UART には
+    # 無い、QEMU 側だけの都合)。-serial stdio を素で使う
+    { sleep 3; printf 'run recv.elf TEST.BIN\n'; sleep 2; \
+      cat test-al-stream.bin; sleep 3; \
+      printf 'ls /sd\n'; sleep 2; } \
+        | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -display none -serial stdio -monitor none \
+        > test-al.log 2>&1 || true
+    out=$(strip_ticks < test-al.log)
+    rc=0
+    check_order "$out" "RECV1 READY" \
+        "RECV1 DONE size=$exp_size fnv=$exp_fnv" "TEST.BIN" || rc=1
+    python3 -c "import sys; sys.exit(0 if b'\x06\x00' in open('test-al.log','rb').read() else 1)" || rc=1
+    report "AL serial file receive (recv.elf)" $rc
+else
+    echo "SKIP: AL (no recv materials)"
+fi
 
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
