@@ -359,6 +359,48 @@ static int copy_from_user(unsigned char *dst, uint64_t va, uint64_t n)
     return 0;
 }
 
+/* 範囲 [va, va+n) が全部訳せるかを、ページごとに見る。
+ * バイトごとに user_pa を呼ぶ版と意味は同じだが、
+ * ページ表引きがページあたり 1 回で済む */
+static int user_range_ok(uint64_t va, uint64_t n)
+{
+    uint64_t end = va + n;
+    while (va < end) {
+        if (user_pa(va) == 0) {
+            return 0;
+        }
+        va = (va & ~4095ULL) + 4096;
+    }
+    return 1;
+}
+
+/* ページごとに訳して、そのページの中は一気に写す版。
+ * 意味は copy_from_user と同じ (訳せないページが
+ * あれば -1)。大きな塊を運ぶ経路 (オーディオ) では、
+ * バイトごとのページ表引き直しが実時間の予算を食い
+ * 潰すので、こちらを使う (doc/audio-driver-design.md
+ * の追補 2) */
+static int copy_from_user_bulk(unsigned char *dst, uint64_t va,
+                               uint64_t n)
+{
+    while (n > 0) {
+        uint64_t pa = user_pa(va);
+        uint64_t room, take, i;
+        if (pa == 0) {
+            return -1;
+        }
+        room = 4096 - (va & 4095);
+        take = (n < room) ? n : room;
+        for (i = 0; i < take; i++) {
+            dst[i] = *(unsigned char *)(pa + i);
+        }
+        dst += take;
+        va += take;
+        n -= take;
+    }
+    return 0;
+}
+
 /* --- ファイルディスクリプタ (ステップ 6) ------------------------------
  * fd テーブルは exec の段ごとに持つ (exec 多段化、doc/
  * exec-multilevel.md)。子は空のテーブルで始まり、親のテーブルは
@@ -2056,20 +2098,13 @@ static int do_syscall(uint64_t *frame)
         nbytes = nsamples * 2;
         /* ポインタが範囲外なら -1 (仕様)。途中まで受けて
          * から失敗するとハッシュが中途半端な状態になる
-         * ので、先に全範囲が触れることを確かめる */
-        {
-            uint64_t i;
-            int ok = 1;
-            for (i = 0; i < nbytes; i++) {
-                if (user_pa(frame[FRAME_A0] + i) == 0) {
-                    ok = 0;
-                    break;
-                }
-            }
-            if (!ok) {
-                frame[FRAME_A0] = (uint64_t)-1;
-                break;
-            }
+         * ので、先に全範囲が触れることを確かめる。確認は
+         * ページごと (バイトごとだと、最初のフレームを
+         * 流す前にページ表引きだけで数 ms 食い、浅い
+         * I2S FIFO が書き込みのたびに枯れる) */
+        if (!user_range_ok(frame[FRAME_A0], nbytes)) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
         }
         /* ユーザーメモリから小分けに運びながらハッシュする */
         while (done < nbytes) {
@@ -2078,8 +2113,8 @@ static int do_syscall(uint64_t *frame)
             if (chunk > sizeof(buf)) {
                 chunk = sizeof(buf);
             }
-            if (copy_from_user(buf, frame[FRAME_A0] + done,
-                               chunk) != 0) {
+            if (copy_from_user_bulk(buf, frame[FRAME_A0] + done,
+                                    chunk) != 0) {
                 /* 全範囲を確認済みなので、ここへは来ないはず */
                 frame[FRAME_A0] = (uint64_t)-1;
                 done = (uint64_t)-1;
