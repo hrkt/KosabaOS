@@ -651,7 +651,7 @@ static void cmd_dmesg(void)
 
 static void cmd_ps(void)
 {
-    char buf[256];
+    char buf[1024];
     long n = syscall3(SYS_TASKS, (long)buf, 0, 0);
     long i;
     if (n < 0) {
@@ -661,7 +661,7 @@ static void cmd_ps(void)
     for (i = 0; i < n; i++) {
         putc_(buf[i]);
     }
-    puts_("(Nish itself is a user program, not a kernel task)\n");
+    puts_("(task = kernel tasks, run = user programs)\n");
 }
 
 __attribute__((section(".text.start")))

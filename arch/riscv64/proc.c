@@ -65,6 +65,7 @@ struct task {
     uint64_t trap_sstatus;
     uint64_t wake_at;        /* SLEEPING の起床時刻 (time CSR) */
     uint64_t wakes;          /* sleep から起きた回数 (段1) */
+    uint64_t cpu;            /* 使った CPU 時間の積算 (time CSR の刻み) */
     char cwd[PROC_CWD_MAX];  /* 正規化済み絶対パス (段4) */
 };
 
@@ -109,12 +110,44 @@ int sched_wake_due(void)
     return woke;
 }
 
+/* CPU 時間の精算: 前回の精算から今までの分を、現在の
+ * タスクの cpu へ足す。切り替えのたび (schedule の入口)
+ * と、一覧を読む直前に呼ぶ。寝ているタスクの番が回って
+ * いる間 (相手がいないときの空回し) は誰にも付けない
+ * = アイドルとして扱う。割り込みや trap の処理時間は
+ * 割り込まれたタスク持ちになる (サンプリング会計の
+ * 常套どおり) */
+static uint64_t charge_last;
+static int charge_started;
+
+static void charge_current(void)
+{
+    uint64_t now = r_time();
+    if (!charge_started) {
+        charge_started = 1;
+        charge_last = now;
+        return;
+    }
+    if (tasks[current].state != TASK_SLEEPING) {
+        tasks[current].cpu += now - charge_last;
+    }
+    charge_last = now;
+}
+
+/* 一覧を読む側 (trap.c の SYS_TASKS) が、値が新鮮なうちに
+ * 読めるよう精算だけ先に済ませる口 */
+void proc_charge_now(void)
+{
+    charge_current();
+}
+
 /* 次に動かすタスクを選んで切り替える (ラウンドロビン) */
 void schedule(void)
 {
     int next = current;
     int i;
 
+    charge_current();  /* 切り替わる前に今のタスクへ精算する */
     sched_wake_due();  /* 寝ているタスクの起床を先に反映する */
 
     for (i = 0; i < NTASK; i++) {
@@ -184,6 +217,9 @@ void task_sleep_ms(uint64_t ms)
 {
     uint64_t wake = r_time() + ms * (BOARD_TIMER_HZ / 1000);
 
+    charge_current();  /* 寝る前に、起きて働いた分を精算する
+                        * (SLEEPING にしてからだと精算で
+                        * 跳ねられてしまう) */
     tasks[current].wake_at = wake;
     tasks[current].state = TASK_SLEEPING;
     while (r_time() < wake) {
@@ -351,6 +387,28 @@ int proc_list(char *buf, unsigned long max)
             int m = 0;
             while (*w != '\0' && n < max) {
                 buf[n++] = *w++;
+            }
+            while (v > 0) {
+                rev[m++] = (char)('0' + (v % 10));
+                v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
+        }
+        /* CPU 時間 (ミリ秒)。行の形は従来の後ろへ足すだけ
+         * にして、既存の照合 (wakes= の正規表現など) を
+         * 壊さない */
+        {
+            const char *w = " cpu=";
+            uint64_t v = tasks[i].cpu / (BOARD_TIMER_HZ / 1000);
+            char rev[20];
+            int m = 0;
+            while (*w != '\0' && n < max) {
+                buf[n++] = *w++;
+            }
+            if (v == 0) {
+                rev[m++] = '0';
             }
             while (v > 0) {
                 rev[m++] = (char)('0' + (v % 10));

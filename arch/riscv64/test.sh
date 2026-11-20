@@ -898,6 +898,21 @@ else
     echo "SKIP: AL (no recv materials)"
 fi
 
+echo "== scenario AM: task/runner cpu accounting (ps) =="
+# ps (SYS_TASKS) の行に cpu= が付き、走者の行 (run N) が
+# 名前・状態つきで出ること。値はタイミング依存なので
+# 形だけを見る (doc/top-design.md 段1)
+{ sleep 3; printf 'run slow.elf 20 &\n'; sleep 2; \
+  printf 'ps\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-am.log 2>&1 || true
+out=$(strip_ticks < test-am.log)
+rc=0
+echo "$out" | grep -Eq "task 3: (sleeping|ready) wakes=[0-9]+ cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 0: nish (running|input) cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+" || rc=1
+report "AM task/runner cpu accounting (ps)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

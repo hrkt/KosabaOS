@@ -591,9 +591,14 @@ static int exec_depth = 0;  /* 今動いているプログラムの段 */
 /* 子のプログラムから親へ戻る共通処理: 子のページを返し、
  * 1 段降りて親の状態 (レジスタ・写像・cwd・fd テーブル) を
  * 復元する。result は親の exec の戻り値になる */
+/* 走者の CPU 精算 (実体は走者の退避場所の後ろ) */
+static void exec_charge_push(const char *path);
+static void exec_charge_pop(void);
+
 static void resume_parent(uint64_t *frame, uint64_t result)
 {
     int i;
+    exec_charge_pop();  /* 子の CPU を精算してから段を戻す */
     /* 子が閉じ忘れた SD 書き込みはここで締める (子の fd
      * テーブルはこの後しばらく残るが、目録の書き戻しは
      * プログラムの終了時点で済ませるのが約束) */
@@ -751,6 +756,8 @@ static int do_exec(uint64_t *frame)
         }
         exec_stack[exec_depth].cwd[i2] = '\0';
     }
+    exec_charge_push(name);  /* 親の CPU を精算し、子の名前と
+                              * CPU を新しい段に用意する */
     exec_depth++;
     /* 子は空の fd テーブルで始める。親のテーブルは親の段に
      * 残るので、子の終了後に親の fd がそのまま使える */
@@ -824,6 +831,7 @@ struct job_slot {
     int state;
     char name[32];        /* jobs 表示用 (起動時に渡された名前) */
     char cwd[PATH_MAX];
+    uint64_t cpu;         /* 使った CPU 時間の積算 (time CSR の刻み) */
 };
 
 static struct job_slot jobs[JOB_MAX];
@@ -852,6 +860,139 @@ static int console_owner = 0;  /* コンソールの持ち主 (0 = 前面) */
  * 止まっている間も立ったまま (前面は getc の中、という
  * 事実は変わらないため) */
 static int fg_getc_wait;
+
+/* --- 走者の CPU 時間と名前 (top の材料) ------------------------------
+ * 走者が切り替わる地点 (restore_runner、exec の段の出入り)
+ * で、前回の精算からの分を今の走者へ足す。前面は exec の
+ * 段ごとに名前と CPU を持つ (段 0 = 根のプログラム)。
+ * 前面が getc の待ちに入っている間と、止まっている
+ * ジョブの分は数えない (待機は CPU 使用ではない) */
+static char fg_name[EXEC_MAX_DEPTH + 1][32] = { "nish" };
+static uint64_t fg_cpu[EXEC_MAX_DEPTH + 1];
+static uint64_t runner_charge_last;
+static int runner_charge_started;
+
+static void copy_str(char *dst, const char *src, int max);
+
+static void charge_runner(void)
+{
+    uint64_t now = r_time();
+    if (!runner_charge_started) {
+        runner_charge_started = 1;
+        runner_charge_last = now;
+        return;
+    }
+    if (cur_runner == 0) {
+        if (!fg_getc_wait && !fg_save.blocked) {
+            fg_cpu[exec_depth] += now - runner_charge_last;
+        }
+    } else {
+        struct job_slot *j = &jobs[cur_runner - 1];
+        if (j->state == JOB_RUNNING) {
+            j->cpu += now - runner_charge_last;
+        }
+    }
+    runner_charge_last = now;
+}
+
+/* パスの最後の要素だけを取り出す (表示用の名前) */
+static const char *base_name(const char *path)
+{
+    const char *b = path;
+    const char *p;
+    for (p = path; *p != '\0'; p++) {
+        if (*p == '/') {
+            b = p + 1;
+        }
+    }
+    return b;
+}
+
+/* バッファへの追記ヘルパ (SYS_TASKS の走者行用) */
+static int buf_put_ch(char *buf, int n, int max, char c)
+{
+    if (n < max) {
+        buf[n++] = c;
+    }
+    return n;
+}
+
+static int buf_puts(char *buf, int n, int max, const char *s)
+{
+    while (*s != '\0') {
+        n = buf_put_ch(buf, n, max, *s++);
+    }
+    return n;
+}
+
+static int buf_put_dec(char *buf, int n, int max, uint64_t v)
+{
+    char rev[20];
+    int m = 0;
+    if (v == 0) {
+        rev[m++] = '0';
+    }
+    while (v > 0) {
+        rev[m++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (m > 0) {
+        n = buf_put_ch(buf, n, max, rev[--m]);
+    }
+    return n;
+}
+
+/* 走者の行をタスク一覧の後ろへ足す (SYS_TASKS から)。
+ * 形は "run N: 名前 状態 cpu=ミリ秒" */
+static int tasks_append_runners(char *buf, int n, int max)
+{
+    int r;
+    n = buf_puts(buf, n, max, "run 0: ");
+    n = buf_puts(buf, n, max, fg_name[exec_depth]);
+    n = buf_put_ch(buf, n, max, ' ');
+    n = buf_puts(buf, n, max,
+                 fg_save.blocked ? "waiting" :
+                 fg_getc_wait ? "input" : "running");
+    n = buf_puts(buf, n, max, " cpu=");
+    n = buf_put_dec(buf, n, max,
+                    fg_cpu[exec_depth] / (TIMER_HZ / 1000));
+    n = buf_put_ch(buf, n, max, '\n');
+    for (r = 1; r <= JOB_MAX; r++) {
+        struct job_slot *j = &jobs[r - 1];
+        if (j->state == JOB_FREE) {
+            continue;
+        }
+        n = buf_puts(buf, n, max, "run ");
+        n = buf_put_dec(buf, n, max, (uint64_t)r);
+        n = buf_puts(buf, n, max, ": ");
+        n = buf_puts(buf, n, max, j->name);
+        n = buf_put_ch(buf, n, max, ' ');
+        n = buf_puts(buf, n, max,
+                     j->state == JOB_RUNNING ? "running" :
+                     j->state == JOB_STOPPED ? "stopped" : "done");
+        n = buf_puts(buf, n, max, " cpu=");
+        n = buf_put_dec(buf, n, max, j->cpu / (TIMER_HZ / 1000));
+        n = buf_put_ch(buf, n, max, '\n');
+    }
+    return n;
+}
+
+/* exec の段の出入り (do_exec / resume_parent から)。
+ * push: 親の分を精算し、新しい段の名前と CPU を用意する。
+ * pop: 子の分を精算する (名前と CPU は段に残るが、次に
+ * その段へ入るとき push で用意し直す) */
+static void exec_charge_push(const char *path)
+{
+    charge_runner();
+    copy_str(fg_name[exec_depth + 1], base_name(path),
+             sizeof(fg_name[0]));
+    fg_cpu[exec_depth + 1] = 0;
+}
+
+static void exec_charge_pop(void)
+{
+    charge_runner();
+}
 
 /* 文字列を固定長バッファへ写す (末尾は必ず NUL) */
 static void copy_str(char *dst, const char *src, int max)
@@ -896,6 +1037,7 @@ static void save_runner(uint64_t *frame, uint64_t sepc)
 static void restore_runner(uint64_t *frame, int runner)
 {
     int i;
+    charge_runner();  /* 切り替わる前に今の走者へ精算する */
     if (runner == 0) {
         for (i = 0; i < 32; i++) {
             frame[i] = fg_save.frame[i];
@@ -1070,6 +1212,13 @@ static void jobs_kill_all(void)
     console_owner = 0;
     cur_runner = 0;
     gfx_set_focus(0);
+    /* 走者の CPU と名前もセッションごとに戻す */
+    for (i = 0; i <= EXEC_MAX_DEPTH; i++) {
+        fg_cpu[i] = 0;
+        fg_name[i][0] = '\0';
+    }
+    copy_str(fg_name[0], "nish", sizeof(fg_name[0]));
+    runner_charge_started = 0;
 }
 
 /* SD のファイル (目録項の位置で照合) が、どこかの段か
@@ -1227,6 +1376,7 @@ static void do_job_run(uint64_t *frame)
         j->status = 0;
         copy_str(j->name, name, sizeof(j->name));
         copy_str(j->cwd, proc_cwd(), PATH_MAX);  /* cwd は引き継ぐ */
+        j->cpu = 0;
         j->state = JOB_RUNNING;
         gfx_window_open(slot + 1, j->name);  /* ジョブの窓 (段B) */
         frame[FRAME_A0] = (uint64_t)(slot + 1);
@@ -1419,10 +1569,13 @@ static int do_syscall(uint64_t *frame)
             restore_runner(frame, next);
             return 1;
         }
+        charge_runner();  /* 待ちに入る前に走っていた分を精算 */
         fg_getc_wait = 1;
         for (;;) {
             int c = uart_try_getc();
             if (c >= 0) {
+                charge_runner();  /* 待ちの間は数えない (旗が
+                                   * 立っている間に精算する) */
                 fg_getc_wait = 0;
                 /* 入力活動 (スクリーンセーバーの物差し。
                  * セーバーが入っていれば、ここで終わって
@@ -1664,8 +1817,12 @@ static int do_syscall(uint64_t *frame)
         }
         break;  /* 失敗時は通常どおり sepc を進めて戻る */
     case SYS_TASKS: {
-        char kbuf[256];
-        int n = proc_list(kbuf, sizeof(kbuf));
+        char kbuf[1024];
+        int n;
+        proc_charge_now();  /* カーネルタスクの CPU を精算 */
+        charge_runner();    /* 走者の CPU も精算 */
+        n = proc_list(kbuf, sizeof(kbuf));
+        n = tasks_append_runners(kbuf, n, sizeof(kbuf));
         if (copy_to_user(frame[FRAME_A0],
                          (const unsigned char *)kbuf,
                          (uint64_t)n) != 0) {
