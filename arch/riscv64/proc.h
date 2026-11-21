@@ -12,6 +12,7 @@ struct context {
 
 void proc_demo(void);   /* 'm' キーで起動するマルチタスクのデモ */
 int proc_list(char *buf, unsigned long max);  /* タスク一覧 (ps 用) */
+void proc_charge_now(void);  /* CPU 時間の精算を今の分まで済ませる */
 
 /* cwd (カレントディレクトリ)。タスクごとに、正規化済みの
  * 絶対パス文字列で持つ (FS 再設計 段4)。ユーザープログラムは

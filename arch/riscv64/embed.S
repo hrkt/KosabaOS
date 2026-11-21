@@ -102,6 +102,24 @@ crash_prog_start:
     .incbin "crash.elf"
 crash_prog_end:
 
+    .globl nap_prog_start
+    .globl nap_prog_end
+nap_prog_start:
+    .incbin "nap.elf"
+nap_prog_end:
+
+    .globl keywait_prog_start
+    .globl keywait_prog_end
+keywait_prog_start:
+    .incbin "keywait.elf"
+keywait_prog_end:
+
+    .globl top_prog_start
+    .globl top_prog_end
+top_prog_start:
+    .incbin "top.elf"
+top_prog_end:
+
     .globl copy_prog_start
     .globl copy_prog_end
 copy_prog_start:

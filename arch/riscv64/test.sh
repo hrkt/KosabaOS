@@ -914,6 +914,60 @@ b2=$(echo "$out" | grep -oE "hart1: alive=1 beat=[0-9]+" | tail -1 | grep -oE "[
 [ -n "$b1" ] && [ -n "$b2" ] && [ "$b2" -gt "$b1" ] || rc=1
 report "AM hart1 heartbeat (SMP stage 1)" $rc
 
+echo "== scenario AN: task/runner cpu accounting (ps) =="
+# ps (SYS_TASKS) の行に cpu= が付き、走者の行 (run N) が
+# 名前・状態つきで出ること。値はタイミング依存なので
+# 形だけを見る (doc/top-design.md 段1)
+{ sleep 3; printf 'run slow.elf 20 &\n'; sleep 2; \
+  printf 'ps\n'; sleep 2; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-an.log 2>&1 || true
+out=$(strip_ticks < test-an.log)
+rc=0
+echo "$out" | grep -Eq "task 3: (sleeping|ready) wakes=[0-9]+ cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 0: nish (running|input) cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+" || rc=1
+report "AN task/runner cpu accounting (ps)" $rc
+
+echo "== scenario AO: sleep_ms + getc timeout (top stage 2) =="
+# nap.elf が sleep_ms で寝て、経過がほぼ回数×500ms に
+# なること。bg では ps に sleeping と出ること。keywait
+# .elf が入力なしで getc タイムアウトを数えること
+# (doc/top-design.md 段2)
+{ sleep 3; printf 'run nap.elf 4 &\n'; sleep 1.3; \
+  printf 'ps\n'; sleep 2; \
+  printf 'run nap.elf 1\n'; sleep 2; \
+  printf 'run keywait.elf 2\n'; sleep 3; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ao.log 2>&1 || true
+out=$(strip_ticks < test-ao.log)
+rc=0
+echo "$out" | grep -Eq "run 1: nap\.elf sleeping cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "nap: elapsed (19|20|21)[0-9][0-9]" || rc=1
+echo "$out" | grep -Eq "nap: elapsed [45][0-9][0-9]" || rc=1
+echo "$out" | grep -q "nap done" || rc=1
+echo "$out" | grep -q "keywait timeout 1/2" || rc=1
+echo "$out" | grep -q "keywait done" || rc=1
+report "AO sleep_ms + getc timeout" $rc
+
+echo "== scenario AP: top.elf monitor (stage 3) =="
+# top.elf が SYS_TASKS を回数分描き直し、各行に %CPU を
+# 付けて終わること。裏で slow.elf を走らせ、run 行に
+# % が付くことも見る (doc/top-design.md 段3)
+{ sleep 3; printf 'run slow.elf 30 &\n'; sleep 1; \
+  printf 'run top.elf 3\n'; sleep 7; \
+  printf 'echo top-done\n'; sleep 1; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ap.log 2>&1 || true
+out=$(strip_ticks < test-ap.log)
+rc=0
+frames=$(echo "$out" | grep -c "top - up")
+[ "$frames" -ge 3 ] || rc=1
+echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
+echo "$out" | grep -q "top-done" || rc=1
+report "AP top.elf monitor" $rc
+
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
