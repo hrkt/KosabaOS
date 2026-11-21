@@ -59,7 +59,13 @@
 /* 初期化中: 入力 390MHz としても約 95kHz、/2 が入っても
  * 約 48kHz。どちらでも SD の上限 400kHz 以下 */
 #define BAUD_INIT 4096
-/* 初期化後: 約 3〜6MHz。MP3 再生には余りある */
+/* 初期化後: クロックは元のまま。遅さの犯人は線でなく
+ * 1 バイトごとの握手 (レジスタ読みの往復、約 17µs/
+ * バイト) だったので、上げるのはやめた (2026-11-21
+ * の実測: 2 倍でも改善せず、4 倍では読みが化けて
+ * ELF ロードが壊れた。読み CRC を見ていないので、
+ * 速すぎるクロックは無言で壊れる)。速度は
+ * sd_read_bytes / sd_write_bytes のまとめ送りで稼ぐ */
 #define BAUD_FAST 64
 
 static void spi_config(uint32_t baud)
@@ -126,6 +132,52 @@ uint8_t sd_xfer(uint8_t out)
         return 0xFF;
     }
     return (uint8_t)(SPI_DR & 0xFF);
+}
+
+/* 複数バイトの送受信。sd_xfer を 1 バイトずつ呼ぶと、
+ * レジスタ読み (TXFLR / RXFLR のポーリング) の往復が
+ * 支配的で約 55KB/s で頭打ちだった (2026-11-21 の実測:
+ * WAV の 88.2KB/s に届かず再生が飢えた。SPI クロックを
+ * 2 倍にしても改善しなかったので、線でなく握手が犯人)。
+ * FIFO (32 段) に詰められるだけ詰めてから受け側を
+ * まとめて回収すると、線の速度に近づく。budget は
+ * カード不在などで無限に回らないための上限 */
+#define SD_BATCH_BUDGET 20000000
+
+int sd_read_bytes(unsigned char *buf, int n)
+{
+    int sent = 0, got = 0;
+    long budget = SD_BATCH_BUDGET;
+    while (got < n) {
+        while (sent < n && SPI_TXFLR < 32) {
+            SPI_DR = 0xFF;
+            sent++;
+        }
+        if (SPI_RXFLR > 0) {
+            buf[got++] = (uint8_t)(SPI_DR & 0xFF);
+        } else if (budget-- <= 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int sd_write_bytes(const unsigned char *buf, int n)
+{
+    int sent = 0, drained = 0;
+    long budget = SD_BATCH_BUDGET;
+    while (drained < n) {
+        while (sent < n && SPI_TXFLR < 32) {
+            SPI_DR = buf[sent++];
+        }
+        if (SPI_RXFLR > 0) {
+            (void)SPI_DR;
+            drained++;
+        } else if (budget-- <= 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 void sd_cs(int level)
