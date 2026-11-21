@@ -934,6 +934,23 @@ echo "$out" | grep -q "keywait timeout 1/2" || rc=1
 echo "$out" | grep -q "keywait done" || rc=1
 report "AN sleep_ms + getc timeout" $rc
 
+echo "== scenario AO: top.elf monitor (stage 3) =="
+# top.elf が SYS_TASKS を回数分描き直し、各行に %CPU を
+# 付けて終わること。裏で slow.elf を走らせ、run 行に
+# % が付くことも見る (doc/top-design.md 段3)
+{ sleep 3; printf 'run slow.elf 30 &\n'; sleep 1; \
+  printf 'run top.elf 3\n'; sleep 7; \
+  printf 'echo top-done\n'; sleep 1; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ao.log 2>&1 || true
+out=$(strip_ticks < test-ao.log)
+rc=0
+frames=$(echo "$out" | grep -c "top - up")
+[ "$frames" -ge 3 ] || rc=1
+echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
+echo "$out" | grep -q "top-done" || rc=1
+report "AO top.elf monitor" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

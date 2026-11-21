@@ -70,6 +70,8 @@ extern unsigned char nap_prog_start[];
 extern unsigned char nap_prog_end[];
 extern unsigned char keywait_prog_start[];
 extern unsigned char keywait_prog_end[];
+extern unsigned char top_prog_start[];
+extern unsigned char top_prog_end[];
 extern unsigned char copy_prog_start[];
 extern unsigned char copy_prog_end[];
 extern unsigned char gdemo_prog_start[];
@@ -575,6 +577,8 @@ void fs_init(void)
            (uint64_t)(nap_prog_end - nap_prog_start));
     fs_add("keywait.elf", keywait_prog_start,
            (uint64_t)(keywait_prog_end - keywait_prog_start));
+    fs_add("top.elf", top_prog_start,
+           (uint64_t)(top_prog_end - top_prog_start));
     fs_add("copy.elf", copy_prog_start,
            (uint64_t)(copy_prog_end - copy_prog_start));
     fs_add("gdemo.elf", gdemo_prog_start,

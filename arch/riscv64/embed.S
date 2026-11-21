@@ -114,6 +114,12 @@ keywait_prog_start:
     .incbin "keywait.elf"
 keywait_prog_end:
 
+    .globl top_prog_start
+    .globl top_prog_end
+top_prog_start:
+    .incbin "top.elf"
+top_prog_end:
+
     .globl copy_prog_start
     .globl copy_prog_end
 copy_prog_start:
