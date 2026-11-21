@@ -273,6 +273,7 @@ void trap_init(void)
 #define SYS_KLOG_READ 30
 #define SYS_UPTIME 31
 #define SYS_PERF_READ 33
+#define SYS_SLEEP_MS 34
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
@@ -822,6 +823,7 @@ static int do_exec(uint64_t *frame)
 #define JOB_RUNNING 1  /* 実行可能 (走っている最中も含む) */
 #define JOB_STOPPED 2  /* 入力待ちで停止 (bg の getc) */
 #define JOB_DONE 3     /* 終わった (回収待ち、status が有効) */
+#define JOB_SLEEPING 4 /* sleep_ms で寝ている (sleep_until まで) */
 
 struct job_slot {
     uint64_t frame[32];   /* 退避したレジスタ一式 */
@@ -832,6 +834,7 @@ struct job_slot {
     char name[32];        /* jobs 表示用 (起動時に渡された名前) */
     char cwd[PATH_MAX];
     uint64_t cpu;         /* 使った CPU 時間の積算 (time CSR の刻み) */
+    uint64_t sleep_until; /* JOB_SLEEPING の起床時刻 (time CSR) */
 };
 
 static struct job_slot jobs[JOB_MAX];
@@ -848,6 +851,9 @@ static struct {
     int valid;
     int blocked;
     int wait_job;  /* 待ち対象のジョブ番号 (0 = なし) */
+    int sleeping;  /* sleep_ms で寝ている */
+    uint64_t sleep_until; /* 前面の起床時刻 (time CSR) */
+    uint64_t getc_until;  /* getc タイムアウトの期限 (0 = 無限) */
 } fg_save;
 
 static int cur_runner = 0;     /* 今走っている走者 (0 = 前面) */
@@ -883,7 +889,7 @@ static void charge_runner(void)
         return;
     }
     if (cur_runner == 0) {
-        if (!fg_getc_wait && !fg_save.blocked) {
+        if (!fg_getc_wait && !fg_save.blocked && !fg_save.sleeping) {
             fg_cpu[exec_depth] += now - runner_charge_last;
         }
     } else {
@@ -952,6 +958,7 @@ static int tasks_append_runners(char *buf, int n, int max)
     n = buf_put_ch(buf, n, max, ' ');
     n = buf_puts(buf, n, max,
                  fg_save.blocked ? "waiting" :
+                 fg_save.sleeping ? "sleeping" :
                  fg_getc_wait ? "input" : "running");
     n = buf_puts(buf, n, max, " cpu=");
     n = buf_put_dec(buf, n, max,
@@ -969,7 +976,8 @@ static int tasks_append_runners(char *buf, int n, int max)
         n = buf_put_ch(buf, n, max, ' ');
         n = buf_puts(buf, n, max,
                      j->state == JOB_RUNNING ? "running" :
-                     j->state == JOB_STOPPED ? "stopped" : "done");
+                     j->state == JOB_STOPPED ? "stopped" :
+                     j->state == JOB_SLEEPING ? "sleeping" : "done");
         n = buf_puts(buf, n, max, " cpu=");
         n = buf_put_dec(buf, n, max, j->cpu / (TIMER_HZ / 1000));
         n = buf_put_ch(buf, n, max, '\n');
@@ -1051,6 +1059,9 @@ static void restore_runner(uint64_t *frame, int runner)
     } else {
         struct job_slot *j = &jobs[runner - 1];
         int level = JOB_LEVEL_BASE + (runner - 1);
+        if (j->state == JOB_SLEEPING) {
+            j->state = JOB_RUNNING;  /* 寝ていたジョブの再開 */
+        }
         for (i = 0; i < 32; i++) {
             frame[i] = j->frame[i];
         }
@@ -1068,7 +1079,14 @@ static void restore_runner(uint64_t *frame, int runner)
 static int runner_runnable(int r)
 {
     if (r == 0) {
-        return !fg_save.blocked;
+        if (fg_save.blocked) {
+            return 0;
+        }
+        /* 寝ている前面は、起床時刻を過ぎたら実行可能に戻る */
+        return !fg_save.sleeping || r_time() >= fg_save.sleep_until;
+    }
+    if (jobs[r - 1].state == JOB_SLEEPING) {
+        return r_time() >= jobs[r - 1].sleep_until;
     }
     return jobs[r - 1].state == JOB_RUNNING;
 }
@@ -1209,6 +1227,9 @@ static void jobs_kill_all(void)
     fg_save.valid = 0;
     fg_save.blocked = 0;
     fg_save.wait_job = 0;
+    fg_save.sleeping = 0;
+    fg_save.sleep_until = 0;
+    fg_save.getc_until = 0;
     console_owner = 0;
     cur_runner = 0;
     gfx_set_focus(0);
@@ -1377,6 +1398,7 @@ static void do_job_run(uint64_t *frame)
         copy_str(j->name, name, sizeof(j->name));
         copy_str(j->cwd, proc_cwd(), PATH_MAX);  /* cwd は引き継ぐ */
         j->cpu = 0;
+        j->sleep_until = 0;
         j->state = JOB_RUNNING;
         gfx_window_open(slot + 1, j->name);  /* ジョブの窓 (段B) */
         frame[FRAME_A0] = (uint64_t)(slot + 1);
@@ -1409,6 +1431,7 @@ static int job_line(char *buf, int max, int n, int idx)
     }
     s = j->state == JOB_RUNNING ? "running"
         : j->state == JOB_STOPPED ? "stopped"
+        : j->state == JOB_SLEEPING ? "sleeping"
                                   : "done status=";
     while (*s != '\0' && n < max) {
         buf[n++] = *s++;
@@ -1550,6 +1573,86 @@ static int do_syscall(uint64_t *frame)
         uart_putc((char)frame[FRAME_A0]);
         frame[FRAME_A0] = 0;
         break;
+    case SYS_SLEEP_MS: {
+        /* 走者を寝かせる (doc/top-design.md 段2)。前面は
+         * getc 待ちと同じ作法 (文脈は ecall の位置で保存
+         * し、再開時に syscall をやり直す)。ジョブは
+         * JOB_SLEEPING で止める。寝ている間は CPU 積算に
+         * 数えない (charge_runner が旗と状態を見て外す) */
+        uint64_t ms = frame[FRAME_A0];
+        if (ms == 0) {
+            frame[FRAME_A0] = 0;
+            break;
+        }
+        if (cur_runner == 0) {
+            if (!fg_save.sleeping) {
+                charge_runner();  /* 寝る前に走っていた分を精算 */
+                fg_save.sleep_until = r_time() +
+                    ms * (TIMER_HZ / 1000);
+                fg_save.sleeping = 1;
+            }
+            for (;;) {
+                int k, n, target = 0;
+                if (r_time() >= fg_save.sleep_until) {
+                    charge_runner();  /* 寝ていた間は数えない */
+                    fg_save.sleeping = 0;
+                    fg_save.sleep_until = 0;
+                    frame[FRAME_A0] = 0;
+                    break;
+                }
+                for (k = 0; k < JOB_MAX; k++) {
+                    n = k + 1;
+                    if (runner_runnable(n)) {
+                        target = n;
+                        break;
+                    }
+                }
+                if (target != 0) {
+                    save_runner(frame, r_sepc());
+                    restore_runner(frame, target);
+                    return 1;
+                }
+                sched_poll();
+            }
+            break;
+        }
+        {
+            struct job_slot *j = &jobs[cur_runner - 1];
+            int next;
+            if (j->sleep_until == 0) {
+                charge_runner();  /* 寝る前に走っていた分を精算 */
+                j->sleep_until = r_time() +
+                    ms * (TIMER_HZ / 1000);
+            }
+            if (r_time() >= j->sleep_until) {
+                j->sleep_until = 0;
+                frame[FRAME_A0] = 0;
+                break;
+            }
+            if (console_owner != cur_runner &&
+                runner_runnable(console_owner)) {
+                next = console_owner;
+            } else {
+                next = pick_next_runner();
+            }
+            if (next != cur_runner) {
+                save_runner(frame, r_sepc());
+                j->state = JOB_SLEEPING;
+                restore_runner(frame, next);
+                return 1;
+            }
+            /* 誰も走れない: その場でポーリングしながら待つ
+             * (スケジューラは回るので時計タスクは進む) */
+            j->state = JOB_SLEEPING;
+            while (r_time() < j->sleep_until) {
+                sched_poll();
+            }
+            j->state = JOB_RUNNING;
+            j->sleep_until = 0;
+            frame[FRAME_A0] = 0;
+            break;
+        }
+    }
     case SYS_GETC: {
         /* コンソール仲裁 (doc/jobs-design.md): 文字は持ち主
          * にだけ配る。ジョブが無ければ従来とまったく同じ
@@ -1571,17 +1674,33 @@ static int do_syscall(uint64_t *frame)
         }
         charge_runner();  /* 待ちに入る前に走っていた分を精算 */
         fg_getc_wait = 1;
+        /* タイムアウト (a1 ミリ秒、0 = 無限) は持ち主の
+         * 待ちにだけ付ける。期限は fg_save に持ち、ジョブへ
+         * 番が移って戻ってきても数え直さない */
+        if (frame[FRAME_A1] != 0 && fg_save.getc_until == 0) {
+            fg_save.getc_until = r_time() +
+                frame[FRAME_A1] * (TIMER_HZ / 1000);
+        }
         for (;;) {
             int c = uart_try_getc();
             if (c >= 0) {
                 charge_runner();  /* 待ちの間は数えない (旗が
                                    * 立っている間に精算する) */
                 fg_getc_wait = 0;
+                fg_save.getc_until = 0;
                 /* 入力活動 (スクリーンセーバーの物差し。
                  * セーバーが入っていれば、ここで終わって
                  * 画面が戻ってから文字が配られる) */
                 saver_note_activity();
                 frame[FRAME_A0] = (uint64_t)(unsigned char)c;
+                break;
+            }
+            if (fg_save.getc_until != 0 &&
+                r_time() >= fg_save.getc_until) {
+                charge_runner();  /* 待ちの間は数えない */
+                fg_getc_wait = 0;
+                fg_save.getc_until = 0;
+                frame[FRAME_A0] = (uint64_t)-1;
                 break;
             }
             /* 文字が無い間は、実行可能なジョブに番を回す。
@@ -1591,8 +1710,7 @@ static int do_syscall(uint64_t *frame)
                 int k, n, target = 0;
                 for (k = 0; k < JOB_MAX; k++) {
                     n = (cur_runner + k) % JOB_MAX + 1;
-                    if (n != cur_runner &&
-                        jobs[n - 1].state == JOB_RUNNING) {
+                    if (n != cur_runner && runner_runnable(n)) {
                         target = n;
                         break;
                     }

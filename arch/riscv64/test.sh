@@ -913,6 +913,27 @@ echo "$out" | grep -Eq "run 0: nish (running|input) cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+" || rc=1
 report "AM task/runner cpu accounting (ps)" $rc
 
+echo "== scenario AN: sleep_ms + getc timeout (top stage 2) =="
+# nap.elf が sleep_ms で寝て、経過がほぼ回数×500ms に
+# なること。bg では ps に sleeping と出ること。keywait
+# .elf が入力なしで getc タイムアウトを数えること
+# (doc/top-design.md 段2)
+{ sleep 3; printf 'run nap.elf 4 &\n'; sleep 1.3; \
+  printf 'ps\n'; sleep 2; \
+  printf 'run nap.elf 1\n'; sleep 2; \
+  printf 'run keywait.elf 2\n'; sleep 3; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-an.log 2>&1 || true
+out=$(strip_ticks < test-an.log)
+rc=0
+echo "$out" | grep -Eq "run 1: nap\.elf sleeping cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "nap: elapsed (19|20|21)[0-9][0-9]" || rc=1
+echo "$out" | grep -Eq "nap: elapsed [45][0-9][0-9]" || rc=1
+echo "$out" | grep -q "nap done" || rc=1
+echo "$out" | grep -q "keywait timeout 1/2" || rc=1
+echo "$out" | grep -q "keywait done" || rc=1
+report "AN sleep_ms + getc timeout" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

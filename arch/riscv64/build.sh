@@ -67,6 +67,9 @@ echo "build: BOARD=$BOARD"
 # slow / crash はジョブ制御 (段3) の検証用 (test.sh シナリオ X)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o slow.elf slow.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o crash.elf crash.c
+# nap / keywait は top 段2 (sleep_ms と getc タイムアウト) の検証用 (シナリオ AN)
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o nap.elf nap.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o keywait.elf keywait.c
 # copy は SD exec の実機確認用 (ELF を /sd へ運ぶ道具)
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o copy.elf copy.c
 # gdemo / gjob は画面表示 (描画 syscall と窓) の検証用
