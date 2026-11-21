@@ -153,7 +153,7 @@ if [ "$BOARD" = virt ]; then
     python3 make_sd_image.py sd.img UPROG.ELF=user.elf TEST.WAV=test.wav
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes

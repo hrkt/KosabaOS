@@ -89,4 +89,7 @@ uint64_t user_stack_setup_argv(struct user_pages *up, int argc,
                                const char *const *tokens,
                                uint64_t *argv_va);
 
+/* 今の satp の値 (hart1 へページ表を渡すため、smp) */
+uint64_t vm_satp_value(void);
+
 #endif

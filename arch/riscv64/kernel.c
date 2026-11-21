@@ -25,6 +25,7 @@
 #include "fs.h"
 #include "ssd1315.h"
 #include "wdt.h"
+#include "smp.h"
 #include "time.h"
 #include "saver.h"  /* 入力活動の記録とキー待ちの申告 */
 #if BOARD_FEATURE_LCD
@@ -215,6 +216,8 @@ void kmain(void)
     kput_dec(page_free_count());
     kputc('\n');
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
+    smp_start();  /* hart1 を起こす (SMP 段1)。ページ表が
+                   * 有効になってからでないと渡せない */
     sched_start();  /* 時計タスクの常駐開始 (スケジューラ段2)。
                      * 以後、入力待ちの間も時計が進む */
     board_wdt_start();  /* ウォッチドッグ開始 (段3)。餌やりは

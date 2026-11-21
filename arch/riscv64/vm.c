@@ -275,6 +275,15 @@ static inline void w_satp(uint64_t x)
     asm volatile("csrw satp, %0" : : "r"(x));
 }
 
+/* 今の satp の値 (モード付き)。hart1 を起こすときに
+ * 「同じページ表を使え」と渡すために読む (smp.c) */
+uint64_t vm_satp_value(void)
+{
+    uint64_t x;
+    asm volatile("csrr %0, satp" : "=r"(x));
+    return x;
+}
+
 void vm_init(void)
 {
     /* エントリ番号は仮想アドレスの VPN2 (>> 30) */

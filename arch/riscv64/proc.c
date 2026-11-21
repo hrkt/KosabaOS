@@ -45,6 +45,7 @@
 #include "saver.h"  /* スクリーンセーバーの毎秒の判定 */
 #include "wdt.h"    /* ウォッチドッグの餌やり (段3) */
 #include "audio.h"  /* 再生中は時計帯の再描画を後回しにする */
+#include "smp.h"    /* hart1 のハートビートを ps に出す (段1) */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
 #endif
@@ -352,6 +353,54 @@ int proc_list(char *buf, unsigned long max)
             while (*w != '\0' && n < max) {
                 buf[n++] = *w++;
             }
+            while (v > 0) {
+                rev[m++] = (char)('0' + (v % 10));
+                v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
+        }
+        if (n < max) {
+            buf[n++] = '\n';
+        }
+    }
+    /* hart1 の生存とハートビート (SMP 段1)。メールボックスを
+     * 読むだけ。起きていなければ alive=0 beat=0 のまま */
+    {
+        const char *s = "hart1: alive=";
+        uint64_t v;
+        char rev[20];
+        int m;
+        while (*s != '\0' && n < max) {
+            buf[n++] = *s++;
+        }
+        if (n < max) {
+            buf[n++] = smp_hart1_alive ? '1' : '0';
+        }
+        s = " beat=";
+        while (*s != '\0' && n < max) {
+            buf[n++] = *s++;
+        }
+        v = smp_heartbeat;
+        m = 0;
+        if (v == 0) {
+            rev[m++] = '0';
+        }
+        while (v > 0) {
+            rev[m++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (m > 0 && n < max) {
+            buf[n++] = rev[--m];
+        }
+        if (smp_hart1_fault != 0) {
+            s = " fault=";
+            while (*s != '\0' && n < max) {
+                buf[n++] = *s++;
+            }
+            v = smp_hart1_fault;
+            m = 0;
             while (v > 0) {
                 rev[m++] = (char)('0' + (v % 10));
                 v /= 10;

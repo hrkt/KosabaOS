@@ -898,6 +898,22 @@ else
     echo "SKIP: AL (no recv materials)"
 fi
 
+echo "== scenario AM: hart1 heartbeat (SMP stage 1) =="
+# -smp 2 で起動し、hart1 が SBI HSM で起きてハートビート
+# が増え続けることを ps で見る (doc/smp-design.md 段1)。
+# 他のシナリオは従来どおり -smp 1 (hart が無い場合は
+# "not started" の 1 行だけで起動が続くことも含む)
+{ sleep 3; printf 'ps\n'; sleep 2; printf 'ps\n'; sleep 1; } \
+    | timeout 20 "$QEMU" -machine virt -smp 2 -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-am.log 2>&1 || true
+out=$(strip_ticks < test-am.log)
+rc=0
+echo "$out" | grep -q "smp: hart1 start requested" || rc=1
+b1=$(echo "$out" | grep -oE "hart1: alive=1 beat=[0-9]+" | head -1 | grep -oE "[0-9]+$")
+b2=$(echo "$out" | grep -oE "hart1: alive=1 beat=[0-9]+" | tail -1 | grep -oE "[0-9]+$")
+[ -n "$b1" ] && [ -n "$b2" ] && [ "$b2" -gt "$b1" ] || rc=1
+report "AM hart1 heartbeat (SMP stage 1)" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
