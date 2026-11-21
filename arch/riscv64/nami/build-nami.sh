@@ -8,6 +8,14 @@
 # nori (リンク) で、IwaC のチェーンそのまま。入口と
 # syscall の作法は Ikesu 段6 の main_kosaba.c が前例。
 #
+# nami は MP3 デコーダ (mp3dec.c と表) を取り込んだため、
+# 連結した 1 本の TU でビルドする。並びは Ikesu 側の
+# mp3dec 連結と同じ (詰め物 → 表 → mp3dec.c → 本体)。
+# 先頭の詰め物 g_tpad は、データ先頭に来る文字列プールの
+# 後ろで表が 4 バイト境界からずれるのを寄せるためのもの
+# (大きさはこの TU の実測に合わせる。doc/nami-design.md)。
+# デコーダ状態の境界は nami.c 側の g_mpad が担う。
+#
 # ツールチェーンの場所は IWAC_DIR で差し替え可能
 # (既定は兄弟ディレクトリの ~/workspace/iwac/iwac、
 # OS 側 build.sh の IKESU_DIR と同じ流儀)。iwac /
@@ -28,9 +36,13 @@ if [ ! -x "$IWAC_DIR/nori/nori" ]; then
     (cd "$IWAC_DIR/nori" && ./build.sh)
 fi
 
-"$IWAC_DIR/iwac" --kosaba --elf nami.c > nami.eo
+printf 'char g_tpad[4] = { 0 };\n' > nami_tpad.c
+cat nami_tpad.c hufftab.c sfbtab.c powtab.c imdcttab.c \
+    dcttab.c mp3dec.c nami.c > nami_all.c
+"$IWAC_DIR/iwac" --kosaba --elf nami_all.c > nami.eo
 "$IWAC_DIR/nori/nori" nami.eo > nami.elf
+rm -f nami_tpad.c nami_all.c nami.eo
 "$IWAC_DIR/iwac" --kosaba --elf wavgen.c > wavgen.eo
 "$IWAC_DIR/nori/nori" wavgen.eo > wavgen.elf
-rm -f nami.eo wavgen.eo
+rm -f wavgen.eo
 ls -l nami.elf wavgen.elf

@@ -9,12 +9,16 @@
  * 出力は組み込み putc、システムコールは組み込み
  * syscall3 で呼ぶ。
  *
- * 形式は先頭バイト (マジック) で振り分ける。今回の
- * 範囲は WAV (PCM・16bit・モノラル/ステレオ) の
- * ストリーミング再生だけ: ファイルをメモリに載せ
- * 切らず、塊で read → audio_write (40〜42) を繰り返す。
- * MP3 は認識だけして「まだ扱えない」と返し、将来
- * デコーダを差す受け口 (play_mp3) を残してある。
+ * 形式は先頭バイト (マジック) で振り分ける。WAV
+ * (PCM・16bit・モノラル/ステレオ) と MP3 (MPEG-1
+ * Layer III・モノラルのみ) のストリーミング再生:
+ * ファイルをメモリに載せ切らず、塊で read → デコード
+ * → audio_write (40〜42) を繰り返す。MP3 デコーダは
+ * Ikesu プロジェクトで作った独自デコーダ (mp3dec.c と
+ * 表) を 2026-11-21 に nami の一部として移したもので、
+ * ビルドは表 → mp3dec.c → nami.c の連結 1 本で通す
+ * (build-nami.sh)。ステレオ MP3 はデコードが実時間に
+ * 届かないため当面は対象外 (status 3)。
  * 浮動小数点と switch は使わない (サブセットの外)。
  * 文字リテラルも使わず、文字コードを数で書く
  * (コーパスの作法)。
@@ -27,6 +31,7 @@
 
 #define SYS_OPEN 4
 #define SYS_READ 5
+#define SYS_LSEEK 17
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
@@ -357,13 +362,124 @@ int32 play_wav(int32 *st)
     }
 }
 
-/* MP3 の受け口。形式の認識だけして、今回の範囲では
- * 断る。将来 MP3 を扱うときは、Ikesu 側デコーダの
- * 呼び出しをここへ差し込む (doc/nami-design.md) */
-int32 play_mp3(void)
+/* ---- MP3 の再生 ----------------------------------------
+ * デコーダ (mp3dec.c) の状態と、読みの状態 st[3] の
+ * 複写を 1 つの構造体に集めて持つ。ファイルスコープに
+ * 裸のスカラを置かない作法 (nori の配置で misaligned に
+ * なる) のためで、先頭の詰め物 g_mpad で構造体を 8
+ * バイト境界に寄せる (大きさはビルド後の実測で調整。
+ * Ikesu 側 main_twophase.c の MainState と同じ考え方)。 */
+
+char g_mpad[9] = { 0 };
+
+struct NamiMp3 {
+    struct Mp3Dec dec;
+    int32 st[3];
+};
+
+struct NamiMp3 g_mp3;
+
+/* デコーダのバイト源 (mp3dec.c が呼ぶ)。nami の読み
+ * (reader_read) をそのまま使う: 最大 len バイトまで
+ * 入れて入れた数を返し、EOF では 0。読みエラーは
+ * EOF として返す (デコーダ側で同期を失って終わる) */
+int32 dec_read(char *dst, int32 len)
 {
-    out_str("nami: mp3 is not supported yet\n");
-    return 3;
+    int32 r;
+    r = reader_read(g_mp3.st, dst, len);
+    if (r < 0) {
+        return 0;
+    }
+    return r;
+}
+
+int32 play_mp3(int32 *st)
+{
+    int32 opened;
+    int64 r;
+
+    opened = 0;
+    /* main がマジックの 4 バイトを既に読んでいるので、
+     * デコーダが先頭 (ID3 / 同期) から読めるよう巻き
+     * 戻し、読みの状態も組み直す */
+    r = syscall3(SYS_LSEEK, st[0], 0, 0);
+    if (r < 0) {
+        out_str("nami: mp3 seek failed\n");
+        return 1;
+    }
+    g_mp3.st[0] = st[0];
+    g_mp3.st[1] = 0;
+    g_mp3.st[2] = 0;
+    dec_init(&g_mp3.dec);
+
+    while (1) {
+        int32 rc;
+        rc = dec_next_frame(&g_mp3.dec);
+        if (rc == 0) {
+            break;   /* EOF: 全フレームを読み切った */
+        }
+        if (rc < 0) {
+            if (opened != 0) {
+                syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+            }
+            out_str("nami: mp3 decode error ");
+            out_num(rc);
+            putc(10);
+            return 1;
+        }
+        dec_decode_frame(&g_mp3.dec);
+        if (opened == 0) {
+            int32 ch;
+            int32 rate;
+            ch = g_mp3.dec.frame.channels;
+            rate = g_mp3.dec.frame.sample_rate;
+            if (ch != 1) {
+                out_str("nami: mp3 stereo is not supported yet\n");
+                return 3;
+            }
+            r = syscall3(SYS_AUDIO_OPEN, rate, ch, 0);
+            if (r != 0) {
+                out_str("nami: cannot open audio (rate ");
+                out_num(rate);
+                out_str(")\n");
+                return 3;
+            }
+            opened = 1;
+            out_str("nami: ");
+            out_num(rate);
+            out_str(" Hz mono (mp3)\n");
+        }
+        {
+            int32 nsamp;
+            int32 off;
+            nsamp = 1152 * g_mp3.dec.frame.channels;
+            off = 0;
+            while (off < nsamp) {
+                int64 w;
+                w = syscall3(SYS_AUDIO_WRITE,
+                             (char *)g_mp3.dec.pcm + off * 2,
+                             nsamp - off, 0);
+                if (w <= 0) {
+                    syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+                    out_str("nami: audio write failed\n");
+                    return 1;
+                }
+                off = off + (int32)w;
+            }
+        }
+    }
+
+    if (opened == 0) {
+        out_str("nami: mp3 has no frames\n");
+        return 4;
+    }
+    r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+    if (r != 0) {
+        out_str("nami: audio close failed\n");
+        return 1;
+    }
+    out_str("nami: done\n");
+    return 0;
 }
 
 int32 main(int32 argc, char **argv)
@@ -399,10 +515,10 @@ int32 main(int32 argc, char **argv)
     }
     if ((m[0] & 255) == 73 && (m[1] & 255) == 68 &&
         (m[2] & 255) == 51) {
-        return play_mp3();   /* "ID3" */
+        return play_mp3(st);   /* "ID3" */
     }
     if ((m[0] & 255) == 255 && (m[1] & 224) == 224) {
-        return play_mp3();   /* フレーム同期 */
+        return play_mp3(st);   /* フレーム同期 */
     }
     if ((m[0] & 255) != 82 || (m[1] & 255) != 73 ||
         (m[2] & 255) != 70 || (m[3] & 255) != 70) {
