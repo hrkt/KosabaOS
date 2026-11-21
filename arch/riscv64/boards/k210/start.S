@@ -22,7 +22,8 @@ _start:
 
 # --- 2. 事故止めのトラップ先 -----------------------------------------
 # まだトラップ処理は無い。何か起きたら暴走せず駐車ループへ落とす。
-    la t0, park
+# (park は hart1 専用になったので、hart0 用は park0)
+    la t0, park0
     csrw mtvec, t0
 
 # --- 3. スタックを用意する (virt と同じ pcrel 方式) -------------------
@@ -42,10 +43,66 @@ _start:
 # --- 5. M シムを呼ぶ (戻ってこない。S の kmain へ mret される) -------
 2:  call mshim_boot
 
-# --- 駐車 ---------------------------------------------------------------
-park:
+# --- hart0 の駐車 -------------------------------------------------------
+park0:
     wfi
-    j park
+    j park0
+
+# --- hart1 の駐車 = 解放ワード待ち (SMP 段1、doc/smp-design.md) --------
+# hart1 はここで k210_hart1_release (boards/k210/smp.c) が
+# 立つのを回して待つ。割り込みは使わない (起こす合図は
+# メモリだけ)。M 用スタックを用意してから待つのは、解放
+# 後に C の入口 (k210_hart1_m_entry) を呼ぶため。待って
+# いる間はスタックには触らないので、hart0 の .bss ゼロ
+# 埋めと競合しない。
+park:
+.Lh1msp: auipc sp, %pcrel_hi(hart1_m_stack_top)
+    addi sp, sp, %pcrel_lo(.Lh1msp)
+    la t0, k210_hart1_release
+1:  ld t1, 0(t0)
+    beqz t1, 1b
+    call k210_hart1_m_entry     # 戻らない (S へ mret)
+    j park                      # 万一戻ったら待ち直す
+
+# --- hart1 の S モード入口 ------------------------------------------------
+# k210_hart1_m_entry が sptbr と mstatus.VM を点火し、
+# mepc = ここ にして mret で降りてくる。仕事は virt の
+# hart1_entry と同じ (スタック、tp、事故止め、hart1_main)。
+    .section .text
+    .globl hart1_entry
+hart1_entry:
+.Lh1sp: auipc sp, %pcrel_hi(hart1_stack_top)
+    addi sp, sp, %pcrel_lo(.Lh1sp)
+.Lh1tp: auipc tp, %pcrel_hi(hart1_state)
+    addi tp, tp, %pcrel_lo(.Lh1tp)
+.Lh1tv: auipc t0, %pcrel_hi(hart1_trap)
+    addi t0, t0, %pcrel_lo(.Lh1tv)
+    csrw stvec, t0
+    csrci sstatus, 2            # SIE = 0: 割り込みは受けない
+    li a0, 1                    # hartid = 1 (ここは hart1 専用)
+    call hart1_main
+1:  wfi
+    j 1b
+
+# hart1 の事故止め (S): scause を残して駐車 (hart0 は巻き込まない)
+    .globl hart1_trap
+hart1_trap:
+    csrr t0, scause
+.Lh1f: auipc t1, %pcrel_hi(smp_hart1_fault)
+    addi t1, t1, %pcrel_lo(.Lh1f)
+    sd t0, 0(t1)
+1:  wfi
+    j 1b
+
+# hart1 の事故止め (M): mcause を残して駐車
+    .globl hart1_m_trap
+hart1_m_trap:
+    csrr t0, mcause
+.Lh1mf: auipc t1, %pcrel_hi(smp_hart1_fault)
+    addi t1, t1, %pcrel_lo(.Lh1mf)
+    sd t0, 0(t1)
+1:  wfi
+    j 1b
 
     .section .bss
     .align 4
@@ -60,3 +117,14 @@ stack_top:
 trapstack:
     .space 4096
 trapstack_top:
+
+# hart1 用スタック (SMP 段1)。M 用は解放後の C 入口のため、
+# S 用は hart1_main のため
+    .align 4
+hart1_m_stack:
+    .space 1024
+hart1_m_stack_top:
+    .align 4
+hart1_stack:
+    .space 4096
+hart1_stack_top:

@@ -235,8 +235,8 @@ void kmain(void)
 #if BOARD_FEATURE_LCD
     lcd_draw_text(28, 148, "STEP4 USER MODE OK", 2, LCD_RGB(200, 200, 200));
     lcd_draw_text(28, 164, "FS READY", 2, LCD_RGB(200, 200, 200));
-    /* 機械の状態: hart1 は駐車中、FS のファイル数 */
-    lcd_draw_text(28, 198, "HART1 PARK FS", 2, LCD_RGB(150, 150, 150));
+    /* 機械の状態: hart1 は SMP 段1で起こす、FS のファイル数 */
+    lcd_draw_text(28, 198, "HART1 SMP FS", 2, LCD_RGB(150, 150, 150));
     {
         uint32_t w = lcd_draw_u32(196, 198, (uint64_t)fs_count(),
                                   2, LCD_RGB(150, 150, 150));

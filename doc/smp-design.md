@@ -33,6 +33,24 @@ I2S FIFO が 8 フレーム (約 0.18ms) しかなく、hart0 側の
 目的は「生きていることの確認」と「キャッシュの振る
 舞いの実測」を兼ねる。機能は持たせない。
 
+実装の記録 (2026-11-21):
+- 段1a (virt) は実装とスモーク確認まで完了。SBI HSM
+  で起きた hart1 が satp を hart0 の値で共有し、専用
+  スタックと tp (hart1_state) で hart1_main に入り、
+  ps の「hart1: alive=1 beat=...」が増え続けることを
+  確認した (約 4.7 億 / 2 秒)。共通部は smp.c / smp.h、
+  起こし方は boards 層の board_start_hart1() に分離
+- 段1b (K210) は実装まで完了、実機確認が残る。park は
+  解放ワードのポーリングになり、hart0 の S カーネルが
+  satp ワード→解放ワードの順に書く。hart1 は M の
+  k210_hart1_m_entry で mshim_boot と同じ段取り
+  (sptbr + mstatus.VM、MPP = S、FS = Initial) を踏み、
+  S の hart1_entry へ mret で降りる。事故止めは S/M
+  両レベルで scause / mcause をメールボックスに残す
+- どちらのボードでも、hart1 が起きなければ klog に
+  「smp: hart1 not started」が出て hart0 だけで起動が
+  続く (受け入れ条件)
+
 ### 起こし方
 
 - virt: hart0 のカーネルが SBI HSM (EID 0x48534D,
