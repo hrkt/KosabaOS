@@ -10,6 +10,28 @@ volatile uint64_t smp_heartbeat;
 volatile uint64_t smp_hart1_alive;
 volatile uint64_t smp_hart1_fault;
 
+/* キャッシュ追い出し用のダミー領域 (128KB)。K210 の
+ * D キャッシュ (32KB と言われる) より大きく流し読み
+ * すると、自ハートのキャッシュラインが全部入れ替わり、
+ * dirty な行はメモリへ書き戻され、stale な行は捨て
+ * られる。K210 のキャッシュはハート間でコヒーレント
+ * でないので、ハート間の受け渡しでは「書いた側が追い
+ * 出して書き戻す」「読む側が追い出して読み直す」が
+ * 段1 の実測で得た作法 (doc/smp-design.md)。
+ * virt では無害な空転になる */
+static char evbuf[131072];
+
+void smp_evict_cache(void)
+{
+    volatile char *p = evbuf;
+    uint64_t sum = 0;
+    int i;
+    for (i = 0; i < 131072; i += 64) {
+        sum += (uint64_t)p[i];
+    }
+    (void)sum;
+}
+
 void smp_start(void)
 {
     int rc = board_start_hart1();
@@ -30,11 +52,18 @@ void smp_start(void)
 void hart1_main(uint64_t hartid)
 {
     hart1_state.hartid = hartid;
+    board_hart1_mark(0xC3);  /* S の hart1_main に着いた */
     smp_hart1_alive = 1;
     /* 生きている印に、数え続けるだけのループ。K210 では
-     * この単純な受け渡しが「キャッシュされる SRAM で
-     * 書いた値が相手に見えるか」の実測を兼ねる */
+     * 数えた行を定期的に追い出して書き戻さないと、相手
+     * の hart0 からはメモリ上の古い 0 しか見えない。
+     * 追い出しを挟むことで「書いた側が追い出せば見える」
+     * ことの実測も兼ねる */
     for (;;) {
-        smp_heartbeat++;
+        int i;
+        for (i = 0; i < 1024; i++) {
+            smp_heartbeat++;
+        }
+        smp_evict_cache();
     }
 }

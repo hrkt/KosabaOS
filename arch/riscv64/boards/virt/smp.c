@@ -40,3 +40,14 @@ int board_start_hart1(void)
                                   vm_satp_value());
     return (int)err;
 }
+
+/* virt では印の置き場が無い (切り分けは K210 専用) */
+void board_hart1_mark(uint64_t mark)
+{
+    (void)mark;
+}
+
+uint64_t board_hart1_mark_read(void)
+{
+    return 0;
+}

@@ -29,6 +29,10 @@ extern volatile uint64_t smp_hart1_fault; /* 事故時の scause (0 = 無し) */
  * klog に 1 行残す */
 void smp_start(void);
 
+/* 自ハートの D キャッシュを流し読みで追い出す (K210 の
+ * ハート間受け渡しの作法。virt では無害) */
+void smp_evict_cache(void);
+
 /* hart1 側の入口 (start.S の hart1_entry から呼ばれる)。
  * 生存印を立て、ハートビートを回し続ける */
 void hart1_main(uint64_t hartid);
@@ -37,5 +41,11 @@ void hart1_main(uint64_t hartid);
  * 仕掛けた)、負 = 起こせなかった理由 (SBI のエラー等)。
  * virt: SBI HSM hart_start。K210: M シム側の解放ワード */
 int board_start_hart1(void);
+
+/* 段1 の切り分け用: hart1 の進み具合をキャッシュの
+ * 効かない場所 (K210 は CLINT の mtimecmp1) に印として
+ * 書く / 読む。virt では何もしない (印は常に 0) */
+void board_hart1_mark(uint64_t mark);
+uint64_t board_hart1_mark_read(void);
 
 #endif

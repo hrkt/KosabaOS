@@ -366,7 +366,9 @@ int proc_list(char *buf, unsigned long max)
         }
     }
     /* hart1 の生存とハートビート (SMP 段1)。メールボックスを
-     * 読むだけ。起きていなければ alive=0 beat=0 のまま */
+     * 読むだけ。起きていなければ alive=0 beat=0 のまま。
+     * K210 では自キャッシュの古いコピーを捨ててから読む */
+    smp_evict_cache();
     {
         const char *s = "hart1: alive=";
         uint64_t v;
@@ -404,6 +406,24 @@ int proc_list(char *buf, unsigned long max)
             while (v > 0) {
                 rev[m++] = (char)('0' + (v % 10));
                 v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
+        }
+        /* 切り分けの印 (K210 のみ非 0): A1 解放待ち /
+         * B2 解放を見た / C3 hart1_main に着いた */
+        v = board_hart1_mark_read();
+        if (v != 0) {
+            s = " mark=";
+            while (*s != '\0' && n < max) {
+                buf[n++] = *s++;
+            }
+            m = 0;
+            while (v > 0) {
+                int d = (int)(v & 0xF);
+                rev[m++] = (char)(d < 10 ? '0' + d : 'a' + d - 10);
+                v >>= 4;
             }
             while (m > 0 && n < max) {
                 buf[n++] = rev[--m];

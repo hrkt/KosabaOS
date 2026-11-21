@@ -56,11 +56,13 @@ park0:
 # いる間はスタックには触らないので、hart0 の .bss ゼロ
 # 埋めと競合しない。
 park:
+    # 切り分けの印 (最優先で書く): ここに着いたこと自体を
+    # CLINT mtimecmp1 (0x02004008、キャッシュ無効) へ残す
+    li t0, 0x02004008
+    li t1, 0xA0
+    sd t1, 0(t0)
 .Lh1msp: auipc sp, %pcrel_hi(hart1_m_stack_top)
     addi sp, sp, %pcrel_lo(.Lh1msp)
-    la t0, k210_hart1_release
-1:  ld t1, 0(t0)
-    beqz t1, 1b
     call k210_hart1_m_entry     # 戻らない (S へ mret)
     j park                      # 万一戻ったら待ち直す
 
