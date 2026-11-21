@@ -66,6 +66,35 @@
  * txfe のとき 1 フレーム (2 段) の余裕が必ずある */
 #define TFCR_VALUE 12u
 
+/* ---- DMAC (doc/audio-dma-design.md。チャンネル 0 を
+ * I2S0 TX 専用に使う) ---- */
+#define REG64(a) (*(volatile uint64_t *)(a))
+#define DMAC_CFG    REG64(0x50000010ULL)
+#define DMAC_CHEN   REG64(0x50000018ULL)
+#define DMAC_CH0_SAR   REG64(0x50000100ULL)
+#define DMAC_CH0_DAR   REG64(0x50000108ULL)
+#define DMAC_CH0_BLOCK REG64(0x50000110ULL)
+#define DMAC_CH0_CTL   REG64(0x50000118ULL)
+#define DMAC_CH0_CFG   REG64(0x50000120ULL)
+#define DMAC_CH0_INTCLEAR REG64(0x50000198ULL)
+#define DMAC_CH0_STATUS   REG64(0x50000130ULL)
+#define DMAC_CH0_INTSTATUS REG64(0x50000188ULL)
+#define SYSCTL_DMA_SEL0 REG32(SYSCTL_BASE + 0x64)
+#define I2S_TXDMA_ADDR (I2S0_BASE + 0x1C8)
+#define DMA_SEL_I2S0_TX 25u   /* sysctl の DMA 選択値 */
+
+/* DMA 供給 (doc/audio-dma-design.md): open で DMA が
+ * 使えれば i2s_dma_mode が立ち、共通コード (trap.c) は
+ * リングを直接 DMAC に読ませる。AUDIO_DMA_OFF を
+ * 定義すると従来の FIFO 供給に戻る (A/B 比較用) */
+
+
+/* DMA まわりの前方宣言 (実体はファイル後半) */
+static void dma_init_once(void);
+void board_audio_dma_stop(void);
+static int dma_ready;      /* DMAC の初期化が済んだか */
+static int i2s_dma_mode;   /* この open は DMA 供給か */
+
 /* PLL2 = 26MHz / (0+1) × (25+1) / (14+1) = 45.0667MHz */
 #define PLL2_HZ 45066666ULL
 
@@ -165,6 +194,13 @@ int board_audio_open(uint64_t rate, uint64_t channels)
     if (i2s_setup() != 0) {
         return -1;
     }
+    /* 供給方式の決定: DMA が初期化できれば DMA 供給 */
+#ifdef AUDIO_DMA_OFF
+    i2s_dma_mode = 0;
+#else
+    dma_init_once();
+    i2s_dma_mode = dma_ready;
+#endif
     /* threshold = round(pll2 / (rate × 128)) − 1。
      * 実レートが要求の 1% を超えてずれる組み合わせは
      * 受けない (48000 はここで落ちる) */
@@ -182,6 +218,12 @@ int board_audio_open(uint64_t rate, uint64_t channels)
         (SYSCTL_CLK_TH3 & 0xFFFF0000u) | (uint32_t)th;
 
     /* I2S0 の設定 (SDK の i2s_init + tx_channel_config の順) */
+    /* 他チャンネルの送信を明示的に止める。txdma は
+     * ブロック共有の口で、有効な全チャンネルへ語が
+     * 分配される疑いがあるため (2026-11-21 の切り分け) */
+    REG32(I2S0_BASE + 0x2C) = 0;  /* CH0 TER */
+    REG32(I2S0_BASE + 0xAC) = 0;  /* CH2 TER */
+    REG32(I2S0_BASE + 0xEC) = 0;  /* CH3 TER */
     I2S_CH1_TER = 0;
     I2S_IER = 1;
     I2S_IRER = 0;
@@ -189,7 +231,13 @@ int board_audio_open(uint64_t rate, uint64_t channels)
     I2S_TXFFR = 1;               /* 送信ブロックの FIFO を流す */
     I2S_CH1_TFF = 1;             /* チャンネルの FIFO を流す */
     I2S_CH1_TCR = TCR_VALUE;
-    I2S_CCR = CCR_VALUE;
+    /* DMA のビットは送信開始前に CCR へ入れる (開始後に
+     * 書き換えてもハードが DMA 要求を出さない)。
+     * divide_16 (bit10) は使わない: リングの形は SDK の
+     * 32 ビット経路と同じ 1 ワード = 1 チャンネル
+     * サンプルに揃えた (doc/audio-dma-design.md) */
+    I2S_CCR = CCR_VALUE |
+        (i2s_dma_mode ? (1u << 8) : 0u);
     I2S_CH1_TFCR = TFCR_VALUE;
     I2S_CH1_IMR = 0x33;          /* 割り込みは全てマスク (ポーリング) */
     (void)I2S_CH1_TOR;           /* 残っているあふれ印を消す */
@@ -237,10 +285,89 @@ int board_audio_try_push(uint16_t l, uint16_t r)
     return 1;
 }
 
+/* ---- DMAC の最小ドライバ (チャンネル 0、メモリ→
+ * I2S0 txdma、32 ビット幅、単一ブロック) ---- */
+static void dma_init_once(void)
+{
+    if (dma_ready) {
+        return;
+    }
+    SYSCTL_CLK_EN_PERI |= (1u << 1);   /* DMAC のクロック */
+    /* ch0 のハンドシェイク相手 = I2S0 TX (欄は 6 ビット) */
+    SYSCTL_DMA_SEL0 = (SYSCTL_DMA_SEL0 & ~0x3Fu) | DMA_SEL_I2S0_TX;
+    DMAC_CFG |= 0x3;                   /* dmac_en + int_en */
+    dma_ready = 1;
+}
+
+int board_audio_dma_active(void)
+{
+    return i2s_dma_mode;
+}
+
+/* DMA で流れた実フレーム数の帳簿 (close の要約行用) */
+void board_audio_dma_note_frames(uint64_t frames)
+{
+    stat_frames += frames;
+}
+
+/* buf (1 ワード = 1 チャンネルサンプルの列) を words
+ * ワード分、I2S へ流すブロック転送を張る */
+void board_audio_dma_arm(const uint32_t *buf, uint64_t words)
+{
+    uint64_t v;
+    int i;
+    for (i = 0; i < 1000000; i++) {   /* 前の転送の完了待ち */
+        if ((DMAC_CHEN & 1u) == 0) {
+            break;
+        }
+    }
+    DMAC_CH0_INTCLEAR = 0xFFFFFFFFu;
+    /* cfg: tt_fc = MEM2PRF (1) を [34:32]、hs_sel_src =
+     * ソフト (bit35)、hs_sel_dst = ハード (bit36 = 0)、
+     * src_per/dst_per = チャンネル番号 0 */
+    v = DMAC_CH0_CFG;
+    v &= ~((7ULL << 32) | (1ULL << 36) | (7ULL << 39) |
+           (7ULL << 42));
+    v |= (1ULL << 32) | (1ULL << 35);
+    DMAC_CH0_CFG = v;
+    /* ctl: dms = MASTER2 (bit2)、dinc = 固定 (bit6)、
+     * sinc = 増やす (bit4 = 0)、幅 32 ビット
+     * (src [10:8] = 2、dst [13:11] = 2)、バースト 1 */
+    v = DMAC_CH0_CTL;
+    v &= ~((1ULL << 0) | (1ULL << 4) | (7ULL << 8) |
+           (7ULL << 11) | (0xFULL << 14) | (0xFULL << 18));
+    v |= (1ULL << 2) | (1ULL << 6) | (2ULL << 8) | (2ULL << 11);
+    DMAC_CH0_CTL = v;
+    DMAC_CH0_SAR = (uint64_t)(uintptr_t)buf;
+    DMAC_CH0_DAR = (uint64_t)I2S_TXDMA_ADDR;
+    DMAC_CH0_BLOCK = words - 1;   /* 語数 - 1 */
+    DMAC_CHEN = (1ULL << 0) | (1ULL << 8);   /* ch0 有効化 */
+}
+
+int board_audio_dma_done(void)
+{
+    return (DMAC_CHEN & 1u) == 0;
+}
+
+void board_audio_dma_stop(void)
+{
+    int i;
+    DMAC_CHEN = (1ULL << 8);   /* we だけ立てて値を 0 に */
+    for (i = 0; i < 1000000; i++) {
+        if ((DMAC_CHEN & 1u) == 0) {
+            break;
+        }
+    }
+}
+
 void board_audio_close(void)
 {
     if (!i2s_open_flag) {
         return;
+    }
+    if (i2s_dma_mode) {
+        board_audio_dma_stop();  /* 止め忘れの保険 */
+        i2s_dma_mode = 0;
     }
     i2s_open_flag = 0;
     kputs("audio: i2s frames=");
