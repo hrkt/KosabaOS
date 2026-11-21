@@ -89,3 +89,47 @@ stack_top:                  # その末尾がスタックの出発点
 trapstack:
     .space 4096
 trapstack_top:
+
+# --- hart1 の入口 (SMP 段1、doc/smp-design.md) -------------------
+# SBI HSM の hart_start で起こされると、ここから S モードで
+# 走り出す (a0 = hartid、a1 = hart0 が opaque で渡した satp)。
+# ページングはまだ無効で、物理アドレスで実行している。像は
+# VA == PA で載っているので、satp を入れた後も同じ場所を
+# そのまま実行できる。仕事は 4 つだけ:
+#   1. satp を入れて hart0 と同じページ表を共有する
+#   2. hart1 専用スタックに乗り換える
+#   3. tp にハート別状態 (hart1_state) を指させる
+#   4. トラップベクタを事故止めに向け、hart1_main を呼ぶ
+# .bss のゼロ埋めは hart0 が起動時に済ませているので不要。
+    .section .text
+    .globl hart1_entry
+hart1_entry:
+    csrw satp, a1               # ページ表を hart0 と共有
+    sfence.vma                  # 変換の効き始めを確定させる
+.Lh1sp: auipc sp, %pcrel_hi(hart1_stack_top)
+    addi sp, sp, %pcrel_lo(.Lh1sp)
+.Lh1tp: auipc tp, %pcrel_hi(hart1_state)
+    addi tp, tp, %pcrel_lo(.Lh1tp)
+.Lh1tv: auipc t0, %pcrel_hi(hart1_trap)
+    addi t0, t0, %pcrel_lo(.Lh1tv)
+    csrw stvec, t0              # 事故は hart1_trap へ
+    csrci sstatus, 2            # SIE = 0: 割り込みは受けない
+    call hart1_main             # a0 = hartid のまま渡る
+1:  wfi                         # 戻ってきたら駐車
+    j 1b
+
+# hart1 の事故止め: scause をメールボックスに残して駐車する。
+# hart0 には触らない (巻き込まない) のが段1 の規律。
+hart1_trap:
+    csrr t0, scause
+.Lh1f: auipc t1, %pcrel_hi(smp_hart1_fault)
+    addi t1, t1, %pcrel_lo(.Lh1f)
+    sd t0, 0(t1)
+1:  wfi
+    j 1b
+
+    .section .bss
+    .align 4
+hart1_stack:
+    .space 4096
+hart1_stack_top:

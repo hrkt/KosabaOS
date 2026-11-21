@@ -45,6 +45,7 @@
 #include "saver.h"  /* スクリーンセーバーの毎秒の判定 */
 #include "wdt.h"    /* ウォッチドッグの餌やり (段3) */
 #include "audio.h"  /* 再生中は時計帯の再描画を後回しにする */
+#include "smp.h"    /* hart1 のハートビートを ps に出す (段1) */
 #if BOARD_FEATURE_LCD
 #include "lcd.h"    /* 時計タスクの表示先 (k210 のみ、段2) */
 #endif
@@ -355,6 +356,74 @@ int proc_list(char *buf, unsigned long max)
             while (v > 0) {
                 rev[m++] = (char)('0' + (v % 10));
                 v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
+        }
+        if (n < max) {
+            buf[n++] = '\n';
+        }
+    }
+    /* hart1 の生存とハートビート (SMP 段1)。メールボックスを
+     * 読むだけ。起きていなければ alive=0 beat=0 のまま。
+     * K210 では自キャッシュの古いコピーを捨ててから読む */
+    smp_evict_cache();
+    {
+        const char *s = "hart1: alive=";
+        uint64_t v;
+        char rev[20];
+        int m;
+        while (*s != '\0' && n < max) {
+            buf[n++] = *s++;
+        }
+        if (n < max) {
+            buf[n++] = smp_hart1_alive ? '1' : '0';
+        }
+        s = " beat=";
+        while (*s != '\0' && n < max) {
+            buf[n++] = *s++;
+        }
+        v = smp_heartbeat;
+        m = 0;
+        if (v == 0) {
+            rev[m++] = '0';
+        }
+        while (v > 0) {
+            rev[m++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (m > 0 && n < max) {
+            buf[n++] = rev[--m];
+        }
+        if (smp_hart1_fault != 0) {
+            s = " fault=";
+            while (*s != '\0' && n < max) {
+                buf[n++] = *s++;
+            }
+            v = smp_hart1_fault;
+            m = 0;
+            while (v > 0) {
+                rev[m++] = (char)('0' + (v % 10));
+                v /= 10;
+            }
+            while (m > 0 && n < max) {
+                buf[n++] = rev[--m];
+            }
+        }
+        /* 切り分けの印 (K210 のみ非 0): A1 解放待ち /
+         * B2 解放を見た / C3 hart1_main に着いた */
+        v = board_hart1_mark_read();
+        if (v != 0) {
+            s = " mark=";
+            while (*s != '\0' && n < max) {
+                buf[n++] = *s++;
+            }
+            m = 0;
+            while (v > 0) {
+                int d = (int)(v & 0xF);
+                rev[m++] = (char)(d < 10 ? '0' + d : 'a' + d - 10);
+                v >>= 4;
             }
             while (m > 0 && n < max) {
                 buf[n++] = rev[--m];

@@ -25,6 +25,7 @@
 #include "fs.h"
 #include "ssd1315.h"
 #include "wdt.h"
+#include "smp.h"
 #include "time.h"
 #include "saver.h"  /* 入力活動の記録とキー待ちの申告 */
 #if BOARD_FEATURE_LCD
@@ -215,6 +216,8 @@ void kmain(void)
     kput_dec(page_free_count());
     kputc('\n');
     vm_init();    /* Sv39 ページングを有効にする (ステップ 3) */
+    smp_start();  /* hart1 を起こす (SMP 段1)。ページ表が
+                   * 有効になってからでないと渡せない */
     sched_start();  /* 時計タスクの常駐開始 (スケジューラ段2)。
                      * 以後、入力待ちの間も時計が進む */
     board_wdt_start();  /* ウォッチドッグ開始 (段3)。餌やりは
@@ -232,8 +235,8 @@ void kmain(void)
 #if BOARD_FEATURE_LCD
     lcd_draw_text(28, 148, "STEP4 USER MODE OK", 2, LCD_RGB(200, 200, 200));
     lcd_draw_text(28, 164, "FS READY", 2, LCD_RGB(200, 200, 200));
-    /* 機械の状態: hart1 は駐車中、FS のファイル数 */
-    lcd_draw_text(28, 198, "HART1 PARK FS", 2, LCD_RGB(150, 150, 150));
+    /* 機械の状態: hart1 は SMP 段1で起こす、FS のファイル数 */
+    lcd_draw_text(28, 198, "HART1 SMP FS", 2, LCD_RGB(150, 150, 150));
     {
         uint32_t w = lcd_draw_u32(196, 198, (uint64_t)fs_count(),
                                   2, LCD_RGB(150, 150, 150));
