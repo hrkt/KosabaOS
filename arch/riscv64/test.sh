@@ -688,7 +688,7 @@ print(len(data) // 2, "%016x" % h)')
         "nami: cannot open /sd/NOPE.WAV" "run: exit status 1" \
         "nami: unknown format" "run: exit status 4" \
         "wrote /sd/FAKE.MP3" \
-        "nami: mp3 is not supported yet" "run: exit status 3" \
+        "nami: mp3 has no frames" "run: exit status 4" \
         "usage: nami <file>" "run: exit status 2"
     report "AC nami player (wav playback fnv + error statuses)" $?
 fi
