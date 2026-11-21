@@ -22,6 +22,20 @@ int board_audio_open(uint64_t rate, uint64_t channels);
  * だけに答える (doc/audio-driver-design.md 追補3) */
 int board_audio_try_push(uint16_t l, uint16_t r);
 
+/* DMA 供給の口 (doc/audio-dma-design.md)。open の時点で
+ * DMA が使えれば board_audio_dma_active() が 1 になり、
+ * 共通コードはリングを直接 DMAC に読ませる。arm は
+ * buf (1 ワード = 1 チャンネルサンプルの列) を words
+ * ワード分 I2S へ流すブロック転送を張る。
+ * done はブロックの完了 (チャンネルが止まったか)。
+ * note_frames は DMA で流れた実フレーム数の帳簿で、
+ * close の要約行 (i2s frames=) に合算される */
+int board_audio_dma_active(void);
+void board_audio_dma_arm(const uint32_t *buf, uint64_t words);
+int board_audio_dma_done(void);
+void board_audio_dma_stop(void);
+void board_audio_dma_note_frames(uint64_t frames);
+
 /* 閉じる。ドライバ側の記録 (K210 では i2s の要約行) は
  * ここでカーネルログへ出す */
 void board_audio_close(void);
@@ -32,12 +46,5 @@ void board_audio_close(void);
  * 再描画、tick のコンソール印字) が入ると DAC が飢えて
  * 音が周期的に欠ける。そちら側が後回しにするために使う */
 int audio_is_open(void);
-
-/* hart1 再生係の口 (SMP 段2、trap.c が持つ)。wanted は
- * 「汲むべきストリームが開いているか」、step は汲む
- * 仕事 1 回分。hart1 の常駐ループ (smp.c) から呼ばれる。
- * BOARD_FEATURE_AUDIO のボードだけで実体がある */
-int audio_hart1_wanted(void);
-void audio_hart1_step(void);
 
 #endif

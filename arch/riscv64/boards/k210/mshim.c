@@ -138,6 +138,7 @@ static void build_boot_table(void)
     boot_root[0] = LEAF(0x00000000ULL, RW);
     boot_root[1] = PTR((uint64_t)boot_l1);
     boot_root[2] = LEAF(0x80000000ULL, RWX);
+    boot_l1[0x80] = LEAF(0x50000000ULL, RW);  /* DMAC 0x50000000 */
     boot_l1[0x81] = LEAF(0x50200000ULL, RW);  /* FPIOA 0x502B0000 */
     boot_l1[0x82] = LEAF(0x50400000ULL, RW);  /* SYSCTL 0x50440000 */
     boot_l1[0x90] = LEAF(0x52000000ULL, RW);  /* SPI0 */

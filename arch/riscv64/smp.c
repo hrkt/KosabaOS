@@ -56,15 +56,8 @@ void hart1_main(uint64_t hartid)
     board_hart1_mark(0xC3);  /* S の hart1_main に着いた */
     smp_hart1_alive = 1;
     for (;;) {
-#if BOARD_FEATURE_AUDIO
-        /* 再生係 (SMP 段2): ストリームが開いている間は
-         * リングから FIFO へ汲む仕事が本務。汲んでいる
-         * 間ハートビートは止まる (生存印は alive の方) */
-        if (audio_hart1_wanted()) {
-            audio_hart1_step();
-            continue;
-        }
-#endif
+        /* 再生係の仕事は DMA 化で引退した (2026-11-21、
+         * doc/audio-dma-design.md)。hart1 は生存印だけ */
         /* 平常時: 生きている印に数え続ける。K210 では
          * 数えた行を定期的に追い出して書き戻さないと、
          * 相手の hart0 からはメモリ上の古い 0 しか
