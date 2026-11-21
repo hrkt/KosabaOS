@@ -30,6 +30,7 @@
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
 #include "ssd1315.h" /* OLED 表示 (syscall 48 / 49) */
 #include "traplog.h" /* M シムのトラップ記録の drain (k210) */
+#include "smp.h"     /* hart1 再生係との受け渡し (SMP 段2) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -1554,39 +1555,63 @@ static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
 
 #if BOARD_FEATURE_AUDIO
-/* --- リングバッファとフィーダ (追補3) -------------------------------
+/* --- リングバッファとフィーダ (追補3 + SMP 段2) ---------------------
  * I2S の FIFO は 8 フレーム (約 0.18ms) しかなく、書き手が
  * 少しでも手を止めると枯れる。そこで audio_write はまず
  * カーネルのリングへ写すだけにして即座に戻り、FIFO への
- * 供給はタイマ割り込みのフィーダが 100µs ごとに担う。
- * 書き手とフィーダはこのリングでだけつながる。
+ * 供給は汲み手が担う。
  *
- * 並行性の整理: 書き手 (リングへ入れる側) と汲み手
- * (ポンプ) はどちらも syscall 文脈 = SIE が落ちている文脈
- * でだけ動き、割り込み文脈のフィーダとは重ならない。
- * 切り替えは sched_poll の地点でだけ起き、そこの外側では
- * head / count の読み書きは割られない。書き手はバイトを
- * 写し終えてから count を増やす (公開の順序)。汲み手同士
- * (フィーダとポンプ) がフレームの順を前後させることは
- * あっても (1 フレーム分、聞き分けられない)、リングの
- * 帳尻は崩れない */
+ * 汲み手は 2 形態 (ストリームごとに open で選ぶ):
+ *   - 割り込みフィーダ (従来): タイマ割り込みが 100µs
+ *     ごとに汲む。hart1 がいないときの落としどころ
+ *   - hart1 再生係 (SMP 段2、doc/smp-design.md): hart1 が
+ *     常駐ループで汲む。hart0 は割り込みに一切触られず、
+ *     デコーダがフィーダ割り込みに鈍らされる問題 (nami
+ *     MP3 の実測) が消える
+ *
+ * 並行性の整理 (hart1 形態): 作り手は hart0 の syscall
+ * 文脈だけ、食べ手は hart1 だけ (単一作り手・単一食べ手)。
+ * 索引は head (食べ手だけが書く) と tail (作り手だけが
+ * 書く) の 2 本で、入っている量は差分で出す (共有の
+ * count は持たない)。満杯と空の混同を避けるため、使える
+ * のは全容量 - 4 バイトまで。
+ * K210 のキャッシュはハート間でコヒーレントでないので、
+ * 公開は「データを書く → 追い出す → 索引を書く → 追い
+ * 出す」の 2 段で行う (smp_evict_cache、SMP 段1 の実測
+ * の作法)。食べ手は「追い出してから索引を読む」ことで、
+ * 索引が見えた時点でデータはメモリにあることが保証
+ * される。割り込み形態では全員が hart0 なので、この
+ * 作法は無害な空転になる */
 #define AUDIO_RING_BYTES 32768u  /* 2 の冪。ステレオで約 186ms 分 */
 #define AUDIO_RING_MASK  (AUDIO_RING_BYTES - 1)
 #define AUDIO_FEED_TICKS (TIMER_HZ / 10000)  /* フィード間隔 100µs */
 
 static unsigned char audio_ring[AUDIO_RING_BYTES];
-static uint64_t audio_ring_head;   /* 汲み手の読み位置 */
-static uint64_t audio_ring_tail;   /* 書き手の書き位置 */
-static uint64_t audio_ring_count;  /* 入っているバイト数 */
-static uint64_t audio_underruns;   /* リングが空だったフィード回数 */
+static volatile uint64_t audio_ring_head;  /* 食べ手の読み位置 */
+static volatile uint64_t audio_ring_tail;  /* 作り手の書き位置 */
+static volatile uint64_t audio_underruns;  /* 無音を流したフレーム数 */
 static int audio_stream_live;      /* 1 フレームでも流れたら 1 */
 
+/* hart1 再生係との制御 (SMP 段2)。feed_state は hart0 が
+ * 書き hart1 が読む: 0 = 止まれ、1 = 流せ、2 = 食べ切れ。
+ * drained は hart1 が書き hart0 が読む (食べ切った印) */
+static volatile uint64_t audio_feed_state;
+static volatile uint64_t audio_drained;
+static int audio_hart1_active;  /* このストリームは hart1 が汲む */
+
+/* リングに入っているバイト数 (索引の差分) */
+static uint64_t ring_used(void)
+{
+    return (audio_ring_tail - audio_ring_head) & AUDIO_RING_MASK;
+}
+
 /* 次にタイマを張る時刻: 本来の 100ms 刻みとフィード刻みの
- * 早い方。audio が開いていないときは従来どおり 100ms 刻み */
+ * 早い方。hart1 が汲む間はフィード刻みは要らない */
 static uint64_t timer_arm_value(void)
 {
     uint64_t feed = r_time() + AUDIO_FEED_TICKS;
-    if (audio_open_flag && feed < next_deadline) {
+    if (audio_open_flag && !audio_hart1_active &&
+        feed < next_deadline) {
         return feed;
     }
     return next_deadline;
@@ -1600,7 +1625,7 @@ static int ring_peek_frame(uint16_t *l, uint16_t *r)
     uint64_t h = audio_ring_head;
     if (audio_channels == 1) {
         uint16_t s;
-        if (audio_ring_count < 2) {
+        if (ring_used() < 2) {
             return 0;
         }
         s = (uint16_t)audio_ring[h];
@@ -1610,7 +1635,7 @@ static int ring_peek_frame(uint16_t *l, uint16_t *r)
         *r = s;  /* モノラルは左右へ複製 (仕様側の決定) */
         return 1;
     }
-    if (audio_ring_count < 4) {
+    if (ring_used() < 4) {
         return 0;
     }
     *l = (uint16_t)audio_ring[h];
@@ -1627,7 +1652,6 @@ static void ring_drop_frame(void)
 {
     uint64_t n = (audio_channels == 1) ? 2 : 4;
     audio_ring_head = (audio_ring_head + n) & AUDIO_RING_MASK;
-    audio_ring_count -= n;
 }
 
 /* リングから 1 フレームを取り出す */
@@ -1643,10 +1667,14 @@ static int ring_pop_frame(uint16_t *l, uint16_t *r)
 /* フィーダ (タイマ割り込み文脈): FIFO に空きがある間、
  * リングから流す。リングが空で、既に流れ始めているなら
  * 無音を 1 フレームだけ流して DAC を飢えさせず、
- * アンダーランとして数える */
+ * アンダーランとして数える。hart1 が汲むストリーム
+ * では呼ばない (二重に汲まない) */
 static void audio_feed(void)
 {
     int i;
+    if (audio_hart1_active) {
+        return;
+    }
     for (i = 0; i < 32; i++) {
         uint16_t l, r;
         if (ring_peek_frame(&l, &r)) {
@@ -1691,19 +1719,178 @@ static int ring_pump_some(void)
 
 /* 塊をリングへ入れる。満杯なら自分で汲み出して空きを
  * 作る (syscall 文脈ではフィーダが走らないので、待つ
- * だけでは空かない) */
+ * だけでは空かない)。割り込みフィーダ形態専用 */
 static void ring_enqueue(const unsigned char *buf, uint64_t n)
 {
     uint64_t i;
     for (i = 0; i < n; i++) {
-        while (audio_ring_count >= AUDIO_RING_BYTES) {
+        while (ring_used() >= AUDIO_RING_BYTES - 4) {
             if (ring_pump_some() == 0) {
                 sched_poll();
             }
         }
         audio_ring[audio_ring_tail] = buf[i];
         audio_ring_tail = (audio_ring_tail + 1) & AUDIO_RING_MASK;
-        audio_ring_count++;
+    }
+}
+
+/* 塊をリングへ入れる (hart1 形態)。汲むのは hart1 なので、
+ * 満杯なら head が進むのを待つ。head の読み直しには
+ * 追い出しが要る (古い head のままだと、まだ食べられて
+ * いない場所へ上書きしてしまう)。
+ * 共有の tail はここでは進めない: データだけをローカル
+ * な書き位置 (audio_tail_local) で書き進め、公開は
+ * 呼び手 (SYS_AUDIO_WRITE) が「追い出す → tail を進める
+ * → 追い出す」の順で行う。こうすると、hart1 が新しい
+ * tail を見た時点でデータは必ずメモリにある */
+static uint64_t audio_tail_local;
+
+static void ring_enqueue_wait(const unsigned char *buf, uint64_t n)
+{
+    uint64_t i;
+    uint64_t wait_iter = 0;
+    for (i = 0; i < n; i++) {
+        while (((audio_tail_local - audio_ring_head) &
+                AUDIO_RING_MASK) >= AUDIO_RING_BYTES - 4) {
+            /* head の読み直し (追い出し) は間引く。ここで
+             * 毎回 128KB を流し読みすると、供給係 (hart1)
+             * の補充の追い出しまで遅くなって FIFO (8
+             * フレーム分しかない) が補充のたびに枯れ、
+             * 周期的なクリックになる (2026-11-21 の実測で
+             * 切り分け)。head は供給係が補充のたびに公開
+             * するので、256 回に 1 回の読み直しで十分に
+             * 追いつく (遅れは最大でも 1ms 未満) */
+            if ((wait_iter & 255) == 0) {
+                smp_evict_cache();
+                if (((audio_tail_local - audio_ring_head) &
+                     AUDIO_RING_MASK) < AUDIO_RING_BYTES - 4) {
+                    break;
+                }
+            }
+            wait_iter++;
+            sched_poll();
+        }
+        audio_ring[audio_tail_local] = buf[i];
+        audio_tail_local = (audio_tail_local + 1) & AUDIO_RING_MASK;
+    }
+}
+
+/* --- hart1 再生係 (SMP 段2) -------------------------------------------
+ * hart1 の常駐ループから呼ばれる。ローカルに最大 256
+ * フレームの塊を持ち、FIFO に空きがある間はそこから
+ * 流す。塊が尽きたら、追い出してから索引を読み直し、
+ * リングから補充する (head の前進は追い出して公開)。
+ * リングが空で再生中なら、無音を流してアンダーラン
+ * として数える (割り込みフィーダと同じ役目を、フレーム
+ * 単位で数える)。close (feed_state = 2) でリングが
+ * 空になったら drained を立てて止まる */
+#define FEED_CHUNK 256
+
+static uint16_t feed_buf[FEED_CHUNK * 2];
+static int feed_len;
+static int feed_pos;
+static int feed_starved;  /* 空振りが続いた回数 (追い出し間引き用) */
+
+/* 供給係専用の短い追い出し。補充の窓 (追い出し+取り出し)
+ * が FIFO の枯れるまでの時間 (8 フレーム = 約 186µs) を
+ * 超えると周期的なクリックになるので、smp_evict_cache
+ * (128KB) より短い 64KB で流す。64KB は D キャッシュ
+ * (32KB) の 2 倍で、各セットに 2 本以上が流れるため
+ * 2 ウェイでも resident な行は押し出される (公開側の
+ * 書き戻しも同じ仕組みで間に合う)。公開の確実さが要る
+ * 場所 (open / close / drained) は従来どおり
+ * smp_evict_cache を使う */
+static const unsigned char audio_evbuf[64 * 1024];
+
+static void audio_evict(void)
+{
+    volatile const unsigned char *p = audio_evbuf;
+    uint64_t sum = 0;
+    int i;
+    for (i = 0; i < 64 * 1024; i += 64) {
+        sum += (uint64_t)p[i];
+    }
+    (void)sum;
+}
+
+int audio_hart1_wanted(void)
+{
+    return audio_feed_state != 0;
+}
+
+void audio_hart1_step(void)
+{
+    if (feed_pos >= feed_len) {
+        uint64_t avail, take, i;
+        /* 空振りが続いている間は、索引の読み直し (追い
+         * 出し) を間引く。作り手が遅れてリングが空の間、
+         * 毎回 128KB を流し読みするとメモリ帯域を食い
+         * 潰し、作り手 (デコーダ) をさらに遅くする悪循環
+         * になる (実測で切り分け済み: 飢えた側の追い出し
+         * 洪水が犯人)。間引き中は FIFO への無音供給だけ
+         * 続ける。データに気づく遅れは最大でも数百
+         * ステップ分 (1ms 未満) */
+        if (feed_starved > 0 && feed_starved < 512) {
+            feed_starved++;
+            if (audio_feed_state == 1 && audio_stream_live) {
+                while (board_audio_try_push(0, 0)) {
+                    audio_underruns++;
+                }
+            }
+            return;
+        }
+        audio_evict();  /* 索引とデータを読み直す (前回の
+                         * head 前進もここで一緒に公開される) */
+        if (audio_feed_state == 0) {
+            feed_len = 0;
+            feed_pos = 0;
+            feed_starved = 0;
+            return;
+        }
+        avail = ring_used() / (audio_channels == 1 ? 2 : 4);
+        take = avail > FEED_CHUNK ? FEED_CHUNK : avail;
+        feed_len = 0;
+        feed_pos = 0;
+        for (i = 0; i < take; i++) {
+            uint16_t l, r;
+            if (!ring_pop_frame(&l, &r)) {
+                break;
+            }
+            feed_buf[feed_len * 2] = l;
+            feed_buf[feed_len * 2 + 1] = r;
+            feed_len++;
+        }
+        if (feed_len > 0) {
+            audio_stream_live = 1;
+            feed_starved = 0;
+            /* head の前進はここでは公開しない。次の補充の
+             * audio_evict が一緒に書き戻す (遅れは最大でも
+             * 1 補充分、リングの余裕に対して無視できる)。
+             * 補充のたびに 2 回追い出すと、FIFO が枯れる
+             * までの 186µs を窓が超えて周期的なクリックに
+             * なる (2026-11-21 の実測) */
+        } else if (audio_feed_state == 2) {
+            audio_drained = 1;
+            smp_evict_cache();  /* drained を公開する */
+            return;
+        } else {
+            /* 空振り: 無音を流してアンダーランとして数え、
+             * 次回から追い出しを間引く */
+            feed_starved = 1;
+            if (audio_stream_live) {
+                while (board_audio_try_push(0, 0)) {
+                    audio_underruns++;
+                }
+            }
+            return;
+        }
+    }
+    while (feed_pos < feed_len) {
+        if (!board_audio_try_push(feed_buf[feed_pos * 2],
+                                  feed_buf[feed_pos * 2 + 1])) {
+            return;  /* FIFO は満ちている */
+        }
+        feed_pos++;
     }
 }
 #endif /* BOARD_FEATURE_AUDIO */
@@ -2505,14 +2692,30 @@ static int do_syscall(uint64_t *frame)
         audio_fnv = FNV1A64_OFFSET;
         audio_samples = 0;
 #if BOARD_FEATURE_AUDIO
-        /* リングを空にして、フィーダの刻みでタイマを
-         * 張り直す (追補3) */
+        /* リングを空にする。hart1 が生きていれば再生係に
+         * 任せ (SMP 段2)、いなければ従来のフィーダ刻みで
+         * タイマを張り直す (追補3)。
+         * hart1 への公開は 2 段: 索引やチャンネル数を
+         * 追い出してから、feed_state を立てて追い出す */
         audio_ring_head = 0;
         audio_ring_tail = 0;
-        audio_ring_count = 0;
+        audio_tail_local = 0;
         audio_underruns = 0;
         audio_stream_live = 0;
-        sbi_set_timer(timer_arm_value());
+        audio_drained = 0;
+        feed_starved = 0;
+        feed_len = 0;
+        feed_pos = 0;
+        audio_hart1_active = smp_hart1_alive ? 1 : 0;
+        if (audio_hart1_active) {
+            audio_feed_state = 0;
+            smp_evict_cache();
+            audio_feed_state = 1;
+            smp_evict_cache();
+        } else {
+            audio_feed_state = 0;
+            sbi_set_timer(timer_arm_value());
+        }
 #endif
         frame[FRAME_A0] = 0;
         break;
@@ -2564,14 +2767,26 @@ static int do_syscall(uint64_t *frame)
                 audio_fnv *= FNV1A64_PRIME;
             }
 #if BOARD_FEATURE_AUDIO
-            /* 同じ塊をリングへ入れる (追補3)。FIFO への
-             * 供給はフィーダとポンプが担うので、ここは
-             * 原則として待たない。塊のバイト数は常に偶数
-             * (全体が偶数で、区切りも偶数) */
-            ring_enqueue(buf, chunk);
+            /* 同じ塊をリングへ入れる。供給は汲み手 (hart1
+             * 再生係か割り込みフィーダ) が担う。塊のバイト
+             * 数は常に偶数 (全体が偶数で、区切りも偶数) */
+            if (audio_hart1_active) {
+                ring_enqueue_wait(buf, chunk);
+            } else {
+                ring_enqueue(buf, chunk);
+            }
 #endif
             done += chunk;
         }
+#if BOARD_FEATURE_AUDIO
+        if (audio_hart1_active && done != (uint64_t)-1) {
+            /* データと tail の公開 (2 段): データを追い
+             * 出してから tail を進め、もう一度追い出す */
+            smp_evict_cache();
+            audio_ring_tail = audio_tail_local;
+            smp_evict_cache();
+        }
+#endif
         if (done != (uint64_t)-1) {
             audio_samples += nsamples;
             frame[FRAME_A0] = nsamples;
@@ -2586,17 +2801,46 @@ static int do_syscall(uint64_t *frame)
             break;
         }
 #if BOARD_FEATURE_AUDIO
-        /* リングに残っている分を全部流してから閉じる
-         * (追補3)。流し切る間は open のままにして、
-         * フィーダにも手伝わせる。フレームに満たない
-         * 半端な残りは従来どおり捨てる */
-        while (audio_ring_count >= (audio_channels == 1 ? 2u : 4u)) {
-            if (ring_pump_some() == 0) {
+        /* リングに残っている分を全部流してから閉じる。
+         * フレームに満たない半端な残りは従来どおり捨てる */
+        if (audio_hart1_active) {
+            /* hart1 に食べ切らせる (SMP 段2)。上限 (2 秒)
+             * を超えたら従来のポンプで落とす (hart1 が
+             * 止まっていても close は完了させる) */
+            uint64_t t0 = r_time();
+            audio_feed_state = 2;
+            smp_evict_cache();
+            while (!audio_drained) {
+                smp_evict_cache();
+                if (audio_drained) {
+                    break;
+                }
+                if (r_time() - t0 > (uint64_t)TIMER_HZ * 2) {
+                    break;
+                }
                 sched_poll();
             }
+            audio_feed_state = 0;
+            audio_hart1_active = 0;
+            if (!audio_drained) {
+                while (ring_used() >=
+                       (audio_channels == 1 ? 2u : 4u)) {
+                    if (ring_pump_some() == 0) {
+                        sched_poll();
+                    }
+                }
+            }
+            audio_ring_head = audio_ring_tail;
+        } else {
+            /* 割り込みフィーダ形態 (追補3): 流し切る間は
+             * open のままにして、フィーダにも手伝わせる */
+            while (ring_used() >= (audio_channels == 1 ? 2u : 4u)) {
+                if (ring_pump_some() == 0) {
+                    sched_poll();
+                }
+            }
+            audio_ring_head = audio_ring_tail;
         }
-        audio_ring_count = 0;
-        audio_ring_head = audio_ring_tail;
         kputs("audio: ring under=");
         kput_dec(audio_underruns);
         kputc('\n');

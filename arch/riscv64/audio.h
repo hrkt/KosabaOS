@@ -33,4 +33,11 @@ void board_audio_close(void);
  * 音が周期的に欠ける。そちら側が後回しにするために使う */
 int audio_is_open(void);
 
+/* hart1 再生係の口 (SMP 段2、trap.c が持つ)。wanted は
+ * 「汲むべきストリームが開いているか」、step は汲む
+ * 仕事 1 回分。hart1 の常駐ループ (smp.c) から呼ばれる。
+ * BOARD_FEATURE_AUDIO のボードだけで実体がある */
+int audio_hart1_wanted(void);
+void audio_hart1_step(void);
+
 #endif
