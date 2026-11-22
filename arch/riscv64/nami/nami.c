@@ -441,8 +441,18 @@ int32 play_mp3(int32 *st)
             int32 rate;
             ch = g_mp3.dec.frame.channels;
             rate = g_mp3.dec.frame.sample_rate;
-            if (ch != 1) {
-                out_str("nami: mp3 stereo is not supported yet\n");
+            if (ch != 1 && ch != 2) {
+                out_str("nami: mp3 channels ");
+                out_num(ch);
+                out_str(" is not supported\n");
+                return 3;
+            }
+            if (rate != 44100) {
+                /* オーディオドライバは 44.1kHz 固定なので、
+                 * 48kHz 等はここできれいに断る */
+                out_str("nami: mp3 rate ");
+                out_num(rate);
+                out_str(" is not supported\n");
                 return 3;
             }
             r = syscall3(SYS_AUDIO_OPEN, rate, ch, 0);
@@ -455,7 +465,11 @@ int32 play_mp3(int32 *st)
             opened = 1;
             out_str("nami: ");
             out_num(rate);
-            out_str(" Hz mono (mp3)\n");
+            if (ch == 2) {
+                out_str(" Hz stereo (mp3)\n");
+            } else {
+                out_str(" Hz mono (mp3)\n");
+            }
         }
         {
             int32 nsamp;

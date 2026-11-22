@@ -11,6 +11,7 @@ test.wav
 # from the Ikesu tree (ikesu.elf is covered by *.elf above)
 /arch/riscv64/player.wasm
 /arch/riscv64/test.mp3
+/arch/riscv64/st44.mp3
 arch/riscv64/build-test-ad.log
 arch/riscv64/test-*.log
 __pycache__/

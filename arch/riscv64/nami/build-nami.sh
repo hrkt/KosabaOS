@@ -39,7 +39,7 @@ if [ ! -x "$IWAC_DIR/nori/nori" ]; then
     (cd "$IWAC_DIR/nori" && ./build.sh)
 fi
 
-printf 'char g_tpad[5] = { 0 };\n' > nami_tpad.c
+printf 'char g_tpad[8] = { 0 };\n' > nami_tpad.c
 cat nami_tpad.c hufftab.c sfbtab.c powtab.c imdcttab.c \
     dcttab.c mp3dec.c nami.c > nami_all.c
 "$IWAC_DIR/iwac" --kosaba --elf nami_all.c > nami.eo
