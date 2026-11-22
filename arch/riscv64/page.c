@@ -11,6 +11,17 @@
  * 全部無効」が前提だし、プログラムのデータ領域も BSS の
  * ゼロ初期化と相性がよい。埋めるのは 8 バイト単位
  * (ページ先頭は 4KB 整列なので境界の問題は出ない)。
+ *
+ * プールの実効の先頭は board.h の範囲の先頭とは限らない:
+ * カーネルイメージ (BSS の末尾 __bss_end) が範囲の先頭を
+ * 越えて伸びていたら、先頭をイメージの後ろまでずらす。
+ * 2026-11-22 の実機不具合がこれで、カーネルが 1MB の想定
+ * (boards/k210/kernel.ld の見取り図) を越えて太り、BSS の
+ * 末尾がプール先頭 0x80100000 を突破。プールの先頭ページが
+ * FS の block_next や FAT の状態と重なり、ユーザープログラム
+ * の割当てとカーネルの状態が互いを壊し合った。ビルドごとに
+ * BSS の配置がずれるため「このビルドだけ落ちる」形で出る。
+ * ずらすのは page_init で、ずらしたら起動時に印字する。
  */
 
 #include <stdint.h>
@@ -24,16 +35,43 @@
 /* プールが空のボードでも配列が 1 ワードはあるように +64 する */
 #define BITMAP_WORDS ((POOL_PAGES + 64) / 64)
 
+/* カーネルイメージの末尾 (リンカスクリプトが置く印)。
+ * プールの先頭はこれより後ろでなければならない */
+extern char __bss_end[];
+
 static uint64_t bitmap[BITMAP_WORDS];
 static uint64_t free_pages = 0;
+static uint64_t pool_base = 0;   /* 実効のプール先頭 (page_init で決める) */
+static uint64_t pool_pages = 0;  /* 実効のページ数 */
+
+static void put_hex(uint64_t x);
 
 void page_init(void)
 {
     uint64_t i;
+    uint64_t kend = ((uint64_t)__bss_end + PAGE_SIZE - 1)
+                    & ~(PAGE_SIZE - 1);
     for (i = 0; i < BITMAP_WORDS; i++) {
         bitmap[i] = 0;
     }
-    free_pages = POOL_PAGES;
+    pool_base = BOARD_PAGE_POOL_BASE;
+    if (kend > pool_base) {
+        pool_base = kend;  /* イメージと重なる分は貸さない */
+    }
+    if (pool_base >= BOARD_PAGE_POOL_END) {
+        pool_pages = 0;
+        uart_puts("page: kernel image covers the whole pool!\n");
+    } else {
+        pool_pages = (BOARD_PAGE_POOL_END - pool_base) / PAGE_SIZE;
+    }
+    if (pool_base != BOARD_PAGE_POOL_BASE) {
+        uart_puts("page: pool base raised to ");
+        put_hex(pool_base);
+        uart_puts(" (kernel end ");
+        put_hex(kend);
+        uart_puts(")\n");
+    }
+    free_pages = pool_pages;
 }
 
 uint64_t page_alloc(void)
@@ -54,7 +92,7 @@ uint64_t page_alloc(void)
             uint64_t *p;
             uint64_t k;
 
-            if (idx >= POOL_PAGES) {
+            if (idx >= pool_pages) {
                 return 0;  /* 範囲の外は貸さない */
             }
             if (word & (1ULL << j)) {
@@ -62,7 +100,7 @@ uint64_t page_alloc(void)
             }
             bitmap[i] = word | (1ULL << j);
             free_pages--;
-            pa = BOARD_PAGE_POOL_BASE + idx * PAGE_SIZE;
+            pa = pool_base + idx * PAGE_SIZE;
             p = (uint64_t *)pa;
             for (k = 0; k < PAGE_SIZE / 8; k++) {
                 p[k] = 0;
@@ -77,13 +115,13 @@ void page_free(uint64_t pa)
 {
     uint64_t idx;
 
-    if (pa < BOARD_PAGE_POOL_BASE || pa >= BOARD_PAGE_POOL_END) {
+    if (pa < pool_base || pa >= BOARD_PAGE_POOL_END) {
         return;  /* プールの外は相手にしない */
     }
     if ((pa & (PAGE_SIZE - 1)) != 0) {
         return;  /* ページ先頭でなければおかしい */
     }
-    idx = (pa - BOARD_PAGE_POOL_BASE) / PAGE_SIZE;
+    idx = (pa - pool_base) / PAGE_SIZE;
     if ((bitmap[idx / 64] & (1ULL << (idx % 64))) == 0) {
         return;  /* 二重解放は無視する */
     }
@@ -98,7 +136,7 @@ uint64_t page_free_count(void)
 
 uint64_t page_total_count(void)
 {
-    return POOL_PAGES;
+    return pool_pages;
 }
 
 /* --- カーネルコンソールのデモ ('p' キー、kernel.c から) --------------
