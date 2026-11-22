@@ -76,7 +76,7 @@
  * 512KB: 埋め込み一式 (nami 込みで 84 ブロック = 344KB) が
  * 入り切る大きさ。256KB の頃は nami が無言で未登録になった
  * (fs_add の容量不足を fs_init が無視するため。2026-11-22) */
-#define BOARD_FS_ARENA_SIZE    (256ULL * 1024)
+#define BOARD_FS_ARENA_SIZE    (512ULL * 1024)
 
 /* vm.c から呼ばれるボード固有の追加マップ (vmhook.c) */
 void board_vm_hook(void);
