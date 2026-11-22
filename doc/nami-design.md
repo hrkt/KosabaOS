@@ -210,6 +210,7 @@ SMP の hart1 供給係（doc/smp-design.md）。
 レートはドライバが受ける 44100 のときだけ開ける（他は
 status 3）。ステレオはデコード自体が実時間に届かない
 ため status 3 で断る（SMP と高速化の後、段3で挑戦する）。
+→ ステレオは追補 (2026-11-22) で受け付けるようにした。
 
 状態の置き場: デコーダ状態と読みの状態は struct NamiMp3
 （dec + st[3]）に集め、nami.c の g_mpad で 8 バイト境界へ
@@ -255,3 +256,33 @@ check-align.py を組み込んだ。.eo から最終アドレスを
 open から close まで約 4 秒 (曲は 3.865 秒) で、
 モノラル MP3 の SD ストリーミング再生が実時間に
 到達した。
+
+## 追補 (2026-11-22): ステレオ対応
+
+供給側が DMA 化され (doc/audio-dma-design.md)、再生
+経路が普通に使えるようになったのを受け、play_mp3 が
+ステレオ (channels=2) を受け付けるようにした。デコーダ
+コアはもともとステレオをデコードでき、変更は nami の
+受け口だけ:
+
+- channels は 1 / 2 を受け、audio_open にそのまま渡す。
+  リングと DMA はステレオ前提の形 (1 フレーム = L/R の
+  2 ワード) なので、再生経路側の変更はない。書き込み
+  ループは従来どおり 1152 × channels サンプル単位
+- サンプルレートは 44100 のみ受ける。ドライバが
+  44.1kHz 固定のため、48kHz 等は開く前に status 3 で
+  きれいに断る (表示 `nami: mp3 rate <n> is not
+  supported`)
+- channels が 1 / 2 以外も status 3 で断る
+
+文字列が増えて配置がずれたため g_tpad は 5 → 8 に
+調整した (check-align.py が検出、境界は全部元通り)。
+
+検証の物差し: Ikesu 側の st44_128j.mp3 (44.1kHz
+ステレオ joint 128kbps、4.86 秒、ID3v2 付き)。virt の
+SD イメージに素材があるときだけ入り (build.sh が
+IKESU_DIR から借りる)、test.sh シナリオ AC が
+`audio: close ... channels=2 samples=428544
+fnv=f002ac917546f7dd` (Ikesu 段6 の参照値) を見る。
+実機では under と壁時間で不足分を測り、チューニングは
+その後で効く順にやる。
