@@ -1564,6 +1564,25 @@ void dct3_9(int32 *y)
     y[8] = sat32((int64)s4 + s7);
 }
 
+/* バンド 1 個ぶん (18 個) が全部ゼロかどうか。
+ * ゼロバンドの IMDCT は新しい和が全部 0 になるので、
+ * 前バンドの尻尾への窓掛けだけに畳める (imdct36 と
+ * imdct_short_band の近道で使う)。最初に非ゼロを
+ * 見つけたらすぐ戻るので、密なバンドでは点検の
+ * コストは小さい */
+int32 band_all_zero(struct Mp3Dec *d, int32 x)
+{
+    int32 i;
+    i = 0;
+    while (i < 18) {
+        if (d->xr[x + i] != 0) {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
 /* 長い IMDCT (36 点) を nbands バンドぶん行う。
  * win は窓表 (Q30、18 個) */
 void imdct36(struct Mp3Dec *d, int32 base, int32 ob,
@@ -1577,6 +1596,22 @@ void imdct36(struct Mp3Dec *d, int32 base, int32 ob,
         int32 o;
         x = base + j * 18;
         o = ob + j * 9;
+        if (band_all_zero(d, x)) {
+            /* 入力が全ゼロなら新しい和は全部 0 で、
+             * 出力は前の尻尾 (overlap) に窓を掛けた
+             * だけ、新しい状態は全部 0。消える項は
+             * mulp(0, ..) = 0 のものだけなので、
+             * 出力は通常路とビット単位で同じ */
+            i = 0;
+            while (i < 9) {
+                int32 ovl;
+                ovl = d->overlap[o + i];
+                d->xr[x + i] = mulp(ovl, win[i]);
+                d->xr[x + 17 - i] = mulp(ovl, win[9 + i]);
+                d->overlap[o + i] = 0;
+                i = i + 1;
+            }
+        } else {
         d->mdct_co[0] = sat32(-(int64)d->xr[x]);
         d->mdct_si[0] = d->xr[x + 17];
         i = 0;
@@ -1615,6 +1650,7 @@ void imdct36(struct Mp3Dec *d, int32 base, int32 ob,
                 (int64)mulp(ovl, win[9 + i])
                 + mulp(sum, win[i]));
             i = i + 1;
+        }
         }
         j = j + 1;
     }
@@ -1681,6 +1717,34 @@ void imdct12(struct Mp3Dec *d, int32 w, int32 dst_overlap,
 void imdct_short_band(struct Mp3Dec *d, int32 base, int32 ob)
 {
     int32 i;
+    if (band_all_zero(d, base)) {
+        /* 入力が全ゼロのとき: 窓0 の出力は状態の
+         * 尻尾 (ob+6..) への窓掛けだけ、窓1 は窓0 が
+         * 状態を 0 にした後を読むので出力 0、窓2 は
+         * 状態側へ 0 を書く。消える項は全部 0 の項
+         * なので、結果は通常路とビット単位で同じ */
+        i = 0;
+        while (i < 6) {
+            d->xr[base + i] = d->overlap[ob + i];
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 3) {
+            int32 ovl;
+            ovl = d->overlap[ob + 6 + i];
+            d->xr[base + 6 + i] = mulp(ovl, twid3_q30[2 - i]);
+            d->xr[base + 11 - i] = mulp(ovl, twid3_q30[5 - i]);
+            d->overlap[ob + 6 + i] = 0;
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 6) {
+            d->xr[base + 12 + i] = 0;
+            d->overlap[ob + i] = 0;
+            i = i + 1;
+        }
+        return;
+    }
     i = 0;
     while (i < 18) {
         d->mdct_tmp[i] = d->xr[base + i];
