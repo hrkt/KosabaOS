@@ -2,7 +2,8 @@
  *
  * カーネルが使う MMIO は 0x502B0000 (FPIOA)、0x50440000
  * (SYSCTL)、0x52000000 (SPI0、LCD)、0x53000000 (SPI1、SD)、
- * 0x50250000 (I2S0、オーディオ) で、仮想アドレスでは
+ * 0x50250000 (I2S0、オーディオ)、0x50000000 (DMAC) で、
+ * 仮想アドレスでは
  * ユーザー領域と同じ root[1] の配下に
  * ある。vm.c の共通の地図には
  * 入っていないので、vm_init の途中 (satp を切り替える直前) に
@@ -22,4 +23,5 @@ void board_vm_hook(void)
     vm_map_device(0x52000000);  /* SPI0 */
     vm_map_device(0x53000000);  /* SPI1 (SD カード) */
     vm_map_device(0x50250000);  /* I2S0 (オーディオ) */
+    vm_map_device(0x50000000);  /* DMAC */
 }

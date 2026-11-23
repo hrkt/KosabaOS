@@ -3,6 +3,7 @@
 #include "smp.h"
 #include "board.h"
 #include "klog.h"
+#include "audio.h"
 
 struct hart_state hart1_state;
 
@@ -54,16 +55,19 @@ void hart1_main(uint64_t hartid)
     hart1_state.hartid = hartid;
     board_hart1_mark(0xC3);  /* S の hart1_main に着いた */
     smp_hart1_alive = 1;
-    /* 生きている印に、数え続けるだけのループ。K210 では
-     * 数えた行を定期的に追い出して書き戻さないと、相手
-     * の hart0 からはメモリ上の古い 0 しか見えない。
-     * 追い出しを挟むことで「書いた側が追い出せば見える」
-     * ことの実測も兼ねる */
     for (;;) {
-        int i;
-        for (i = 0; i < 1024; i++) {
-            smp_heartbeat++;
+        /* 再生係の仕事は DMA 化で引退した (2026-11-21、
+         * doc/audio-dma-design.md)。hart1 は生存印だけ */
+        /* 平常時: 生きている印に数え続ける。K210 では
+         * 数えた行を定期的に追い出して書き戻さないと、
+         * 相手の hart0 からはメモリ上の古い 0 しか
+         * 見えない */
+        {
+            int i;
+            for (i = 0; i < 1024; i++) {
+                smp_heartbeat++;
+            }
+            smp_evict_cache();
         }
-        smp_evict_cache();
     }
 }

@@ -646,7 +646,10 @@ echo "== scenario AC: nami player (optional) =="
 # ことで、ファイル→読み→再生の経路を通しで見る
 # (音そのものはダミー相手なので対象外)。エラー系
 # (無いファイル / WAV でない / MP3 / 引数なし) の表示と
-# 終了ステータスも見る
+# 終了ステータスも見る。Ikesu 側のステレオ素材
+# (st44_128j.mp3) が SD イメージに入っているときは、
+# ステレオ MP3 の再生も見る (参照は Ikesu 段6 の値:
+# 428544 サンプル / fnv f002ac917546f7dd)
 if [ "$nami_have" -eq 0 ]; then
     echo "SKIP: AC nami player (materials not found: nami/nami.elf, nami/wavgen.elf)"
 else
@@ -669,27 +672,51 @@ for b in data:
 print(len(data) // 2, "%016x" % h)')
     ac_samples=${ac_expect% *}
     ac_fnv=${ac_expect#* }
+    ac_st44=0
+    ac_timeout=40
+    if [ -f st44.mp3 ]; then
+        ac_st44=1
+        ac_timeout=75
+    fi
     { sleep 3; printf 'run nami /sd/TEST.WAV\n'; sleep 4; \
       printf 'dmesg\n'; sleep 2; \
+      if [ "$ac_st44" -eq 1 ]; then printf 'run nami /sd/ST44.MP3\n'; sleep 15; printf 'dmesg\n'; sleep 2; fi; \
       printf 'run nami /sd/NOPE.WAV\n'; sleep 2; \
       printf 'run nami /sd/HELLO.TXT\n'; sleep 2; \
       printf 'write /sd/FAKE.MP3 ID3-notreal\n'; sleep 2; \
       printf 'run nami /sd/FAKE.MP3\n'; sleep 2; \
       printf 'run nami\n'; sleep 2; \
       printf 'exit\n'; sleep 2; } \
-        | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+        | timeout $ac_timeout "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
         > test-ac.log 2>&1 || true
     out=$(strip_ticks < test-ac.log)
-    check_order "$out" "Nish, the KosabaOS shell" \
-        "nami: /sd/TEST.WAV" \
-        "nami: 44100 Hz mono, $ac_samples samples (2 s)" \
-        "nami: done" \
-        "audio: close rate=44100 channels=1 samples=$ac_samples fnv=$ac_fnv" \
-        "nami: cannot open /sd/NOPE.WAV" "run: exit status 1" \
-        "nami: unknown format" "run: exit status 4" \
-        "wrote /sd/FAKE.MP3" \
-        "nami: mp3 is not supported yet" "run: exit status 3" \
-        "usage: nami <file>" "run: exit status 2"
+    if [ "$ac_st44" -eq 1 ]; then
+        check_order "$out" "Nish, the KosabaOS shell" \
+            "nami: /sd/TEST.WAV" \
+            "nami: 44100 Hz mono, $ac_samples samples (2 s)" \
+            "nami: done" \
+            "audio: close rate=44100 channels=1 samples=$ac_samples fnv=$ac_fnv" \
+            "nami: /sd/ST44.MP3" \
+            "nami: 44100 Hz stereo (mp3)" \
+            "nami: done" \
+            "audio: close rate=44100 channels=2 samples=428544 fnv=f002ac917546f7dd" \
+            "nami: cannot open /sd/NOPE.WAV" "run: exit status 1" \
+            "nami: unknown format" "run: exit status 4" \
+            "wrote /sd/FAKE.MP3" \
+            "nami: mp3 has no frames" "run: exit status 4" \
+            "usage: nami <file>" "run: exit status 2"
+    else
+        check_order "$out" "Nish, the KosabaOS shell" \
+            "nami: /sd/TEST.WAV" \
+            "nami: 44100 Hz mono, $ac_samples samples (2 s)" \
+            "nami: done" \
+            "audio: close rate=44100 channels=1 samples=$ac_samples fnv=$ac_fnv" \
+            "nami: cannot open /sd/NOPE.WAV" "run: exit status 1" \
+            "nami: unknown format" "run: exit status 4" \
+            "wrote /sd/FAKE.MP3" \
+            "nami: mp3 has no frames" "run: exit status 4" \
+            "usage: nami <file>" "run: exit status 2"
+    fi
     report "AC nami player (wav playback fnv + error statuses)" $?
 fi
 

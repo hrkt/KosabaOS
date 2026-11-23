@@ -30,6 +30,7 @@
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
 #include "ssd1315.h" /* OLED 表示 (syscall 48 / 49) */
 #include "traplog.h" /* M シムのトラップ記録の drain (k210) */
+#include "smp.h"     /* hart1 再生係との受け渡し (SMP 段2) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
 /* 割り込み自体は 100ms ごと (ステップ 5 のスケジューラの切り替え
@@ -1554,35 +1555,80 @@ static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
 
 #if BOARD_FEATURE_AUDIO
-/* --- リングバッファとフィーダ (追補3) -------------------------------
+/* --- リングバッファと供給 (追補3 + DMA 化) --------------------------
  * I2S の FIFO は 8 フレーム (約 0.18ms) しかなく、書き手が
  * 少しでも手を止めると枯れる。そこで audio_write はまず
  * カーネルのリングへ写すだけにして即座に戻り、FIFO への
- * 供給はタイマ割り込みのフィーダが 100µs ごとに担う。
- * 書き手とフィーダはこのリングでだけつながる。
+ * 供給は汲み手が担う。
  *
- * 並行性の整理: 書き手 (リングへ入れる側) と汲み手
- * (ポンプ) はどちらも syscall 文脈 = SIE が落ちている文脈
- * でだけ動き、割り込み文脈のフィーダとは重ならない。
- * 切り替えは sched_poll の地点でだけ起き、そこの外側では
- * head / count の読み書きは割られない。書き手はバイトを
- * 写し終えてから count を増やす (公開の順序)。汲み手同士
- * (フィーダとポンプ) がフレームの順を前後させることは
- * あっても (1 フレーム分、聞き分けられない)、リングの
- * 帳尻は崩れない */
-#define AUDIO_RING_BYTES 32768u  /* 2 の冪。ステレオで約 186ms 分 */
+ * リングの中身は DMA の語列 (1 ワード = 1 チャンネル
+ * サンプル、下位 16 ビットにサンプル)。1 フレーム =
+ * 2 ワード = 8 バイトで、モノラルは投入側で左右へ複製
+ * してから入れる。divide_16 の詰め形 (1 ワードに左右)
+ * は使わず、SDK の 32 ビット経路と同じ形に揃えた。
+ *
+ * 汲み手は 2 形態 (ストリームごとに open で選ぶ):
+ *   - DMA 供給 (通常、doc/audio-dma-design.md): DMAC が
+ *     リングを直接読む。管理 (ブロックの完了確認と次の
+ *     装填) は hart0 が担い、タイマ割り込み (100µs) と
+ *     syscall 文脈 (write の待ち・close の drain) から
+ *     回す。CPU がサンプルを運ばないので、補充の窓に
+ *     よる周期クリックが消えた (2026-11-21 実測)
+ *   - 割り込みフィーダ (落としどころ): タイマ割り込みが
+ *     100µs ごとに try_push で汲む。AUDIO_DMA_OFF の
+ *     ビルドや DMA が使えない場合用
+ *
+ * 索引は head (食べ手だけが書く) と tail (作り手だけが
+ * 書く) の 2 本で、入っている量は差分で出す (共有の
+ * count は持たない)。満杯と空の混同を避けるため、使える
+ * のは全容量 - 8 バイトまで。
+ * DMAC はキャッシュを見ないので、DMA 形態の公開は
+ * 「データを書く → 追い出す → tail を進める」。管理は
+ * tail が進んだ分しか装填しないので、装填時点でデータ
+ * は必ずメモリにある */
+#define AUDIO_RING_BYTES 65536u  /* 2 の冪。8192 フレーム = 約 186ms 分 */
 #define AUDIO_RING_MASK  (AUDIO_RING_BYTES - 1)
 #define AUDIO_FEED_TICKS (TIMER_HZ / 10000)  /* フィード間隔 100µs */
 
-static unsigned char audio_ring[AUDIO_RING_BYTES];
-static uint64_t audio_ring_head;   /* 汲み手の読み位置 */
-static uint64_t audio_ring_tail;   /* 書き手の書き位置 */
-static uint64_t audio_ring_count;  /* 入っているバイト数 */
-static uint64_t audio_underruns;   /* リングが空だったフィード回数 */
+static unsigned char audio_ring[AUDIO_RING_BYTES]
+    __attribute__((aligned(8)));
+static volatile uint64_t audio_ring_head;  /* 食べ手の読み位置 */
+static volatile uint64_t audio_ring_tail;  /* 作り手の書き位置 */
+static volatile uint64_t audio_underruns;  /* 無音を流したフレーム数 */
 static int audio_stream_live;      /* 1 フレームでも流れたら 1 */
 
+static int audio_dma_active;  /* このストリームは DMA が汲む */
+
+/* DMA 管理の状態。dma_head は DMA が読み終えた位置で、
+ * ブロック完了のたびに audio_ring_head へ写す (head =
+ * 消費済みの印。作り手の満杯判定は head で見る)。
+ * ブロックは最大 1024 フレーム (約 23ms) で、リングの
+ * 折り返しは跨がない */
+#define AUDIO_DMA_BLOCK_FRAMES 1024
+/* 無音ブロックは短くする。長くすると、その間に届いた
+ * 実データがブロックの終わりまで待たされ、作り手と
+ * 食べ手の位相がずれて空転が自己持続する (2026-11-21
+ * の nami 実測: 1024 フレームの無音を 206 回 = 約 4.8 秒
+ * 分挟んだ)。64 フレーム (約 1.5ms) なら待ちは聞こえず、
+ * 位相もすぐ戻る */
+#define AUDIO_SILENCE_FRAMES 64
+static uint32_t audio_silence_block[AUDIO_DMA_BLOCK_FRAMES];
+static uint64_t dma_head;
+static int dma_block_active;   /* 張っているブロックがある */
+static int dma_block_silence;  /* 張っているのは無音ブロック */
+static uint64_t dma_block_frames;
+static int dma_started;        /* 実データを 1 回でも流した */
+static int audio_dma_closing;  /* close の drain 中 */
+
+/* リングに入っているバイト数 (索引の差分) */
+static uint64_t ring_used(void)
+{
+    return (audio_ring_tail - audio_ring_head) & AUDIO_RING_MASK;
+}
+
 /* 次にタイマを張る時刻: 本来の 100ms 刻みとフィード刻みの
- * 早い方。audio が開いていないときは従来どおり 100ms 刻み */
+ * 早い方。フィード刻みは DMA 管理と割り込みフィーダの
+ * 両方が要る */
 static uint64_t timer_arm_value(void)
 {
     uint64_t feed = r_time() + AUDIO_FEED_TICKS;
@@ -1593,31 +1639,20 @@ static uint64_t timer_arm_value(void)
 }
 
 /* リングの先頭 1 フレームを読む (位置は進めない)。
- * 1 フレーム分に足りなければ 0 (フレームの途中までの
- * 書き込みは次の write を待つ) */
+ * リングは語列 (1 ワード = 1 チャンネルサンプル) なので
+ * 1 フレーム = 8 バイト。サンプルは各ワードの下位
+ * 16 ビット。1 フレーム分に足りなければ 0 */
 static int ring_peek_frame(uint16_t *l, uint16_t *r)
 {
     uint64_t h = audio_ring_head;
-    if (audio_channels == 1) {
-        uint16_t s;
-        if (audio_ring_count < 2) {
-            return 0;
-        }
-        s = (uint16_t)audio_ring[h];
-        s |= (uint16_t)((uint16_t)audio_ring[(h + 1) &
-                                             AUDIO_RING_MASK] << 8);
-        *l = s;
-        *r = s;  /* モノラルは左右へ複製 (仕様側の決定) */
-        return 1;
-    }
-    if (audio_ring_count < 4) {
+    if (ring_used() < 8) {
         return 0;
     }
     *l = (uint16_t)audio_ring[h];
     *l |= (uint16_t)((uint16_t)audio_ring[(h + 1) &
                                           AUDIO_RING_MASK] << 8);
-    *r = (uint16_t)audio_ring[(h + 2) & AUDIO_RING_MASK];
-    *r |= (uint16_t)((uint16_t)audio_ring[(h + 3) &
+    *r = (uint16_t)audio_ring[(h + 4) & AUDIO_RING_MASK];
+    *r |= (uint16_t)((uint16_t)audio_ring[(h + 5) &
                                           AUDIO_RING_MASK] << 8);
     return 1;
 }
@@ -1625,9 +1660,7 @@ static int ring_peek_frame(uint16_t *l, uint16_t *r)
 /* 先頭 1 フレームを捨てる (流し終えた分) */
 static void ring_drop_frame(void)
 {
-    uint64_t n = (audio_channels == 1) ? 2 : 4;
-    audio_ring_head = (audio_ring_head + n) & AUDIO_RING_MASK;
-    audio_ring_count -= n;
+    audio_ring_head = (audio_ring_head + 8) & AUDIO_RING_MASK;
 }
 
 /* リングから 1 フレームを取り出す */
@@ -1640,13 +1673,73 @@ static int ring_pop_frame(uint16_t *l, uint16_t *r)
     return 1;
 }
 
+/* DMA 管理: 完了したブロックの後始末と、次のブロックの
+ * 装填。タイマ割り込み (audio_feed) と syscall 文脈
+ * (write の待ち、close の drain) の両方から呼ばれる。
+ * syscall 文脈では割り込みが走らない作りなので、二重に
+ * 回ることはない */
+static void audio_dma_step(void)
+{
+    if (dma_block_active) {
+        if (!board_audio_dma_done()) {
+            return;
+        }
+        if (dma_block_silence) {
+            audio_underruns += dma_block_frames;
+        } else {
+            dma_head = (dma_head + dma_block_frames * 8) &
+                       AUDIO_RING_MASK;
+            audio_ring_head = dma_head;
+            board_audio_dma_note_frames(dma_block_frames);
+            audio_stream_live = 1;
+        }
+        dma_block_active = 0;
+    }
+    if (ring_used() >= 8) {
+        uint64_t frames = ring_used() / 8;
+        uint64_t contig = (AUDIO_RING_BYTES - dma_head) / 8;
+        /* 最初の装填だけは 1 ブロック分たまるまで待つ
+         * (作り手に先行量を持たせる)。close の drain
+         * では端数でも流す */
+        if (!dma_started && !audio_dma_closing &&
+            frames < AUDIO_DMA_BLOCK_FRAMES) {
+            return;
+        }
+        if (frames > contig) {
+            frames = contig;
+        }
+        if (frames > AUDIO_DMA_BLOCK_FRAMES) {
+            frames = AUDIO_DMA_BLOCK_FRAMES;
+        }
+        board_audio_dma_arm(
+            (const uint32_t *)(audio_ring + dma_head), frames * 2);
+        dma_block_active = 1;
+        dma_block_silence = 0;
+        dma_block_frames = frames;
+        dma_started = 1;
+    } else if (dma_started && !audio_dma_closing) {
+        /* 実データが流れ始めた後の空転は無音でつなぐ
+         * (DAC を飢えさせない)。無音の分は完了時に
+         * アンダーランとして数える */
+        board_audio_dma_arm(audio_silence_block,
+                            AUDIO_SILENCE_FRAMES * 2);
+        dma_block_active = 1;
+        dma_block_silence = 1;
+        dma_block_frames = AUDIO_SILENCE_FRAMES;
+    }
+}
+
 /* フィーダ (タイマ割り込み文脈): FIFO に空きがある間、
  * リングから流す。リングが空で、既に流れ始めているなら
  * 無音を 1 フレームだけ流して DAC を飢えさせず、
- * アンダーランとして数える */
+ * アンダーランとして数える。DMA 形態では管理だけ回す */
 static void audio_feed(void)
 {
     int i;
+    if (audio_dma_active) {
+        audio_dma_step();
+        return;
+    }
     for (i = 0; i < 32; i++) {
         uint16_t l, r;
         if (ring_peek_frame(&l, &r)) {
@@ -1691,21 +1784,100 @@ static int ring_pump_some(void)
 
 /* 塊をリングへ入れる。満杯なら自分で汲み出して空きを
  * 作る (syscall 文脈ではフィーダが走らないので、待つ
- * だけでは空かない) */
+ * だけでは空かない)。割り込みフィーダ形態専用 */
 static void ring_enqueue(const unsigned char *buf, uint64_t n)
 {
     uint64_t i;
     for (i = 0; i < n; i++) {
-        while (audio_ring_count >= AUDIO_RING_BYTES) {
+        while (ring_used() >= AUDIO_RING_BYTES - 8) {
             if (ring_pump_some() == 0) {
                 sched_poll();
             }
         }
         audio_ring[audio_ring_tail] = buf[i];
         audio_ring_tail = (audio_ring_tail + 1) & AUDIO_RING_MASK;
-        audio_ring_count++;
     }
 }
+
+/* 塊をリングへ入れる (DMA 形態)。汲むのは DMAC なので、
+ * 満杯なら head (DMA の消費位置) が進むのを待つ。待ちの
+ * 間は管理を自分で回す (syscall 文脈ではタイマ側の管理
+ * が走らない)。
+ * 共有の tail はここでは進めない: データだけをローカル
+ * な書き位置 (audio_tail_local) で書き進め、公開は
+ * 呼び手 (SYS_AUDIO_WRITE) が「追い出す → tail を
+ * 進める」の順で行う。こうすると、管理が新しい tail を
+ * 見た時点でデータは必ずメモリにある (DMAC は
+ * キャッシュを見ない) */
+static uint64_t audio_tail_local;
+
+static void ring_enqueue_dma(const unsigned char *buf, uint64_t n)
+{
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        while (((audio_tail_local - audio_ring_head) &
+                AUDIO_RING_MASK) >= AUDIO_RING_BYTES - 8) {
+            audio_dma_step();
+            sched_poll();
+        }
+        audio_ring[audio_tail_local] = buf[i];
+        audio_tail_local = (audio_tail_local + 1) & AUDIO_RING_MASK;
+    }
+}
+
+/* 音量の下げ幅 (ビットシフト)。基板2 のアンプは素の
+ * 振幅だと大きすぎるので、投入側で一律に落とす
+ * (2026-11-21、ユーザーの希望)。1 = 半分 (約 -6dB)。
+ * FNV の帳簿はユーザーの元のバイト列で数える (write
+ * 側) ので、検証値には影響しない */
+#define AUDIO_VOLUME_SHIFT 1
+
+/* ユーザーの塊 (サンプル列) をリングの形 (語列) に
+ * して入れる。1 サンプル = 1 ワード (下位 16 ビット)、
+ * モノラルは左右へ複製し、音量シフトを全サンプルに
+ * かける。塊のバイト数は常に偶数 (write の区切りが
+ * 偶数) */
+static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
+{
+    unsigned char pbuf[1024];
+    uint64_t j;
+    if (audio_channels == 1) {
+        for (j = 0; j < chunk; j += 2) {
+            int16_t s = (int16_t)((uint16_t)buf[j] |
+                                  ((uint16_t)buf[j + 1] << 8));
+            s = (int16_t)(s >> AUDIO_VOLUME_SHIFT);
+            pbuf[j * 4] = (unsigned char)(s & 0xFF);
+            pbuf[j * 4 + 1] = (unsigned char)((s >> 8) & 0xFF);
+            pbuf[j * 4 + 2] = 0;
+            pbuf[j * 4 + 3] = 0;
+            pbuf[j * 4 + 4] = pbuf[j * 4];
+            pbuf[j * 4 + 5] = pbuf[j * 4 + 1];
+            pbuf[j * 4 + 6] = 0;
+            pbuf[j * 4 + 7] = 0;
+        }
+        if (audio_dma_active) {
+            ring_enqueue_dma(pbuf, chunk * 4);
+        } else {
+            ring_enqueue(pbuf, chunk * 4);
+        }
+    } else {
+        for (j = 0; j < chunk; j += 2) {
+            int16_t s = (int16_t)((uint16_t)buf[j] |
+                                  ((uint16_t)buf[j + 1] << 8));
+            s = (int16_t)(s >> AUDIO_VOLUME_SHIFT);
+            pbuf[j * 2] = (unsigned char)(s & 0xFF);
+            pbuf[j * 2 + 1] = (unsigned char)((s >> 8) & 0xFF);
+            pbuf[j * 2 + 2] = 0;
+            pbuf[j * 2 + 3] = 0;
+        }
+        if (audio_dma_active) {
+            ring_enqueue_dma(pbuf, chunk * 2);
+        } else {
+            ring_enqueue(pbuf, chunk * 2);
+        }
+    }
+}
+
 #endif /* BOARD_FEATURE_AUDIO */
 
 /* 16 進 16 桁 (小文字、ゼロ埋め、0x なし) をログへ出す。
@@ -2505,13 +2677,22 @@ static int do_syscall(uint64_t *frame)
         audio_fnv = FNV1A64_OFFSET;
         audio_samples = 0;
 #if BOARD_FEATURE_AUDIO
-        /* リングを空にして、フィーダの刻みでタイマを
-         * 張り直す (追補3) */
+        /* リングを空にし、供給の状態を初期化する。
+         * DMA が使えるストリームでは DMAC が汲み、
+         * いなければ割り込みフィーダが汲む。どちらも
+         * フィード刻みでタイマを張り直す */
         audio_ring_head = 0;
         audio_ring_tail = 0;
-        audio_ring_count = 0;
+        audio_tail_local = 0;
         audio_underruns = 0;
         audio_stream_live = 0;
+        audio_dma_active = board_audio_dma_active();
+        dma_head = 0;
+        dma_block_active = 0;
+        dma_block_silence = 0;
+        dma_block_frames = 0;
+        dma_started = 0;
+        audio_dma_closing = 0;
         sbi_set_timer(timer_arm_value());
 #endif
         frame[FRAME_A0] = 0;
@@ -2564,14 +2745,23 @@ static int do_syscall(uint64_t *frame)
                 audio_fnv *= FNV1A64_PRIME;
             }
 #if BOARD_FEATURE_AUDIO
-            /* 同じ塊をリングへ入れる (追補3)。FIFO への
-             * 供給はフィーダとポンプが担うので、ここは
-             * 原則として待たない。塊のバイト数は常に偶数
-             * (全体が偶数で、区切りも偶数) */
-            ring_enqueue(buf, chunk);
+            /* 同じ塊をリングへ入れる。供給は汲み手 (DMA
+             * か割り込みフィーダ) が担う。塊のバイト数は
+             * 常に偶数 (全体が偶数で、区切りも偶数) */
+            ring_enqueue_packed(buf, chunk);
 #endif
             done += chunk;
         }
+#if BOARD_FEATURE_AUDIO
+        if (audio_dma_active && done != (uint64_t)-1) {
+            /* データの公開: DMAC はキャッシュを見ない
+             * ので、追い出してから tail を進める。tail
+             * を読むのは同じ hart0 の管理だけなので、
+             * 追い出しは 1 回で足りる */
+            smp_evict_cache();
+            audio_ring_tail = audio_tail_local;
+        }
+#endif
         if (done != (uint64_t)-1) {
             audio_samples += nsamples;
             frame[FRAME_A0] = nsamples;
@@ -2586,17 +2776,44 @@ static int do_syscall(uint64_t *frame)
             break;
         }
 #if BOARD_FEATURE_AUDIO
-        /* リングに残っている分を全部流してから閉じる
-         * (追補3)。流し切る間は open のままにして、
-         * フィーダにも手伝わせる。フレームに満たない
-         * 半端な残りは従来どおり捨てる */
-        while (audio_ring_count >= (audio_channels == 1 ? 2u : 4u)) {
-            if (ring_pump_some() == 0) {
+        /* リングに残っている分を全部流してから閉じる。
+         * フレームに満たない半端な残りは従来どおり捨てる */
+        if (audio_dma_active) {
+            /* DMA に食べ切らせる。無音ブロックが飛んで
+             * いたら止めてよい (中身は 0)。上限 (2 秒) を
+             * 超えたらチャンネルを止めて落とす (close は
+             * 必ず完了させる) */
+            uint64_t t0 = r_time();
+            audio_dma_closing = 1;
+            for (;;) {
+                if (dma_block_active && dma_block_silence) {
+                    board_audio_dma_stop();
+                    dma_block_active = 0;
+                }
+                if (!dma_block_active &&
+                    dma_head == audio_ring_tail) {
+                    break;
+                }
+                audio_dma_step();
+                if (r_time() - t0 > (uint64_t)TIMER_HZ * 2) {
+                    break;
+                }
                 sched_poll();
             }
+            board_audio_dma_stop();
+            dma_block_active = 0;
+            audio_dma_active = 0;
+            audio_ring_head = audio_ring_tail;
+        } else {
+            /* 割り込みフィーダ形態 (追補3): 流し切る間は
+             * open のままにして、フィーダにも手伝わせる */
+            while (ring_used() >= 8u) {
+                if (ring_pump_some() == 0) {
+                    sched_poll();
+                }
+            }
+            audio_ring_head = audio_ring_tail;
         }
-        audio_ring_count = 0;
-        audio_ring_head = audio_ring_tail;
         kputs("audio: ring under=");
         kput_dec(audio_underruns);
         kputc('\n');

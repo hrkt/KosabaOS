@@ -116,6 +116,17 @@ if [ -f nami/nami.elf ] && [ -f nami/wavgen.elf ]; then
     echo "build: nami materials embedded"
 fi
 
+# nami のステレオ検証 (test.sh シナリオ AC) の素材。Ikesu
+# 側のテストデータ (44.1kHz ステレオ MP3) を借りてくる。
+# OS リポジトリにバイナリを持ち込まない方針は ikesu 素材と
+# 同じで、あるときだけ virt の SD イメージへ ST44.MP3 と
+# して入れる (無いときは AC のステレオ部が無効になる)
+rm -f st44.mp3
+if [ -f "$IKESU_DIR/testdata/native/st44_128j.mp3" ]; then
+    cp "$IKESU_DIR/testdata/native/st44_128j.mp3" st44.mp3
+    echo "build: st44 material copied (nami stereo check)"
+fi
+
 # recv (シリアル経由のファイル受信、doc/recv-design.md)
 # の素材。IwaC 製で、ビルドは recv/build-recv.sh が担う。
 # nami と同じ流儀で、成果物 (recv/recv.elf) があるとき
@@ -155,7 +166,11 @@ if [ "$BOARD" = virt ]; then
     # (doc/sd-exec-design.md 決め事6)。TEST.WAV は nami の
     # 検証用 (doc/nami-design.md) に生成して取り込む
     python3 make_test_wav.py test.wav
-    python3 make_sd_image.py sd.img UPROG.ELF=user.elf TEST.WAV=test.wav
+    SD_FILES="UPROG.ELF=user.elf TEST.WAV=test.wav"
+    if [ -f st44.mp3 ]; then
+        SD_FILES="$SD_FILES ST44.MP3=st44.mp3"
+    fi
+    python3 make_sd_image.py sd.img $SD_FILES
 fi
 
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c

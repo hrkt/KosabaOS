@@ -209,12 +209,15 @@ def main():
     report("K9 exec multilevel (chain: depth / status / fd)", ok)
 
     print("== scenario K10: kernel log (dmesg) ==")
-    # dmesg で起動時の記録 (プールの総数 1280 = 5MB 分) が
-    # 読み返せることと、chain の deep 25 (深さ上限の拒否)
-    # の理由がログに残っていて、あとから dmesg で追えること。
-    # command() はカーソルを送信前に取るので、2 回目の
-    # dmesg での一致は「ログからの読み返し」を意味する
-    ok = command("dmesg", "page: pool total 1280, free 1280")
+    # dmesg で起動時の記録 (プールの総数。実効の先頭は
+    # カーネルイメージの末尾で決まるので数はビルド依存。
+    # 2026-11-22 のプール重なり修正以降は 1280 ではない)
+    # が読み返せることと、chain の deep 25 (深さ上限の
+    # 拒否) の理由がログに残っていて、あとから dmesg で
+    # 追えること。command() はカーソルを送信前に取るので、
+    # 2 回目の dmesg での一致は「ログからの読み返し」を
+    # 意味する
+    ok = command("dmesg", "page: pool total [0-9]+, free [0-9]+")
     ok = command("run chain.elf deep 25", "deep denied",
                  timeout_ms=15000) and ok
     ok = command("dmesg", "exec: denied, depth limit") and ok
@@ -222,7 +225,7 @@ def main():
 
     print("== scenario K11: pool exhaustion is logged ==")
     # eat.elf は 1 段で約 250 ページ食べるので、K210 の
-    # プール (1280 枚) では数段で枯渇して exec が -1 に
+    # プール (千数百枚) では数段で枯渇して exec が -1 に
     # なる (深さ上限 16 より先に枯渇する)。枯渇する箇所は
     # ページ数の端数で ELF のセグメント確保かスタック
     # 準備か変わるので、ログの行は "out of pages" から

@@ -15,6 +15,9 @@
 # 後ろで表が 4 バイト境界からずれるのを寄せるためのもの
 # (大きさはこの TU の実測に合わせる。doc/nami-design.md)。
 # デコーダ状態の境界は nami.c 側の g_mpad が担う。
+# どちらもずれると実機で misaligned トラップの洪水に
+# なってデコードが桁違いに遅くなる (2026-11-21 の実測)。
+# check-align.py がビルド時に両方の境界を検査する。
 #
 # ツールチェーンの場所は IWAC_DIR で差し替え可能
 # (既定は兄弟ディレクトリの ~/workspace/iwac/iwac、
@@ -36,10 +39,11 @@ if [ ! -x "$IWAC_DIR/nori/nori" ]; then
     (cd "$IWAC_DIR/nori" && ./build.sh)
 fi
 
-printf 'char g_tpad[4] = { 0 };\n' > nami_tpad.c
+printf 'char g_tpad[8] = { 0 };\n' > nami_tpad.c
 cat nami_tpad.c hufftab.c sfbtab.c powtab.c imdcttab.c \
     dcttab.c mp3dec.c nami.c > nami_all.c
 "$IWAC_DIR/iwac" --kosaba --elf nami_all.c > nami.eo
+python3 check-align.py nami.eo
 "$IWAC_DIR/nori/nori" nami.eo > nami.elf
 rm -f nami_tpad.c nami_all.c nami.eo
 "$IWAC_DIR/iwac" --kosaba --elf wavgen.c > wavgen.eo

@@ -366,11 +366,19 @@ int32 play_wav(int32 *st)
  * デコーダ (mp3dec.c) の状態と、読みの状態 st[3] の
  * 複写を 1 つの構造体に集めて持つ。ファイルスコープに
  * 裸のスカラを置かない作法 (nori の配置で misaligned に
- * なる) のためで、先頭の詰め物 g_mpad で構造体を 8
- * バイト境界に寄せる (大きさはビルド後の実測で調整。
- * Ikesu 側 main_twophase.c の MainState と同じ考え方)。 */
+ * なる) のためで、詰め物 g_mpad で構造体の置き場 (データ
+ * 領域の総量の後ろ) を 8 バイト境界に寄せる (大きさは
+ * ビルド後の実測で調整。Ikesu 側 main_twophase.c の
+ * MainState と同じ考え方)。
+ * ずれたまま実機で走らせると、全メンバへのアクセスが
+ * misaligned になって M シムの emulation トラップが
+ * 洪水になり、デコードが桁違いに遅くなる (2026-11-21 に
+ * 実測: 3.9 秒の曲が 26 秒。virt では QEMU が吸収する
+ * ので見えない)。build-nami.sh の check-align.py が
+ * ビルド時に境界を検査するので、落ちたらまずこの
+ * g_mpad と build-nami.sh の g_tpad を疑うこと。 */
 
-char g_mpad[9] = { 0 };
+char g_mpad[16] = { 0 };
 
 struct NamiMp3 {
     struct Mp3Dec dec;
@@ -433,8 +441,18 @@ int32 play_mp3(int32 *st)
             int32 rate;
             ch = g_mp3.dec.frame.channels;
             rate = g_mp3.dec.frame.sample_rate;
-            if (ch != 1) {
-                out_str("nami: mp3 stereo is not supported yet\n");
+            if (ch != 1 && ch != 2) {
+                out_str("nami: mp3 channels ");
+                out_num(ch);
+                out_str(" is not supported\n");
+                return 3;
+            }
+            if (rate != 44100) {
+                /* オーディオドライバは 44.1kHz 固定なので、
+                 * 48kHz 等はここできれいに断る */
+                out_str("nami: mp3 rate ");
+                out_num(rate);
+                out_str(" is not supported\n");
                 return 3;
             }
             r = syscall3(SYS_AUDIO_OPEN, rate, ch, 0);
@@ -447,7 +465,11 @@ int32 play_mp3(int32 *st)
             opened = 1;
             out_str("nami: ");
             out_num(rate);
-            out_str(" Hz mono (mp3)\n");
+            if (ch == 2) {
+                out_str(" Hz stereo (mp3)\n");
+            } else {
+                out_str(" Hz mono (mp3)\n");
+            }
         }
         {
             int32 nsamp;
