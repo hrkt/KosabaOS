@@ -285,6 +285,7 @@ void trap_init(void)
 #define SYS_GFX_LINE 47
 #define SYS_OLED_TEXT 48
 #define SYS_OLED_CLEAR 49
+#define SYS_AUDIO_SET_VOLUME 50
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -1553,6 +1554,7 @@ int audio_is_open(void)
 static uint64_t audio_channels;  /* 1 または 2 */
 static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
+static int audio_vol_shift = 1;  /* 音量シフト (syscall 50、既定は半分) */
 
 #if BOARD_FEATURE_AUDIO
 /* --- リングバッファと供給 (追補3 + DMA 化) --------------------------
@@ -1828,9 +1830,12 @@ static void ring_enqueue_dma(const unsigned char *buf, uint64_t n)
 /* 音量の下げ幅 (ビットシフト)。基板2 のアンプは素の
  * 振幅だと大きすぎるので、投入側で一律に落とす
  * (2026-11-21、ユーザーの希望)。1 = 半分 (約 -6dB)。
+ * 2026-11-23 からは syscall 50 (audio_set_volume) で
+ * 実行時に変えられる (表口は vol.elf)。既定は 1。
  * FNV の帳簿はユーザーの元のバイト列で数える (write
- * 側) ので、検証値には影響しない */
-#define AUDIO_VOLUME_SHIFT 1
+ * 側) ので、検証値には影響しない。
+ * 変数そのものは上の状態変数の並び (BOARD_FEATURE_AUDIO
+ * の外) に置く: virt (ダミー) でも syscall 50 は受ける */
 
 /* ユーザーの塊 (サンプル列) をリングの形 (語列) に
  * して入れる。1 サンプル = 1 ワード (下位 16 ビット)、
@@ -1845,7 +1850,7 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
         for (j = 0; j < chunk; j += 2) {
             int16_t s = (int16_t)((uint16_t)buf[j] |
                                   ((uint16_t)buf[j + 1] << 8));
-            s = (int16_t)(s >> AUDIO_VOLUME_SHIFT);
+            s = (int16_t)(s >> audio_vol_shift);
             pbuf[j * 4] = (unsigned char)(s & 0xFF);
             pbuf[j * 4 + 1] = (unsigned char)((s >> 8) & 0xFF);
             pbuf[j * 4 + 2] = 0;
@@ -1864,7 +1869,7 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
         for (j = 0; j < chunk; j += 2) {
             int16_t s = (int16_t)((uint16_t)buf[j] |
                                   ((uint16_t)buf[j + 1] << 8));
-            s = (int16_t)(s >> AUDIO_VOLUME_SHIFT);
+            s = (int16_t)(s >> audio_vol_shift);
             pbuf[j * 2] = (unsigned char)(s & 0xFF);
             pbuf[j * 2 + 1] = (unsigned char)((s >> 8) & 0xFF);
             pbuf[j * 2 + 2] = 0;
@@ -2832,6 +2837,21 @@ static int do_syscall(uint64_t *frame)
         kput_hex16(audio_fnv);
         kputc('\n');
         frame[FRAME_A0] = 0;
+        break;
+    }
+    case SYS_AUDIO_SET_VOLUME: {
+        /* a0 = 新しい音量シフト (0〜4、範囲外は 4 に
+         * 丸める)。負なら問い合わせのみ。戻り値は
+         * 設定後のシフト値。仕様は doc/syscalls.md
+         * の 50 番 */
+        int64_t v = (int64_t)frame[FRAME_A0];
+        if (v >= 0) {
+            if (v > 4) {
+                v = 4;
+            }
+            audio_vol_shift = (int)v;
+        }
+        frame[FRAME_A0] = (uint64_t)audio_vol_shift;
         break;
     }
     case SYS_GFX_INFO: {

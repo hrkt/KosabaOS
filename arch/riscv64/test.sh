@@ -995,6 +995,24 @@ echo "$out" | grep -q "top-done" || rc=1
 report "AP top.elf monitor" $rc
 
 
+echo "== scenario AQ: audio volume (syscall 50 / vol.elf) =="
+# 音量シフトの照会・設定が vol.elf 経由ででき、値が
+# プログラムをまたいでカーネルに残ること。不正な引数は
+# 使い方 + ステータス 2 (doc/audio-driver-design.md 追補)
+{ sleep 3; printf 'run vol.elf\n'; sleep 1; \
+  printf 'run vol.elf 3\n'; sleep 1; \
+  printf 'run vol.elf\n'; sleep 1; \
+  printf 'run vol.elf 9\n'; sleep 1; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-aq.log 2>&1 || true
+out=$(strip_ticks < test-aq.log)
+rc=0
+echo "$out" | grep -q "vol: shift=1 (1/2)" || rc=1
+echo "$out" | grep -q "vol: shift=3 (1/8)" || rc=1
+echo "$out" | grep -q "usage: vol \[0-4\]" || rc=1
+echo "$out" | grep -q "run: exit status 2" || rc=1
+report "AQ audio volume" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

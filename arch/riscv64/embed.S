@@ -61,6 +61,12 @@ oled_prog_start:
     .incbin "oled.elf"
 oled_prog_end:
 
+    .globl vol_prog_start
+    .globl vol_prog_end
+vol_prog_start:
+    .incbin "vol.elf"
+vol_prog_end:
+
     .globl misalign_prog_start
     .globl misalign_prog_end
 misalign_prog_start:
