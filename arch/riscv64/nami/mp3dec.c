@@ -1965,18 +1965,29 @@ void synth_granule(struct Mp3Dec *d, int32 gr)
                 int32 soff;
                 acc = 0;
                 tau = 0;
-                /* 古いブロックへは 64 ずつ戻り、リングの
-                 * 底で先頭へ回す。D と行の表は (m, tau)
-                 * の順に平坦な添字を進めて読む */
+                /* 古いブロックへは 64 ずつ戻る。リングの
+                 * 折り返しをタップごとに判定する代わりに、
+                 * tau の範囲を 2 つのランに分ける:
+                 * 前半 (tau <= slot) は soff が
+                 * chbase + slot*64 から chbase まで下がり、
+                 * 後半は chbase + 15*64 から下がる。
+                 * どちらも途中で折り返さないので、タップ
+                 * ごとの比較と分岐が消える。読む項と加算の
+                 * 順序は従来と完全に同じ (ビット不変) */
                 soff = chbase + slot * 64;
+                while (tau <= slot) {
+                    acc = acc + (int64)synth_d[di]
+                        * d->v_hist[soff + synth_row[di]];
+                    di = di + 1;
+                    soff = soff - 64;
+                    tau = tau + 1;
+                }
+                soff = chbase + 15 * 64;
                 while (tau < 16) {
                     acc = acc + (int64)synth_d[di]
                         * d->v_hist[soff + synth_row[di]];
                     di = di + 1;
                     soff = soff - 64;
-                    if (soff < chbase) {
-                        soff = soff + 16 * 64;
-                    }
                     tau = tau + 1;
                 }
                 {
