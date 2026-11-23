@@ -232,11 +232,17 @@ static int sd_read_block(uint64_t lba, unsigned char *buf)
         cmd_end();
         return -1;
     }
-    for (int i = 0; i < 512; i++) {
-        buf[i] = sd_xfer(0xFF);
+    if (sd_read_bytes(buf, 512) != 0) {
+        cmd_end();
+        return -1;
     }
-    sd_xfer(0xFF);
-    sd_xfer(0xFF);   /* CRC */
+    {
+        unsigned char crc[2];
+        if (sd_read_bytes(crc, 2) != 0) {   /* CRC (捨てる) */
+            cmd_end();
+            return -1;
+        }
+    }
     cmd_end();
     return 0;
 }
@@ -254,8 +260,9 @@ static int sd_write_block(uint64_t lba, const unsigned char *buf)
     }
     sd_xfer(0xFF);   /* データ開始までの隙間 (1 バイト以上) */
     sd_xfer(0xFE);   /* データ開始トークン */
-    for (int i = 0; i < 512; i++) {
-        sd_xfer(buf[i]);
+    if (sd_write_bytes(buf, 512) != 0) {
+        cmd_end();
+        return -1;
     }
     sd_xfer(0xFF);
     sd_xfer(0xFF);   /* CRC (ダミー) */
