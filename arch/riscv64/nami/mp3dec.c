@@ -188,6 +188,40 @@ int32 src_skip(struct Mp3Dec *d, int32 n)
     return 0;
 }
 
+/* 先頭の n バイトを消費せずに out へ写す。バッファの
+ * 残りを先頭へ寄せ、継ぎ足しながら満たす。足りなければ
+ * -1 (EOF)。ID3 タグの判定に使う */
+int32 src_peek(struct Mp3Dec *d, int32 *out, int32 n)
+{
+    int32 i;
+    int32 got;
+    while (d->src_len - d->src_pos < n) {
+        if (d->src_eof) {
+            return -1;
+        }
+        i = 0;
+        while (d->src_pos + i < d->src_len) {
+            d->srcbuf[i] = d->srcbuf[d->src_pos + i];
+            i = i + 1;
+        }
+        d->src_len = d->src_len - d->src_pos;
+        d->src_pos = 0;
+        got = dec_read(&d->srcbuf[d->src_len],
+            SRCBUF_SIZE - d->src_len);
+        if (got <= 0) {
+            d->src_eof = 1;
+            return -1;
+        }
+        d->src_len = d->src_len + got;
+    }
+    i = 0;
+    while (i < n) {
+        out[i] = d->srcbuf[d->src_pos + i] & 0xFF;
+        i = i + 1;
+    }
+    return 0;
+}
+
 /* ---- サイド情報のビット読み (MSB ファースト) ------------------ */
 
 int32 si_bits(struct Mp3Dec *d, int32 n)
@@ -661,6 +695,49 @@ int32 dec_next_frame(struct Mp3Dec *d)
     int64 gap;
 
     f = &d->frame;
+
+    /* ストリーム先頭の ID3v2 タグは、走査ではなく
+     * ヘッダに書かれた大きさで読み飛ばす。タグの中の
+     * 画像データには見かけの同期語が紛れており、1 バイト
+     * 走査だとそこへ吸い寄せられてしまう (実例: 709KB の
+     * タグを持つ曲で、本物より 23KB 手前に偽の同期が
+     * あった)。タグが重なっている場合も繰り返しで飛ばす。
+     * 判定は先頭を覗くだけで、消費はしない */
+    if (d->frames_seen == 0) {
+        int32 h[10];
+        int32 j;
+        int32 is_tag;
+        is_tag = 1;
+        while (is_tag) {
+            if (src_peek(d, h, 10) < 0) {
+                return 0;
+            }
+            if (h[0] == 73 && h[1] == 68 && h[2] == 51) {
+                /* "ID3": 大きさは syncsafe (7 bit × 4) */
+                int32 tsize;
+                tsize = ((h[6] & 127) << 21)
+                    + ((h[7] & 127) << 14)
+                    + ((h[8] & 127) << 7)
+                    + (h[9] & 127);
+                j = 0;
+                while (j < 10) {
+                    src_getbyte(d);
+                    j = j + 1;
+                }
+                if (src_skip(d, tsize) < 0) {
+                    return 0;
+                }
+                if ((h[5] & 16) != 0) {
+                    /* v2.4 のフッタ (10 バイト) */
+                    if (src_skip(d, 10) < 0) {
+                        return 0;
+                    }
+                }
+            } else {
+                is_tag = 0;
+            }
+        }
+    }
 
     /* 同期スキャン: 4 バイトの窓を1バイトずつずらす */
     w[0] = 0; w[1] = 0; w[2] = 0; w[3] = 0;
