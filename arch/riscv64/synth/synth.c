@@ -21,13 +21,15 @@
  * IwaC の C サブセットで書く (nami / wavgen と同じ作法):
  * #include / libc なし、switch なし、文字リテラルなし
  * (文字コードを数で書く)、浮動小数点なし (全部固定小数点)。
- * ファイルスコープには char 配列だけ置き (nori のデータ
- * 配置ずれ対策、doc/nami-design.md)、表とボイス状態は
- * その char 配列へ rd32 / wr32 のバイト合成で読み書きする。
- * 表は初期化子にせず、関数内で代入で埋める。main に大きな
- * ローカル配列を置くと IwaC のフレーム生成が壊れる
- * (実測あり。rd32 / wr32 のコメント参照) ので、main と
- * run_demo / run_play のローカルはスカラだけに保つ。
+ * ワード単位の状態はファイルスコープの int32 配列に置き
+ * 直接アクセスする (IwaC v63 で nori が配列を 8 バイト
+ * 境界に揃える。それ以前は char 配列 + バイト合成が
+ * 必要だった。経緯は doc の「直接アクセス化」の節)。
+ * バイト列 (曲データ・プリセット記録・名前・出力バッファ)
+ * は char 配列。表は初期化子にせず、関数内で代入で埋める。
+ * main に大きなローカル配列を置くと IwaC のフレーム生成が
+ * 壊れる (実測あり) ので、main と run_demo / run_play の
+ * ローカルはスカラだけに保つ。
  *
  * 音源 (段1):
  *   FM  : 2 オペレータ (変調側の位相で搬送側を変調)。
@@ -137,17 +139,20 @@ int32 streq(char *a, char *b)
 }
 
 
-/* 大きな表とボイス状態はファイルスコープの char 配列に置く。
+/* 大きな表とボイス状態はファイルスコープに置く。
  * main に大きなローカル配列を置くと IwaC のフレーム生成が
  * 壊れる (実測: フレーム 1504 バイトで addi sp の符号が反転し
  * スタック上に書いて即フォールト) ことへの対策でもある。
- * int32 の読み書きはバイト合成の rd32 / wr32 で行うので
- * misaligned にもならない (doc/nami-design.md の作法) */
-char g_sine[1024];  /* 正弦波 256 点 x 4 バイト */
-char g_ninc[244];   /* 音程表 61 点 x 4 バイト */
+ * ワード単位の状態は int32 配列の直接アクセス (IwaC v63 で
+ * nori が配列を 8 バイト境界に揃えるようになったため。
+ * それ以前は char 配列 + バイト合成 rd32/wr32 が必要だった)。
+ * バイト列そのもの (曲データ・プリセット記録・名前・
+ * 出力バッファ) は char 配列のまま */
+int32 g_sine[256];  /* 正弦波 256 点 */
+int32 g_ninc[61];   /* 音程表 61 点 */
 char g_mel[32];
 char g_bas[32];
-char g_vs[512];     /* ボイス状態 64 ワード x 4 バイト */
+int32 g_vs[128];    /* ボイス状態 (ワード単位で直接アクセス) */
 
 /* プリセット (doc/synth-design.md のプリセットの節)。
  * 1 件 20 バイトのバイトパックで、FM / PSG 各 16 件:
@@ -168,109 +173,92 @@ char g_pfm[320];
 char g_pps[320];
 char g_fnm[256];
 char g_pnm[256];
-char g_vp[512];
-char g_cur[32];
+int32 g_vp[128];
+int32 g_cur[8];
 char g_gmf[16];
 char g_gmp[16];
 
-int32 rd32(char *p, int32 idx)
-{
-    int32 o;
-    o = idx * 4;
-    return (p[o] & 255) | ((p[o + 1] & 255) << 8) |
-           ((p[o + 2] & 255) << 16) | ((p[o + 3] & 255) << 24);
-}
-
-void wr32(char *p, int32 idx, int32 v)
-{
-    int32 o;
-    o = idx * 4;
-    p[o] = (char)(v & 255);
-    p[o + 1] = (char)((v >> 8) & 255);
-    p[o + 2] = (char)((v >> 16) & 255);
-    p[o + 3] = (char)((v >> 24) & 255);
-}
 
 /* 正弦波テーブル (Q15、256 点) を代入で埋める */
 void fill_sine()
 {
-    wr32(g_sine, 0, 0);
-    wr32(g_sine, 1, 804);
-    wr32(g_sine, 2, 1608);
-    wr32(g_sine, 3, 2410);
-    wr32(g_sine, 4, 3212);
-    wr32(g_sine, 5, 4011);
-    wr32(g_sine, 6, 4808);
-    wr32(g_sine, 7, 5602);
-    wr32(g_sine, 8, 6393);
-    wr32(g_sine, 9, 7179);
-    wr32(g_sine, 10, 7962);
-    wr32(g_sine, 11, 8739);
-    wr32(g_sine, 12, 9512);
-    wr32(g_sine, 13, 10278);
-    wr32(g_sine, 14, 11039);
-    wr32(g_sine, 15, 11793);
-    wr32(g_sine, 16, 12539);
-    wr32(g_sine, 17, 13279);
-    wr32(g_sine, 18, 14010);
-    wr32(g_sine, 19, 14732);
-    wr32(g_sine, 20, 15446);
-    wr32(g_sine, 21, 16151);
-    wr32(g_sine, 22, 16846);
-    wr32(g_sine, 23, 17530);
-    wr32(g_sine, 24, 18204);
-    wr32(g_sine, 25, 18868);
-    wr32(g_sine, 26, 19519);
-    wr32(g_sine, 27, 20159);
-    wr32(g_sine, 28, 20787);
-    wr32(g_sine, 29, 21403);
-    wr32(g_sine, 30, 22005);
-    wr32(g_sine, 31, 22594);
-    wr32(g_sine, 32, 23170);
-    wr32(g_sine, 33, 23731);
-    wr32(g_sine, 34, 24279);
-    wr32(g_sine, 35, 24811);
-    wr32(g_sine, 36, 25329);
-    wr32(g_sine, 37, 25832);
-    wr32(g_sine, 38, 26319);
-    wr32(g_sine, 39, 26790);
-    wr32(g_sine, 40, 27245);
-    wr32(g_sine, 41, 27683);
-    wr32(g_sine, 42, 28105);
-    wr32(g_sine, 43, 28510);
-    wr32(g_sine, 44, 28898);
-    wr32(g_sine, 45, 29268);
-    wr32(g_sine, 46, 29621);
-    wr32(g_sine, 47, 29956);
-    wr32(g_sine, 48, 30273);
-    wr32(g_sine, 49, 30571);
-    wr32(g_sine, 50, 30852);
-    wr32(g_sine, 51, 31113);
-    wr32(g_sine, 52, 31356);
-    wr32(g_sine, 53, 31580);
-    wr32(g_sine, 54, 31785);
-    wr32(g_sine, 55, 31971);
-    wr32(g_sine, 56, 32137);
-    wr32(g_sine, 57, 32285);
-    wr32(g_sine, 58, 32412);
-    wr32(g_sine, 59, 32521);
-    wr32(g_sine, 60, 32609);
-    wr32(g_sine, 61, 32678);
-    wr32(g_sine, 62, 32728);
-    wr32(g_sine, 63, 32757);
-    wr32(g_sine, 64, 32767);
+    g_sine[0] = 0;
+    g_sine[1] = 804;
+    g_sine[2] = 1608;
+    g_sine[3] = 2410;
+    g_sine[4] = 3212;
+    g_sine[5] = 4011;
+    g_sine[6] = 4808;
+    g_sine[7] = 5602;
+    g_sine[8] = 6393;
+    g_sine[9] = 7179;
+    g_sine[10] = 7962;
+    g_sine[11] = 8739;
+    g_sine[12] = 9512;
+    g_sine[13] = 10278;
+    g_sine[14] = 11039;
+    g_sine[15] = 11793;
+    g_sine[16] = 12539;
+    g_sine[17] = 13279;
+    g_sine[18] = 14010;
+    g_sine[19] = 14732;
+    g_sine[20] = 15446;
+    g_sine[21] = 16151;
+    g_sine[22] = 16846;
+    g_sine[23] = 17530;
+    g_sine[24] = 18204;
+    g_sine[25] = 18868;
+    g_sine[26] = 19519;
+    g_sine[27] = 20159;
+    g_sine[28] = 20787;
+    g_sine[29] = 21403;
+    g_sine[30] = 22005;
+    g_sine[31] = 22594;
+    g_sine[32] = 23170;
+    g_sine[33] = 23731;
+    g_sine[34] = 24279;
+    g_sine[35] = 24811;
+    g_sine[36] = 25329;
+    g_sine[37] = 25832;
+    g_sine[38] = 26319;
+    g_sine[39] = 26790;
+    g_sine[40] = 27245;
+    g_sine[41] = 27683;
+    g_sine[42] = 28105;
+    g_sine[43] = 28510;
+    g_sine[44] = 28898;
+    g_sine[45] = 29268;
+    g_sine[46] = 29621;
+    g_sine[47] = 29956;
+    g_sine[48] = 30273;
+    g_sine[49] = 30571;
+    g_sine[50] = 30852;
+    g_sine[51] = 31113;
+    g_sine[52] = 31356;
+    g_sine[53] = 31580;
+    g_sine[54] = 31785;
+    g_sine[55] = 31971;
+    g_sine[56] = 32137;
+    g_sine[57] = 32285;
+    g_sine[58] = 32412;
+    g_sine[59] = 32521;
+    g_sine[60] = 32609;
+    g_sine[61] = 32678;
+    g_sine[62] = 32728;
+    g_sine[63] = 32757;
+    g_sine[64] = 32767;
     /* 残りは対称性で展開する: 65..127 は 128-i の鏡像、
      * 128..255 は前半の符号反転 (表の値は従来と同一) */
     {
         int32 i;
         i = 65;
         while (i < 128) {
-            wr32(g_sine, i, rd32(g_sine, 128 - i));
+            g_sine[i] = g_sine[128 - i];
             i = i + 1;
         }
         i = 128;
         while (i < 256) {
-            wr32(g_sine, i, 0 - rd32(g_sine, i - 128));
+            g_sine[i] = 0 - g_sine[i - 128];
             i = i + 1;
         }
     }
@@ -279,67 +267,67 @@ void fill_sine()
 /* MIDI ノート 36..96 の位相増分を代入で埋める */
 void fill_ninc()
 {
-    wr32(g_ninc, 0, 97);
-    wr32(g_ninc, 1, 103);
-    wr32(g_ninc, 2, 109);
-    wr32(g_ninc, 3, 116);
-    wr32(g_ninc, 4, 122);
-    wr32(g_ninc, 5, 130);
-    wr32(g_ninc, 6, 137);
-    wr32(g_ninc, 7, 146);
-    wr32(g_ninc, 8, 154);
-    wr32(g_ninc, 9, 163);
-    wr32(g_ninc, 10, 173);
-    wr32(g_ninc, 11, 183);
-    wr32(g_ninc, 12, 194);
-    wr32(g_ninc, 13, 206);
-    wr32(g_ninc, 14, 218);
-    wr32(g_ninc, 15, 231);
-    wr32(g_ninc, 16, 245);
-    wr32(g_ninc, 17, 259);
-    wr32(g_ninc, 18, 275);
-    wr32(g_ninc, 19, 291);
-    wr32(g_ninc, 20, 309);
-    wr32(g_ninc, 21, 327);
-    wr32(g_ninc, 22, 346);
-    wr32(g_ninc, 23, 367);
-    wr32(g_ninc, 24, 389);
-    wr32(g_ninc, 25, 412);
-    wr32(g_ninc, 26, 436);
-    wr32(g_ninc, 27, 462);
-    wr32(g_ninc, 28, 490);
-    wr32(g_ninc, 29, 519);
-    wr32(g_ninc, 30, 550);
-    wr32(g_ninc, 31, 583);
-    wr32(g_ninc, 32, 617);
-    wr32(g_ninc, 33, 654);
-    wr32(g_ninc, 34, 693);
-    wr32(g_ninc, 35, 734);
-    wr32(g_ninc, 36, 778);
-    wr32(g_ninc, 37, 824);
-    wr32(g_ninc, 38, 873);
-    wr32(g_ninc, 39, 925);
-    wr32(g_ninc, 40, 980);
-    wr32(g_ninc, 41, 1038);
-    wr32(g_ninc, 42, 1100);
-    wr32(g_ninc, 43, 1165);
-    wr32(g_ninc, 44, 1234);
-    wr32(g_ninc, 45, 1308);
-    wr32(g_ninc, 46, 1386);
-    wr32(g_ninc, 47, 1468);
-    wr32(g_ninc, 48, 1555);
-    wr32(g_ninc, 49, 1648);
-    wr32(g_ninc, 50, 1746);
-    wr32(g_ninc, 51, 1849);
-    wr32(g_ninc, 52, 1959);
-    wr32(g_ninc, 53, 2076);
-    wr32(g_ninc, 54, 2199);
-    wr32(g_ninc, 55, 2330);
-    wr32(g_ninc, 56, 2469);
-    wr32(g_ninc, 57, 2615);
-    wr32(g_ninc, 58, 2771);
-    wr32(g_ninc, 59, 2936);
-    wr32(g_ninc, 60, 3110);
+    g_ninc[0] = 97;
+    g_ninc[1] = 103;
+    g_ninc[2] = 109;
+    g_ninc[3] = 116;
+    g_ninc[4] = 122;
+    g_ninc[5] = 130;
+    g_ninc[6] = 137;
+    g_ninc[7] = 146;
+    g_ninc[8] = 154;
+    g_ninc[9] = 163;
+    g_ninc[10] = 173;
+    g_ninc[11] = 183;
+    g_ninc[12] = 194;
+    g_ninc[13] = 206;
+    g_ninc[14] = 218;
+    g_ninc[15] = 231;
+    g_ninc[16] = 245;
+    g_ninc[17] = 259;
+    g_ninc[18] = 275;
+    g_ninc[19] = 291;
+    g_ninc[20] = 309;
+    g_ninc[21] = 327;
+    g_ninc[22] = 346;
+    g_ninc[23] = 367;
+    g_ninc[24] = 389;
+    g_ninc[25] = 412;
+    g_ninc[26] = 436;
+    g_ninc[27] = 462;
+    g_ninc[28] = 490;
+    g_ninc[29] = 519;
+    g_ninc[30] = 550;
+    g_ninc[31] = 583;
+    g_ninc[32] = 617;
+    g_ninc[33] = 654;
+    g_ninc[34] = 693;
+    g_ninc[35] = 734;
+    g_ninc[36] = 778;
+    g_ninc[37] = 824;
+    g_ninc[38] = 873;
+    g_ninc[39] = 925;
+    g_ninc[40] = 980;
+    g_ninc[41] = 1038;
+    g_ninc[42] = 1100;
+    g_ninc[43] = 1165;
+    g_ninc[44] = 1234;
+    g_ninc[45] = 1308;
+    g_ninc[46] = 1386;
+    g_ninc[47] = 1468;
+    g_ninc[48] = 1555;
+    g_ninc[49] = 1648;
+    g_ninc[50] = 1746;
+    g_ninc[51] = 1849;
+    g_ninc[52] = 1959;
+    g_ninc[53] = 2076;
+    g_ninc[54] = 2199;
+    g_ninc[55] = 2330;
+    g_ninc[56] = 2469;
+    g_ninc[57] = 2615;
+    g_ninc[58] = 2771;
+    g_ninc[59] = 2936;
+    g_ninc[60] = 3110;
  }
 
 /* デモ曲 (32 ステップ、1 ステップ = 0.25 秒で合計 8 秒)。
@@ -421,8 +409,8 @@ int32 sine_at(int32 phase)
     int32 b;
     idx = phase >> 8;
     frac = phase & 255;
-    a = rd32(g_sine, idx);
-    b = rd32(g_sine, (idx + 1) & 255);
+    a = g_sine[idx];
+    b = g_sine[(idx + 1) & 255];
     return a + (((b - a) * frac) >> 8);
 }
 
@@ -670,50 +658,50 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
     int32 inc;
     int32 oct;
     b = rr * 16;
-    eng = rd32(g_cur, 0);
+    eng = g_cur[0];
     if (eng == 0) {
         tab = g_pfm;
     } else {
         tab = g_pps;
     }
-    o = rd32(g_cur, 1) * 20;
+    o = g_cur[1] * 20;
     if (type < 0) {
         type = tab[o] & 255;  /* 波形はプリセットから */
     }
-    wr32(g_vs, b + 0, 1);
-    wr32(g_vs, b + 1, type);
-    wr32(g_vs, b + 2, note);
-    wr32(g_vs, b + 3, 0);
-    wr32(g_vs, b + 4, 0);
-    wr32(g_vs, b + 5, 0);
-    wr32(g_vs, b + 6, 0);
-    wr32(g_vs, b + 7, gate);
-    wr32(g_vs, b + 8, 65535);
-    wr32(g_vs, b + 9, 257);
-    wr32(g_vs, b + 14, 0);
-    wr32(g_vs, b + 15, 0);
-    wr32(g_vp, b + 0, rd16u(tab, o + 2));
-    wr32(g_vp, b + 1, rd16u(tab, o + 4));
-    wr32(g_vp, b + 2, rd16u(tab, o + 6));
-    wr32(g_vp, b + 3, rd16u(tab, o + 8));
-    wr32(g_vp, b + 9, tab[o + 1] & 255);
+    g_vs[b + 0] = 1;
+    g_vs[b + 1] = type;
+    g_vs[b + 2] = note;
+    g_vs[b + 3] = 0;
+    g_vs[b + 4] = 0;
+    g_vs[b + 5] = 0;
+    g_vs[b + 6] = 0;
+    g_vs[b + 7] = gate;
+    g_vs[b + 8] = 65535;
+    g_vs[b + 9] = 257;
+    g_vs[b + 14] = 0;
+    g_vs[b + 15] = 0;
+    g_vp[b + 0] = rd16u(tab, o + 2);
+    g_vp[b + 1] = rd16u(tab, o + 4);
+    g_vp[b + 2] = rd16u(tab, o + 6);
+    g_vp[b + 3] = rd16u(tab, o + 8);
+    g_vp[b + 9] = tab[o + 1] & 255;
     if (eng == 0) {
-        wr32(g_vp, b + 4, rd16u(tab, o + 12));
-        wr32(g_vp, b + 5, rd16u(tab, o + 14));
-        wr32(g_vp, b + 6, rd16u(tab, o + 16));
-        wr32(g_vp, b + 7, 32768);
-        wr32(g_vp, b + 8, 0);
-        wr32(g_vp, b + 10, tab[o + 18] & 255);
+        g_vp[b + 4] = rd16u(tab, o + 12);
+        g_vp[b + 5] = rd16u(tab, o + 14);
+        g_vp[b + 6] = rd16u(tab, o + 16);
+        g_vp[b + 7] = 32768;
+        g_vp[b + 8] = 0;
+        g_vp[b + 10] = tab[o + 18] & 255;
     } else {
-        wr32(g_vp, b + 4, 0);
-        wr32(g_vp, b + 5, 30);
-        wr32(g_vp, b + 6, 200);
-        wr32(g_vp, b + 7, rd16u(tab, o + 10));
-        wr32(g_vp, b + 8, tab[o + 12] & 255);
-        wr32(g_vp, b + 10, 0);
+        g_vp[b + 4] = 0;
+        g_vp[b + 5] = 30;
+        g_vp[b + 6] = 200;
+        g_vp[b + 7] = rd16u(tab, o + 10);
+        g_vp[b + 8] = tab[o + 12] & 255;
+        g_vp[b + 10] = 0;
     }
     if (note >= 36 && note <= 96) {
-        inc = rd32(g_ninc, note - 36);
+        inc = g_ninc[note - 36];
     } else {
         inc = 0;
     }
@@ -728,11 +716,11 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
             inc = inc >> (0 - oct);
         }
     }
-    wr32(g_vs, b + 10, inc);
+    g_vs[b + 10] = inc;
     if (eng == 0) {
-        wr32(g_vs, b + 11, (inc * (tab[o + 10] & 255)) / 2);
+        g_vs[b + 11] = (inc * (tab[o + 10] & 255)) / 2;
     } else {
-        wr32(g_vs, b + 11, inc);
+        g_vs[b + 11] = inc;
     }
 }
 
@@ -746,7 +734,7 @@ int32 mix_sample()
     while (vi < 4) {
         int32 b;
         b = vi * 16;
-        if (rd32(g_vs, b + 0) != 0) {
+        if (g_vs[b + 0] != 0) {
             int32 typ;
             int32 pc;
             int32 pm;
@@ -768,26 +756,26 @@ int32 mix_sample()
             int32 nmix;
             int32 lvl;
             int32 outv;
-            typ = rd32(g_vs, b + 1);
-            pc = rd32(g_vs, b + 3);
-            pm = rd32(g_vs, b + 4);
-            env = rd32(g_vs, b + 5);
-            stg = rd32(g_vs, b + 6);
-            gate = rd32(g_vs, b + 7);
-            menv = rd32(g_vs, b + 8);
-            lfsr = rd32(g_vs, b + 9);
-            inc_c = rd32(g_vs, b + 10);
-            inc_m = rd32(g_vs, b + 11);
-            atk = rd32(g_vp, b + 0);
-            dec = rd32(g_vp, b + 1);
-            sus = rd32(g_vp, b + 2);
-            rel = rd32(g_vp, b + 3);
-            dep = rd32(g_vp, b + 4);
-            mrate = rd32(g_vp, b + 5);
-            mrel = rd32(g_vp, b + 6);
-            duty = rd32(g_vp, b + 7);
-            nmix = rd32(g_vp, b + 8);
-            lvl = rd32(g_vp, b + 9);
+            typ = g_vs[b + 1];
+            pc = g_vs[b + 3];
+            pm = g_vs[b + 4];
+            env = g_vs[b + 5];
+            stg = g_vs[b + 6];
+            gate = g_vs[b + 7];
+            menv = g_vs[b + 8];
+            lfsr = g_vs[b + 9];
+            inc_c = g_vs[b + 10];
+            inc_m = g_vs[b + 11];
+            atk = g_vp[b + 0];
+            dec = g_vp[b + 1];
+            sus = g_vp[b + 2];
+            rel = g_vp[b + 3];
+            dep = g_vp[b + 4];
+            mrate = g_vp[b + 5];
+            mrel = g_vp[b + 6];
+            duty = g_vp[b + 7];
+            nmix = g_vp[b + 8];
+            lvl = g_vp[b + 9];
             outv = 0;
             if (stg == 0) {
                 env = env + atk;
@@ -805,7 +793,7 @@ int32 mix_sample()
                 env = env - rel;
                 if (env <= 0) {
                     env = 0;
-                    wr32(g_vs, b + 0, 0);
+                    g_vs[b + 0] = 0;
                 }
             }
             if (stg != 3) {
@@ -821,25 +809,25 @@ int32 mix_sample()
                     menv = menv - mrate;
                 }
             }
-            if (rd32(g_vs, b + 0) != 0) {
+            if (g_vs[b + 0] != 0) {
                 if (typ == 0) {
                     int32 mod;
                     int32 depth;
                     int32 off;
                     int32 car;
                     int32 opm;
-                    opm = rd32(g_vp, b + 10);
+                    opm = g_vp[b + 10];
                     depth = (dep * menv) >> 16;
                     if (opm == 1) {
                         int32 p1;
                         int32 p2;
                         int32 o1;
                         int32 o2;
-                        p1 = (rd32(g_vs, b + 15) + inc_m) & 65535;
-                        wr32(g_vs, b + 15, p1);
+                        p1 = (g_vs[b + 15] + inc_m) & 65535;
+                        g_vs[b + 15] = p1;
                         o1 = (sine_at(p1) * (depth >> 2)) >> 15;
-                        p2 = (rd32(g_vs, b + 14) + inc_m + o1) & 65535;
-                        wr32(g_vs, b + 14, p2);
+                        p2 = (g_vs[b + 14] + inc_m + o1) & 65535;
+                        g_vs[b + 14] = p2;
                         o2 = (sine_at(p2) * (depth >> 1)) >> 15;
                         pm = (pm + inc_m + o2) & 65535;
                     } else {
@@ -855,12 +843,12 @@ int32 mix_sample()
                         int32 pmb;
                         int32 offb;
                         int32 carb;
-                        pmb = (rd32(g_vs, b + 15) + inc_m) & 65535;
-                        wr32(g_vs, b + 15, pmb);
+                        pmb = (g_vs[b + 15] + inc_m) & 65535;
+                        g_vs[b + 15] = pmb;
                         offb = (sine_at(pmb) * (depth >> 1)) >> 15;
-                        pcb = (rd32(g_vs, b + 14) + inc_c +
+                        pcb = (g_vs[b + 14] + inc_c +
                                (inc_c >> 8)) & 65535;
-                        wr32(g_vs, b + 14, pcb);
+                        g_vs[b + 14] = pcb;
                         carb = sine_at((pcb + offb) & 65535);
                         outv = (outv >> 1) + ((carb * env) >> 17);
                     }
@@ -903,13 +891,13 @@ int32 mix_sample()
                     sum = sum + (outv >> (lvl + 1));
                 }
             }
-            wr32(g_vs, b + 3, pc);
-            wr32(g_vs, b + 4, pm);
-            wr32(g_vs, b + 5, env);
-            wr32(g_vs, b + 6, stg);
-            wr32(g_vs, b + 7, gate);
-            wr32(g_vs, b + 8, menv);
-            wr32(g_vs, b + 9, lfsr);
+            g_vs[b + 3] = pc;
+            g_vs[b + 4] = pm;
+            g_vs[b + 5] = env;
+            g_vs[b + 6] = stg;
+            g_vs[b + 7] = gate;
+            g_vs[b + 8] = menv;
+            g_vs[b + 9] = lfsr;
         }
         vi = vi + 1;
     }
@@ -963,19 +951,19 @@ char g_buf[2048];   /* CHUNK * 2 バイト (サンプルは LE で詰める) */
  *   +6 システムコモンの残りデータ数  +7 プログラム番号
  *   +8 終了マーカーを見た旗  +9 現在の音色 (0=FM 1=PSG)
  *   +10 ボイス奪い取りのラウンドロビン */
-char g_mst[64];
+int32 g_mst[16];
 char g_mbuf[512];   /* ストリームの読みバッファ */
 
 /* プリセットを現在の音色にする。MIDI モードのノートオンが
  * 波形を読む g_mst +9 も一緒に更新する */
 void load_preset(int32 eng, int32 idx)
 {
-    wr32(g_cur, 0, eng);
-    wr32(g_cur, 1, idx);
+    g_cur[0] = eng;
+    g_cur[1] = idx;
     if (eng == 0) {
-        wr32(g_mst, 9, g_pfm[idx * 20] & 255);
+        g_mst[9] = g_pfm[idx * 20] & 255;
     } else {
-        wr32(g_mst, 9, g_pps[idx * 20] & 255);
+        g_mst[9] = g_pps[idx * 20] & 255;
     }
 }
 
@@ -1031,9 +1019,9 @@ int64 fnv_init()
  * だけで動き、synth 本体の状態 (ボイス等) には触れない。
  * 将来ミキサー側へ同じモジュールを持っていくための形。
  *
- * 状態置き場は既存の作法どおりファイルスコープの char 配列。
- * 遅延ラインはサンプルを int16 で持ち、fx_rd16 / fx_wr16 の
- * バイト合成で読み書きする (nori 配置ずれ対策)。
+ * 状態置き場はファイルスコープの int32 配列 (直接アクセス)。
+ * 遅延ラインは 1 サンプル = 1 ワードで持ち、値は int16
+ * 相当の範囲にクランプしてから書く。
  * ============================================================ */
 #define FX_N 3
 #define FX_CHO 0
@@ -1041,57 +1029,32 @@ int64 fnv_init()
 #define FX_RVB 2
 
 char g_fxnm[48];    /* モジュール名 16 バイト x 3 */
-char g_fxmeta[96];  /* 登録表 3 モジュール x 8 ワード:
+int32 g_fxmeta[24];  /* 登録表 3 モジュール x 8 ワード:
                        +0 センド CC +1 既定 ON +2 既定センド
                        +3 wet トリム (256 = 1.0) */
-char g_fxmod[48];   /* モジュール実行時状態 3 x 4 ワード:
+int32 g_fxmod[12];   /* モジュール実行時状態 3 x 4 ワード:
                        +0 ON/OFF */
-char g_fxctl[64];   /* ラック全体 16 ワード:
+int32 g_fxctl[16];   /* ラック全体 16 ワード:
                        +0 どれか ON か +1 チェーンモード
                        +2 個別指定を見た +3 fxdbg
                        +4..+6 モノラルセンド (モジュール順)
                        +7 コーラス LFO 位相 (32bit 蓄積) */
-char g_fxin[32];    /* 処理への入力フレーム (0=L 1=R) */
-char g_fxout[32];   /* 処理からの出力フレーム (同上) */
-char g_fxbus[96];   /* モジュールごとのセンドバス 3 x 2 ワード */
-char g_fxwet[32];   /* ラックの wet リターン (0=L 1=R) */
-char g_psum[64];    /* MT のパート別ドライ和 8 x 2 ワード */
-char g_cho[8192];   /* コーラス遅延 2ch x 2048 サンプル x 2B */
-char g_dly[65536];  /* ディレイ遅延 2ch x 16384 サンプル x 2B */
-char g_rvb[50900];  /* リバーブ遅延 (配置は fx_init) */
-char g_fxoff[128];  /* リバーブ各ラインの先頭位置 32 ワード
+int32 g_fxin[8];    /* 処理への入力フレーム (0=L 1=R) */
+int32 g_fxout[8];   /* 処理からの出力フレーム (同上) */
+int32 g_fxbus[24];   /* モジュールごとのセンドバス 3 x 2 ワード */
+int32 g_fxwet[8];   /* ラックの wet リターン (0=L 1=R) */
+int32 g_psum[16];    /* MT のパート別ドライ和 8 x 2 ワード */
+int32 g_cho[4096];  /* コーラス遅延 2ch x 2048 サンプル */
+int32 g_dly[32768]; /* ディレイ遅延 2ch x 16384 サンプル */
+int32 g_rvb[25450]; /* リバーブ遅延 (配置は fx_init) */
+int32 g_fxoff[32];  /* リバーブ各ラインの先頭位置 32 ワード
                        (ch*12 + line、line = comb 8 + allpass 4) */
-char g_fxlen[128];  /* リバーブ各ラインの長さ (同上) */
-char g_fxpos[64];   /* 書き位置 int16 x 32: リバーブ 0..23、
+int32 g_fxlen[32];  /* リバーブ各ラインの長さ (同上) */
+int32 g_fxpos[32];   /* 書き位置 int16 x 32: リバーブ 0..23、
                        コーラス 24/25 (L/R)、ディレイ 26/27 */
-char g_fxdamp[64];  /* リバーブ comb のダンピング状態
+int32 g_fxdamp[32];  /* リバーブ comb のダンピング状態
                        int16 x 16 (ch*8 + comb) */
 
-int32 fx_rd16(char *p, int32 idx)
-{
-    int32 o;
-    int32 v;
-    o = idx * 2;
-    v = (p[o] & 255) | ((p[o + 1] & 255) << 8);
-    if (v >= 32768) {
-        v = v - 65536;
-    }
-    return v;
-}
-
-void fx_wr16(char *p, int32 idx, int32 v)
-{
-    int32 o;
-    o = idx * 2;
-    if (v > 32767) {
-        v = 32767;
-    }
-    if (v < 0 - 32768) {
-        v = 0 - 32768;
-    }
-    p[o] = (char)(v & 255);
-    p[o + 1] = (char)((v >> 8) & 255);
-}
 
 int32 fx_clip(int32 v)
 {
@@ -1132,12 +1095,12 @@ void fx_refresh()
     any = 0;
     m = 0;
     while (m < FX_N) {
-        if (rd32(g_fxmod, m * 4) != 0) {
+        if (g_fxmod[m * 4] != 0) {
             any = 1;
         }
         m = m + 1;
     }
-    wr32(g_fxctl, 0, any);
+    g_fxctl[0] = any;
 }
 
 /* 登録表の初期化と状態クリア。モジュールを足すときは
@@ -1152,28 +1115,28 @@ void fx_init()
     set_name(g_fxnm, 0, "Chorus");
     set_name(g_fxnm, 1, "Delay");
     set_name(g_fxnm, 2, "Reverb");
-    wr32(g_fxmeta, 0 * 8 + 0, 93);   /* Chorus: CC93 */
-    wr32(g_fxmeta, 0 * 8 + 1, 0);
-    wr32(g_fxmeta, 0 * 8 + 2, 32);
-    wr32(g_fxmeta, 0 * 8 + 3, 256);
-    wr32(g_fxmeta, 1 * 8 + 0, 94);   /* Delay: CC94 */
-    wr32(g_fxmeta, 1 * 8 + 1, 0);
-    wr32(g_fxmeta, 1 * 8 + 2, 32);
-    wr32(g_fxmeta, 1 * 8 + 3, 256);
-    wr32(g_fxmeta, 2 * 8 + 0, 91);   /* Reverb: CC91 */
-    wr32(g_fxmeta, 2 * 8 + 1, 1);
-    wr32(g_fxmeta, 2 * 8 + 2, 40);
-    wr32(g_fxmeta, 2 * 8 + 3, 192);
+    g_fxmeta[0 * 8 + 0] = 93;   /* Chorus: CC93 */
+    g_fxmeta[0 * 8 + 1] = 0;
+    g_fxmeta[0 * 8 + 2] = 32;
+    g_fxmeta[0 * 8 + 3] = 256;
+    g_fxmeta[1 * 8 + 0] = 94;   /* Delay: CC94 */
+    g_fxmeta[1 * 8 + 1] = 0;
+    g_fxmeta[1 * 8 + 2] = 32;
+    g_fxmeta[1 * 8 + 3] = 256;
+    g_fxmeta[2 * 8 + 0] = 91;   /* Reverb: CC91 */
+    g_fxmeta[2 * 8 + 1] = 1;
+    g_fxmeta[2 * 8 + 2] = 40;
+    g_fxmeta[2 * 8 + 3] = 192;
     m = 0;
     while (m < FX_N) {
-        wr32(g_fxmod, m * 4 + 0, rd32(g_fxmeta, m * 8 + 1));
-        wr32(g_fxctl, 4 + m, rd32(g_fxmeta, m * 8 + 2));
+        g_fxmod[m * 4 + 0] = g_fxmeta[m * 8 + 1];
+        g_fxctl[4 + m] = g_fxmeta[m * 8 + 2];
         m = m + 1;
     }
-    wr32(g_fxctl, 1, 0);
-    wr32(g_fxctl, 2, 0);
-    wr32(g_fxctl, 3, 0);
-    wr32(g_fxctl, 7, 0);
+    g_fxctl[1] = 0;
+    g_fxctl[2] = 0;
+    g_fxctl[3] = 0;
+    g_fxctl[7] = 0;
     off = 0;
     ch = 0;
     while (ch < 2) {
@@ -1184,8 +1147,8 @@ void fx_init()
             if (ch == 1) {
                 ln = ln + 23;
             }
-            wr32(g_fxoff, ch * 12 + i, off);
-            wr32(g_fxlen, ch * 12 + i, ln);
+            g_fxoff[ch * 12 + i] = off;
+            g_fxlen[ch * 12 + i] = ln;
             off = off + ln;
             i = i + 1;
         }
@@ -1196,30 +1159,30 @@ void fx_init()
             if (ch == 1) {
                 ln2 = ln2 + 23;
             }
-            wr32(g_fxoff, ch * 12 + 8 + i, off);
-            wr32(g_fxlen, ch * 12 + 8 + i, ln2);
+            g_fxoff[ch * 12 + 8 + i] = off;
+            g_fxlen[ch * 12 + 8 + i] = ln2;
             off = off + ln2;
             i = i + 1;
         }
         ch = ch + 1;
     }
     i = 0;
-    while (i < 8192) {
+    while (i < 4096) {
         g_cho[i] = 0;
         i = i + 1;
     }
     i = 0;
-    while (i < 65536) {
+    while (i < 32768) {
         g_dly[i] = 0;
         i = i + 1;
     }
     i = 0;
-    while (i < 50900) {
+    while (i < 25450) {
         g_rvb[i] = 0;
         i = i + 1;
     }
     i = 0;
-    while (i < 64) {
+    while (i < 32) {
         g_fxpos[i] = 0;
         g_fxdamp[i] = 0;
         i = i + 1;
@@ -1229,10 +1192,10 @@ void fx_init()
 
 void fx_toggle(int32 mod)
 {
-    if (rd32(g_fxmod, mod * 4) != 0) {
-        wr32(g_fxmod, mod * 4, 0);
+    if (g_fxmod[mod * 4] != 0) {
+        g_fxmod[mod * 4] = 0;
     } else {
-        wr32(g_fxmod, mod * 4, 1);
+        g_fxmod[mod * 4] = 1;
     }
     fx_refresh();
 }
@@ -1251,7 +1214,7 @@ void fx_print_state()
             i = i + 1;
         }
         putc(61);
-        if (rd32(g_fxmod, m * 4) != 0) {
+        if (g_fxmod[m * 4] != 0) {
             out_str("on");
         } else {
             out_str("off");
@@ -1259,7 +1222,7 @@ void fx_print_state()
         m = m + 1;
     }
     out_str(" route=");
-    if (rd32(g_fxctl, 1) != 0) {
+    if (g_fxctl[1] != 0) {
         out_str("chain");
     } else {
         out_str("parallel");
@@ -1278,19 +1241,19 @@ int32 fx_arg(char *s)
     if (streq(s, "nofx")) {
         m = 0;
         while (m < FX_N) {
-            wr32(g_fxmod, m * 4, 0);
+            g_fxmod[m * 4] = 0;
             m = m + 1;
         }
-        wr32(g_fxctl, 2, 1);
+        g_fxctl[2] = 1;
         fx_refresh();
         return 1;
     }
     if (streq(s, "fxchain")) {
-        wr32(g_fxctl, 1, 1);
+        g_fxctl[1] = 1;
         return 1;
     }
     if (streq(s, "fxdbg")) {
-        wr32(g_fxctl, 3, 1);
+        g_fxctl[3] = 1;
         return 1;
     }
     m = 0 - 1;
@@ -1304,15 +1267,15 @@ int32 fx_arg(char *s)
         m = FX_RVB;
     }
     if (m >= 0) {
-        if (rd32(g_fxctl, 2) == 0) {
+        if (g_fxctl[2] == 0) {
             k = 0;
             while (k < FX_N) {
-                wr32(g_fxmod, k * 4, 0);
+                g_fxmod[k * 4] = 0;
                 k = k + 1;
             }
-            wr32(g_fxctl, 2, 1);
+            g_fxctl[2] = 1;
         }
-        wr32(g_fxmod, m * 4, 1);
+        g_fxmod[m * 4] = 1;
         fx_refresh();
         return 1;
     }
@@ -1328,8 +1291,8 @@ void fx_proc_cho(int32 nch)
     int32 ch;
     int32 ph;
     int32 dly;
-    ph = rd32(g_fxctl, 7);
-    wr32(g_fxctl, 7, ph + 58426);
+    ph = g_fxctl[7];
+    g_fxctl[7] = ph + 58426;
     dly = 882 + ((sine_at((ph >> 16) & 65535) * 264) >> 15);
     ch = 0;
     while (ch < nch) {
@@ -1337,24 +1300,24 @@ void fx_proc_cho(int32 nch)
         int32 rp;
         int32 s0;
         int32 s1;
-        wp = fx_rd16(g_fxpos, 24 + ch);
-        fx_wr16(g_cho, ch * 2048 + wp, rd32(g_fxin, ch));
+        wp = g_fxpos[24 + ch];
+        g_cho[ch * 2048 + wp] = g_fxin[ch];
         rp = wp - dly;
         while (rp < 0) {
             rp = rp + 2048;
         }
-        s0 = fx_rd16(g_cho, ch * 2048 + rp);
+        s0 = g_cho[ch * 2048 + rp];
         rp = rp + 1;
         if (rp >= 2048) {
             rp = rp - 2048;
         }
-        s1 = fx_rd16(g_cho, ch * 2048 + rp);
-        wr32(g_fxout, ch, (s0 + s1) >> 1);
+        s1 = g_cho[ch * 2048 + rp];
+        g_fxout[ch] = (s0 + s1) >> 1;
         wp = wp + 1;
         if (wp >= 2048) {
             wp = 0;
         }
-        fx_wr16(g_fxpos, 24 + ch, wp);
+        g_fxpos[24 + ch] = wp;
         ch = ch + 1;
     }
 }
@@ -1369,20 +1332,19 @@ void fx_proc_dly(int32 nch)
         int32 wp;
         int32 rp;
         int32 d;
-        wp = fx_rd16(g_fxpos, 26 + ch);
+        wp = g_fxpos[26 + ch];
         rp = wp - 13230;
         while (rp < 0) {
             rp = rp + 16384;
         }
-        d = fx_rd16(g_dly, ch * 16384 + rp);
-        fx_wr16(g_dly, ch * 16384 + wp,
-                rd32(g_fxin, ch) + ((d * 11468) >> 15));
-        wr32(g_fxout, ch, d);
+        d = g_dly[ch * 16384 + rp];
+        g_dly[ch * 16384 + wp] = g_fxin[ch] + ((d * 11468) >> 15);
+        g_fxout[ch] = d;
         wp = wp + 1;
         if (wp >= 16384) {
             wp = 0;
         }
-        fx_wr16(g_fxpos, 26 + ch, wp);
+        g_fxpos[26 + ch] = wp;
         ch = ch + 1;
     }
 }
@@ -1399,7 +1361,7 @@ void fx_proc_rvb(int32 nch)
         int32 inp;
         int32 acc;
         int32 i;
-        inp = rd32(g_fxin, ch) >> 2;
+        inp = g_fxin[ch] >> 2;
         acc = 0;
         i = 0;
         while (i < 8) {
@@ -1408,19 +1370,18 @@ void fx_proc_rvb(int32 nch)
             int32 y;
             int32 filt;
             li = ch * 12 + i;
-            pos = fx_rd16(g_fxpos, li);
-            y = fx_rd16(g_rvb, rd32(g_fxoff, li) + pos);
-            filt = fx_rd16(g_fxdamp, ch * 8 + i);
+            pos = g_fxpos[li];
+            y = g_rvb[g_fxoff[li] + pos];
+            filt = g_fxdamp[ch * 8 + i];
             filt = filt + ((y - filt) >> 2);
-            fx_wr16(g_fxdamp, ch * 8 + i, filt);
-            fx_wr16(g_rvb, rd32(g_fxoff, li) + pos,
-                    inp + ((filt * 26214) >> 15));
+            g_fxdamp[ch * 8 + i] = filt;
+            g_rvb[g_fxoff[li] + pos] = inp + ((filt * 26214) >> 15);
             acc = acc + y;
             pos = pos + 1;
-            if (pos >= rd32(g_fxlen, li)) {
+            if (pos >= g_fxlen[li]) {
                 pos = 0;
             }
-            fx_wr16(g_fxpos, li, pos);
+            g_fxpos[li] = pos;
             i = i + 1;
         }
         acc = acc >> 3;
@@ -1431,20 +1392,19 @@ void fx_proc_rvb(int32 nch)
             int32 buf;
             int32 outv;
             li2 = ch * 12 + 8 + i;
-            pos2 = fx_rd16(g_fxpos, li2);
-            buf = fx_rd16(g_rvb, rd32(g_fxoff, li2) + pos2);
+            pos2 = g_fxpos[li2];
+            buf = g_rvb[g_fxoff[li2] + pos2];
             outv = buf - acc;
-            fx_wr16(g_rvb, rd32(g_fxoff, li2) + pos2,
-                    acc + (outv >> 1));
+            g_rvb[g_fxoff[li2] + pos2] = acc + (outv >> 1);
             acc = outv;
             pos2 = pos2 + 1;
-            if (pos2 >= rd32(g_fxlen, li2)) {
+            if (pos2 >= g_fxlen[li2]) {
                 pos2 = 0;
             }
-            fx_wr16(g_fxpos, li2, pos2);
+            g_fxpos[li2] = pos2;
             i = i + 1;
         }
-        wr32(g_fxout, ch, acc);
+        g_fxout[ch] = acc;
         ch = ch + 1;
     }
 }
@@ -1462,16 +1422,16 @@ void fx_proc(int32 mod, int32 nch)
     } else {
         fx_proc_rvb(nch);
     }
-    trim = rd32(g_fxmeta, mod * 8 + 3);
+    trim = g_fxmeta[mod * 8 + 3];
     if (trim != 256) {
         ch = 0;
         while (ch < nch) {
-            wr32(g_fxout, ch, (rd32(g_fxout, ch) * trim) >> 8);
+            g_fxout[ch] = (g_fxout[ch] * trim) >> 8;
             ch = ch + 1;
         }
     }
     if (nch == 1) {
-        wr32(g_fxout, 1, 0);
+        g_fxout[1] = 0;
     }
 }
 
@@ -1486,43 +1446,40 @@ void fx_frame(int32 nch)
 {
     int32 mod;
     int32 ch;
-    wr32(g_fxwet, 0, 0);
-    wr32(g_fxwet, 1, 0);
-    if (rd32(g_fxctl, 0) == 0) {
+    g_fxwet[0] = 0;
+    g_fxwet[1] = 0;
+    if (g_fxctl[0] == 0) {
         return;
     }
-    if (rd32(g_fxctl, 1) != 0) {
+    if (g_fxctl[1] != 0) {
         int32 curL;
         int32 curR;
         curL = 0;
         curR = 0;
         mod = 0;
         while (mod < FX_N) {
-            if (rd32(g_fxmod, mod * 4) != 0) {
-                wr32(g_fxin, 0,
-                     fx_clip(curL + rd32(g_fxbus, mod * 2)));
-                wr32(g_fxin, 1,
-                     fx_clip(curR + rd32(g_fxbus, mod * 2 + 1)));
+            if (g_fxmod[mod * 4] != 0) {
+                g_fxin[0] = fx_clip(curL + g_fxbus[mod * 2]);
+                g_fxin[1] = fx_clip(curR + g_fxbus[mod * 2 + 1]);
                 fx_proc(mod, nch);
-                curL = rd32(g_fxout, 0);
-                curR = rd32(g_fxout, 1);
+                curL = g_fxout[0];
+                curR = g_fxout[1];
             }
             mod = mod + 1;
         }
-        wr32(g_fxwet, 0, curL);
-        wr32(g_fxwet, 1, curR);
+        g_fxwet[0] = curL;
+        g_fxwet[1] = curR;
         return;
     }
     mod = 0;
     while (mod < FX_N) {
-        if (rd32(g_fxmod, mod * 4) != 0) {
-            wr32(g_fxin, 0, rd32(g_fxbus, mod * 2));
-            wr32(g_fxin, 1, rd32(g_fxbus, mod * 2 + 1));
+        if (g_fxmod[mod * 4] != 0) {
+            g_fxin[0] = g_fxbus[mod * 2];
+            g_fxin[1] = g_fxbus[mod * 2 + 1];
             fx_proc(mod, nch);
             ch = 0;
             while (ch < nch) {
-                wr32(g_fxwet, ch,
-                     rd32(g_fxwet, ch) + rd32(g_fxout, ch));
+                g_fxwet[ch] = g_fxwet[ch] + g_fxout[ch];
                 ch = ch + 1;
             }
         }
@@ -1537,13 +1494,12 @@ int32 fx_mono(int32 dry)
     int32 mod;
     mod = 0;
     while (mod < FX_N) {
-        wr32(g_fxbus, mod * 2,
-             (dry * rd32(g_fxctl, 4 + mod)) / 127);
-        wr32(g_fxbus, mod * 2 + 1, 0);
+        g_fxbus[mod * 2] = (dry * g_fxctl[4 + mod]) / 127;
+        g_fxbus[mod * 2 + 1] = 0;
         mod = mod + 1;
     }
     fx_frame(1);
-    return fx_clip(dry + rd32(g_fxwet, 0));
+    return fx_clip(dry + g_fxwet[0]);
 }
 
 int32 run_demo(int32 engine)
@@ -1568,7 +1524,7 @@ int32 run_demo(int32 engine)
     } else {
         out_str("synth: psg demo\n");
     }
-    print_preset(engine, rd32(g_cur, 1));
+    print_preset(engine, g_cur[1]);
     fx_print_state();
     step = 0;
     while (step < NSTEPS) {
@@ -1597,7 +1553,7 @@ int32 run_demo(int32 engine)
             while (k < n) {
                 int32 smp;
                 smp = mix_sample();
-                if (rd32(g_fxctl, 0) != 0) {
+                if (g_fxctl[0] != 0) {
                     smp = fx_mono(smp);
                 }
                 g_buf[k * 2] = (char)(smp & 255);
@@ -1651,7 +1607,7 @@ int32 run_play(int32 engine)
         return 1;
     }
     out_str("synth: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, R/D/C=fx toggle, X=chain, ESC=end\n");
-    print_preset(engine, rd32(g_cur, 1));
+    print_preset(engine, g_cur[1]);
     fx_print_state();
     while (done == 0) {
         int64 c;
@@ -1668,11 +1624,11 @@ int32 run_play(int32 engine)
                 base = base + 12;
             }
         } else if (c == 91) {
-            load_preset(engine, (rd32(g_cur, 1) + 15) & 15);
-            print_preset(engine, rd32(g_cur, 1));
+            load_preset(engine, (g_cur[1] + 15) & 15);
+            print_preset(engine, g_cur[1]);
         } else if (c == 93) {
-            load_preset(engine, (rd32(g_cur, 1) + 1) & 15);
-            print_preset(engine, rd32(g_cur, 1));
+            load_preset(engine, (g_cur[1] + 1) & 15);
+            print_preset(engine, g_cur[1]);
         } else if (c == 82) {
             fx_toggle(FX_RVB);
             fx_print_state();
@@ -1683,10 +1639,10 @@ int32 run_play(int32 engine)
             fx_toggle(FX_CHO);
             fx_print_state();
         } else if (c == 88) {
-            if (rd32(g_fxctl, 1) != 0) {
-                wr32(g_fxctl, 1, 0);
+            if (g_fxctl[1] != 0) {
+                g_fxctl[1] = 0;
             } else {
-                wr32(g_fxctl, 1, 1);
+                g_fxctl[1] = 1;
             }
             fx_print_state();
         } else if (c > 0) {
@@ -1701,7 +1657,7 @@ int32 run_play(int32 engine)
         while (k < 512) {
             int32 smp;
             smp = mix_sample();
-            if (rd32(g_fxctl, 0) != 0) {
+            if (g_fxctl[0] != 0) {
                 smp = fx_mono(smp);
             }
             g_buf[k * 2] = (char)(smp & 255);
@@ -1744,8 +1700,8 @@ void midi_note_off(int32 note)
     while (vi < 4) {
         int32 b;
         b = vi * 16;
-        if (rd32(g_vs, b + 0) != 0 && rd32(g_vs, b + 2) == note) {
-            wr32(g_vs, b + 6, 3);
+        if (g_vs[b + 0] != 0 && g_vs[b + 2] == note) {
+            g_vs[b + 6] = 3;
             return;
         }
         vi = vi + 1;
@@ -1764,23 +1720,23 @@ void midi_note_on(int32 note, int32 vel)
     while (vi < 4) {
         int32 b;
         b = vi * 16;
-        if (rd32(g_vs, b + 0) != 0 && rd32(g_vs, b + 2) == note) {
-            trig(vi, note, 2000000000, rd32(g_mst, 9));
+        if (g_vs[b + 0] != 0 && g_vs[b + 2] == note) {
+            trig(vi, note, 2000000000, g_mst[9]);
             return;
         }
         vi = vi + 1;
     }
     vi = 0;
     while (vi < 4) {
-        if (rd32(g_vs, vi * 16) == 0) {
-            trig(vi, note, 2000000000, rd32(g_mst, 9));
+        if (g_vs[vi * 16] == 0) {
+            trig(vi, note, 2000000000, g_mst[9]);
             return;
         }
         vi = vi + 1;
     }
-    rr = rd32(g_mst, 10);
-    trig(rr, note, 2000000000, rd32(g_mst, 9));
-    wr32(g_mst, 10, (rr + 1) & 3);
+    rr = g_mst[10];
+    trig(rr, note, 2000000000, g_mst[9]);
+    g_mst[10] = (rr + 1) & 3;
 }
 
 void midi_all_off()
@@ -1788,8 +1744,8 @@ void midi_all_off()
     int32 vi;
     vi = 0;
     while (vi < 4) {
-        if (rd32(g_vs, vi * 16) != 0) {
-            wr32(g_vs, vi * 16 + 6, 3);
+        if (g_vs[vi * 16] != 0) {
+            g_vs[vi * 16 + 6] = 3;
         }
         vi = vi + 1;
     }
@@ -1810,8 +1766,8 @@ void midi_event(int32 status, int32 d1, int32 d2)
             int32 m2;
             m2 = 0;
             while (m2 < FX_N) {
-                if (rd32(g_fxmeta, m2 * 8 + 0) == d1) {
-                    wr32(g_fxctl, 4 + m2, d2);
+                if (g_fxmeta[m2 * 8 + 0] == d1) {
+                    g_fxctl[4 + m2] = d2;
                 }
                 m2 = m2 + 1;
             }
@@ -1819,8 +1775,8 @@ void midi_event(int32 status, int32 d1, int32 d2)
     } else if (hi == 192) {
         int32 eng;
         int32 idx;
-        eng = rd32(g_cur, 0);
-        wr32(g_mst, 7, d1);
+        eng = g_cur[0];
+        g_mst[7] = d1;
         if (eng == 0) {
             idx = g_gmf[(d1 >> 3) & 15] & 255;
         } else {
@@ -1836,27 +1792,27 @@ void midi_event(int32 status, int32 d1, int32 d2)
  * 飛ばす)、システムコモン、リアルタイム (無視) を捌く */
 void midi_feed(int32 b)
 {
-    if (rd32(g_mst, 4) != 0) {
+    if (g_mst[4] != 0) {
         if (b == 247) {
-            if (rd32(g_mst, 5) == 2) {
-                wr32(g_mst, 8, 1);  /* 終了マーカー確定 */
+            if (g_mst[5] == 2) {
+                g_mst[8] = 1;  /* 終了マーカー確定 */
             }
-            wr32(g_mst, 4, 0);
-            wr32(g_mst, 5, 0);
-        } else if (rd32(g_mst, 5) == 0) {
+            g_mst[4] = 0;
+            g_mst[5] = 0;
+        } else if (g_mst[5] == 0) {
             if (b == 125) {
-                wr32(g_mst, 5, 1);
+                g_mst[5] = 1;
             } else {
-                wr32(g_mst, 5, 3);
+                g_mst[5] = 3;
             }
-        } else if (rd32(g_mst, 5) == 1) {
+        } else if (g_mst[5] == 1) {
             if (b == 0) {
-                wr32(g_mst, 5, 2);
+                g_mst[5] = 2;
             } else {
-                wr32(g_mst, 5, 3);
+                g_mst[5] = 3;
             }
         } else {
-            wr32(g_mst, 5, 3);
+            g_mst[5] = 3;
         }
         return;
     }
@@ -1864,52 +1820,52 @@ void midi_feed(int32 b)
         return;  /* リアルタイムメッセージは無視 */
     }
     if (b == 240) {
-        wr32(g_mst, 4, 1);
-        wr32(g_mst, 5, 0);
-        wr32(g_mst, 0, 0);
+        g_mst[4] = 1;
+        g_mst[5] = 0;
+        g_mst[0] = 0;
         return;
     }
     if (b >= 240) {
-        wr32(g_mst, 0, 0);
-        wr32(g_mst, 2, 0);
+        g_mst[0] = 0;
+        g_mst[2] = 0;
         if (b == 241 || b == 243) {
-            wr32(g_mst, 6, 1);
+            g_mst[6] = 1;
         } else if (b == 242) {
-            wr32(g_mst, 6, 2);
+            g_mst[6] = 2;
         } else {
-            wr32(g_mst, 6, 0);
+            g_mst[6] = 0;
         }
         return;
     }
     if (b >= 128) {
         int32 hi;
         hi = b & 240;
-        wr32(g_mst, 0, b);
+        g_mst[0] = b;
         if (hi == 192 || hi == 208) {
-            wr32(g_mst, 1, 1);
+            g_mst[1] = 1;
         } else {
-            wr32(g_mst, 1, 2);
+            g_mst[1] = 2;
         }
-        wr32(g_mst, 2, 0);
+        g_mst[2] = 0;
         return;
     }
-    if (rd32(g_mst, 6) > 0) {
-        wr32(g_mst, 6, rd32(g_mst, 6) - 1);
+    if (g_mst[6] > 0) {
+        g_mst[6] = g_mst[6] - 1;
         return;
     }
-    if (rd32(g_mst, 0) == 0) {
+    if (g_mst[0] == 0) {
         return;  /* 行き先のないデータバイトは捨てる */
     }
-    if (rd32(g_mst, 2) == 0) {
-        wr32(g_mst, 3, b);
-        wr32(g_mst, 2, 1);
-        if (rd32(g_mst, 1) == 1) {
-            midi_event(rd32(g_mst, 0), b, 0);
-            wr32(g_mst, 2, 0);
+    if (g_mst[2] == 0) {
+        g_mst[3] = b;
+        g_mst[2] = 1;
+        if (g_mst[1] == 1) {
+            midi_event(g_mst[0], b, 0);
+            g_mst[2] = 0;
         }
     } else {
-        midi_event(rd32(g_mst, 0), rd32(g_mst, 3), b);
-        wr32(g_mst, 2, 0);
+        midi_event(g_mst[0], g_mst[3], b);
+        g_mst[2] = 0;
     }
 }
 
@@ -1945,7 +1901,7 @@ int32 run_midi(char *path, int32 engine)
     tail = -1;
     i = 0;
     while (i < 16) {
-        wr32(g_mst, i, 0);
+        g_mst[i] = 0;
         i = i + 1;
     }
     fd = syscall3(SYS_OPEN, path, 0, 0);
@@ -1989,7 +1945,7 @@ int32 run_midi(char *path, int32 engine)
             while (bpos < blen) {
                 midi_feed(g_mbuf[bpos] & 255);
                 bpos = bpos + 1;
-                if (rd32(g_mst, 8) != 0) {
+                if (g_mst[8] != 0) {
                     tail = 0;
                     break;
                 }
@@ -2002,7 +1958,7 @@ int32 run_midi(char *path, int32 engine)
         while (k < 512) {
             int32 smp;
             smp = mix_sample();
-            if (rd32(g_fxctl, 0) != 0) {
+            if (g_fxctl[0] != 0) {
                 smp = fx_mono(smp);
             }
             g_buf[k * 2] = (char)(smp & 255);
@@ -2063,20 +2019,20 @@ int32 run_midi(char *path, int32 engine)
 #define NPART 8
 #define PARTMAX 8
 
-char g_mv[2048];   /* MT ボイス 32 x 16 ワード (g_vs と同じ
+int32 g_mv[512];   /* MT ボイス 32 x 16 ワード (g_vs と同じ
                       並び。+12 所属 ch、+13 発音順 seq、
                       +14/+15 は 4op 用の追加位相) */
-char g_mvp[2048];  /* MT ボイスごとの実効パラメータ
+int32 g_mvp[512];  /* MT ボイスごとの実効パラメータ
                       (g_vp と同じ並び、+10 に op モード) */
-char g_part[256];  /* パート 8 x 8 ワード:
+int32 g_part[64];  /* パート 8 x 8 ワード:
                       +0 preset +1 vol (CC7) +2 pan (CC10)
                       +3..+5 エフェクトセンド (モジュール順、
                       登録表の CC に対応) */
-char g_mctl[64];   /* +0 次の seq +1 pool 上限 +2 dbg
+int32 g_mctl[16];   /* +0 次の seq +1 pool 上限 +2 dbg
                       +3 同時発音ピーク +4 op 上書き
                       (0=プリセット通り 1=2op 固定
                       2=4op スタック固定) */
-char g_mix[32];    /* mt_mix の出力 (ワード 0=L、1=R) */
+int32 g_mix[8];    /* mt_mix の出力 (ワード 0=L、1=R) */
 
 int64 perf_read(int32 kind)
 {
@@ -2132,26 +2088,26 @@ void mt_init(int32 pool, int32 dbg, int32 opovr)
     p = 0;
     while (p < NPART) {
         int32 m;
-        wr32(g_part, p * 8 + 0, mt_def_preset(p));
-        wr32(g_part, p * 8 + 1, 127);
-        wr32(g_part, p * 8 + 2, 64);
+        g_part[p * 8 + 0] = mt_def_preset(p);
+        g_part[p * 8 + 1] = 127;
+        g_part[p * 8 + 2] = 64;
         m = 0;
         while (m < FX_N) {
-            wr32(g_part, p * 8 + 3 + m, rd32(g_fxmeta, m * 8 + 2));
+            g_part[p * 8 + 3 + m] = g_fxmeta[m * 8 + 2];
             m = m + 1;
         }
         p = p + 1;
     }
     v = 0;
     while (v < NVOICE) {
-        wr32(g_mv, v * 16 + 0, 0);
+        g_mv[v * 16 + 0] = 0;
         v = v + 1;
     }
-    wr32(g_mctl, 0, 0);
-    wr32(g_mctl, 1, pool);
-    wr32(g_mctl, 2, dbg);
-    wr32(g_mctl, 3, 0);
-    wr32(g_mctl, 4, opovr);
+    g_mctl[0] = 0;
+    g_mctl[1] = pool;
+    g_mctl[2] = dbg;
+    g_mctl[3] = 0;
+    g_mctl[4] = opovr;
 }
 
 /* パート ch のプリセットでボイス vi を発音開始する */
@@ -2162,46 +2118,46 @@ void mt_trig(int32 vi, int32 ch, int32 note)
     int32 inc;
     int32 opm;
     b = vi * 16;
-    o = rd32(g_part, ch * 8 + 0) * 20;
-    wr32(g_mvp, b + 0, rd16u(g_pfm, o + 2));
-    wr32(g_mvp, b + 1, rd16u(g_pfm, o + 4));
-    wr32(g_mvp, b + 2, rd16u(g_pfm, o + 6));
-    wr32(g_mvp, b + 3, rd16u(g_pfm, o + 8));
-    wr32(g_mvp, b + 4, rd16u(g_pfm, o + 12));
-    wr32(g_mvp, b + 5, rd16u(g_pfm, o + 14));
-    wr32(g_mvp, b + 6, rd16u(g_pfm, o + 16));
-    wr32(g_mvp, b + 7, 32768);
-    wr32(g_mvp, b + 8, 0);
-    wr32(g_mvp, b + 9, g_pfm[o + 1] & 255);
+    o = g_part[ch * 8 + 0] * 20;
+    g_mvp[b + 0] = rd16u(g_pfm, o + 2);
+    g_mvp[b + 1] = rd16u(g_pfm, o + 4);
+    g_mvp[b + 2] = rd16u(g_pfm, o + 6);
+    g_mvp[b + 3] = rd16u(g_pfm, o + 8);
+    g_mvp[b + 4] = rd16u(g_pfm, o + 12);
+    g_mvp[b + 5] = rd16u(g_pfm, o + 14);
+    g_mvp[b + 6] = rd16u(g_pfm, o + 16);
+    g_mvp[b + 7] = 32768;
+    g_mvp[b + 8] = 0;
+    g_mvp[b + 9] = g_pfm[o + 1] & 255;
     opm = g_pfm[o + 18] & 255;
-    if (rd32(g_mctl, 4) == 1) {
+    if (g_mctl[4] == 1) {
         opm = 0;
-    } else if (rd32(g_mctl, 4) == 2) {
+    } else if (g_mctl[4] == 2) {
         opm = 1;
     }
-    wr32(g_mvp, b + 10, opm);
+    g_mvp[b + 10] = opm;
     if (note >= 36 && note <= 96) {
-        inc = rd32(g_ninc, note - 36);
+        inc = g_ninc[note - 36];
     } else {
         inc = 0;
     }
-    wr32(g_mv, b + 0, 1);
-    wr32(g_mv, b + 1, 0);
-    wr32(g_mv, b + 2, note);
-    wr32(g_mv, b + 3, 0);
-    wr32(g_mv, b + 4, 0);
-    wr32(g_mv, b + 5, 0);
-    wr32(g_mv, b + 6, 0);
-    wr32(g_mv, b + 7, 2000000000);
-    wr32(g_mv, b + 8, 65535);
-    wr32(g_mv, b + 9, 257);
-    wr32(g_mv, b + 10, inc);
-    wr32(g_mv, b + 11, (inc * (g_pfm[o + 10] & 255)) / 2);
-    wr32(g_mv, b + 12, ch);
-    wr32(g_mv, b + 13, rd32(g_mctl, 0));
-    wr32(g_mv, b + 14, 0);
-    wr32(g_mv, b + 15, 0);
-    wr32(g_mctl, 0, rd32(g_mctl, 0) + 1);
+    g_mv[b + 0] = 1;
+    g_mv[b + 1] = 0;
+    g_mv[b + 2] = note;
+    g_mv[b + 3] = 0;
+    g_mv[b + 4] = 0;
+    g_mv[b + 5] = 0;
+    g_mv[b + 6] = 0;
+    g_mv[b + 7] = 2000000000;
+    g_mv[b + 8] = 65535;
+    g_mv[b + 9] = 257;
+    g_mv[b + 10] = inc;
+    g_mv[b + 11] = (inc * (g_pfm[o + 10] & 255)) / 2;
+    g_mv[b + 12] = ch;
+    g_mv[b + 13] = g_mctl[0];
+    g_mv[b + 14] = 0;
+    g_mv[b + 15] = 0;
+    g_mctl[0] = g_mctl[0] + 1;
 }
 
 void mt_note_on(int32 ch, int32 note)
@@ -2211,13 +2167,13 @@ void mt_note_on(int32 ch, int32 note)
     int32 pick;
     int32 cnt;
     int32 steal;
-    pool = rd32(g_mctl, 1);
+    pool = g_mctl[1];
     /* 同じ (ch, note) が鳴っていればそれを再トリガ */
     v = 0;
     while (v < pool) {
-        if (rd32(g_mv, v * 16 + 0) != 0 &&
-            rd32(g_mv, v * 16 + 12) == ch &&
-            rd32(g_mv, v * 16 + 2) == note) {
+        if (g_mv[v * 16 + 0] != 0 &&
+            g_mv[v * 16 + 12] == ch &&
+            g_mv[v * 16 + 2] == note) {
             mt_trig(v, ch, note);
             return;
         }
@@ -2227,8 +2183,8 @@ void mt_note_on(int32 ch, int32 note)
     cnt = 0;
     v = 0;
     while (v < pool) {
-        if (rd32(g_mv, v * 16 + 0) != 0 &&
-            rd32(g_mv, v * 16 + 12) == ch) {
+        if (g_mv[v * 16 + 0] != 0 &&
+            g_mv[v * 16 + 12] == ch) {
             cnt = cnt + 1;
         }
         v = v + 1;
@@ -2240,10 +2196,10 @@ void mt_note_on(int32 ch, int32 note)
         best = 2000000000;
         v = 0;
         while (v < pool) {
-            if (rd32(g_mv, v * 16 + 0) != 0 &&
-                rd32(g_mv, v * 16 + 12) == ch &&
-                rd32(g_mv, v * 16 + 13) < best) {
-                best = rd32(g_mv, v * 16 + 13);
+            if (g_mv[v * 16 + 0] != 0 &&
+                g_mv[v * 16 + 12] == ch &&
+                g_mv[v * 16 + 13] < best) {
+                best = g_mv[v * 16 + 13];
                 pick = v;
             }
             v = v + 1;
@@ -2251,7 +2207,7 @@ void mt_note_on(int32 ch, int32 note)
     } else {
         v = 0;
         while (v < pool) {
-            if (rd32(g_mv, v * 16 + 0) == 0) {
+            if (g_mv[v * 16 + 0] == 0) {
                 pick = v;
                 break;
             }
@@ -2263,10 +2219,10 @@ void mt_note_on(int32 ch, int32 note)
             best = 2000000000;
             v = 0;
             while (v < pool) {
-                if (rd32(g_mv, v * 16 + 0) != 0 &&
-                    rd32(g_mv, v * 16 + 6) == 3 &&
-                    rd32(g_mv, v * 16 + 13) < best) {
-                    best = rd32(g_mv, v * 16 + 13);
+                if (g_mv[v * 16 + 0] != 0 &&
+                    g_mv[v * 16 + 6] == 3 &&
+                    g_mv[v * 16 + 13] < best) {
+                    best = g_mv[v * 16 + 13];
                     pick = v;
                 }
                 v = v + 1;
@@ -2278,9 +2234,9 @@ void mt_note_on(int32 ch, int32 note)
             best = 2000000000;
             v = 0;
             while (v < pool) {
-                if (rd32(g_mv, v * 16 + 0) != 0 &&
-                    rd32(g_mv, v * 16 + 13) < best) {
-                    best = rd32(g_mv, v * 16 + 13);
+                if (g_mv[v * 16 + 0] != 0 &&
+                    g_mv[v * 16 + 13] < best) {
+                    best = g_mv[v * 16 + 13];
                     pick = v;
                 }
                 v = v + 1;
@@ -2290,9 +2246,9 @@ void mt_note_on(int32 ch, int32 note)
     if (pick < 0) {
         return;
     }
-    steal = rd32(g_mv, pick * 16 + 0);
+    steal = g_mv[pick * 16 + 0];
     mt_trig(pick, ch, note);
-    if (rd32(g_mctl, 2) != 0) {
+    if (g_mctl[2] != 0) {
         out_str("synth: alloc v=");
         out_num(pick);
         out_str(" ch=");
@@ -2311,11 +2267,11 @@ void mt_note_off(int32 ch, int32 note)
     int32 v;
     v = 0;
     while (v < NVOICE) {
-        if (rd32(g_mv, v * 16 + 0) != 0 &&
-            rd32(g_mv, v * 16 + 12) == ch &&
-            rd32(g_mv, v * 16 + 2) == note &&
-            rd32(g_mv, v * 16 + 6) != 3) {
-            wr32(g_mv, v * 16 + 6, 3);
+        if (g_mv[v * 16 + 0] != 0 &&
+            g_mv[v * 16 + 12] == ch &&
+            g_mv[v * 16 + 2] == note &&
+            g_mv[v * 16 + 6] != 3) {
+            g_mv[v * 16 + 6] = 3;
         }
         v = v + 1;
     }
@@ -2326,10 +2282,10 @@ void mt_all_off(int32 ch)
     int32 v;
     v = 0;
     while (v < NVOICE) {
-        if (rd32(g_mv, v * 16 + 0) != 0 &&
-            rd32(g_mv, v * 16 + 12) == ch &&
-            rd32(g_mv, v * 16 + 6) != 3) {
-            wr32(g_mv, v * 16 + 6, 3);
+        if (g_mv[v * 16 + 0] != 0 &&
+            g_mv[v * 16 + 12] == ch &&
+            g_mv[v * 16 + 6] != 3) {
+            g_mv[v * 16 + 6] = 3;
         }
         v = v + 1;
     }
@@ -2342,13 +2298,13 @@ void mt_peak_update()
     cnt = 0;
     v = 0;
     while (v < NVOICE) {
-        if (rd32(g_mv, v * 16 + 0) != 0) {
+        if (g_mv[v * 16 + 0] != 0) {
             cnt = cnt + 1;
         }
         v = v + 1;
     }
-    if (cnt > rd32(g_mctl, 3)) {
-        wr32(g_mctl, 3, cnt);
+    if (cnt > g_mctl[3]) {
+        g_mctl[3] = cnt;
     }
 }
 
@@ -2363,11 +2319,11 @@ void mt_mix()
     int32 vi;
     sumL = 0;
     sumR = 0;
-    if (rd32(g_fxctl, 0) != 0) {
+    if (g_fxctl[0] != 0) {
         int32 pp;
         pp = 0;
         while (pp < 16) {
-            wr32(g_psum, pp, 0);
+            g_psum[pp] = 0;
             pp = pp + 1;
         }
     }
@@ -2375,7 +2331,7 @@ void mt_mix()
     while (vi < NVOICE) {
         int32 b;
         b = vi * 16;
-        if (rd32(g_mv, b + 0) != 0) {
+        if (g_mv[b + 0] != 0) {
             int32 pc;
             int32 pm;
             int32 env;
@@ -2394,23 +2350,23 @@ void mt_mix()
             int32 lvl;
             int32 opm;
             int32 outv;
-            pc = rd32(g_mv, b + 3);
-            pm = rd32(g_mv, b + 4);
-            env = rd32(g_mv, b + 5);
-            stg = rd32(g_mv, b + 6);
-            gate = rd32(g_mv, b + 7);
-            menv = rd32(g_mv, b + 8);
-            inc_c = rd32(g_mv, b + 10);
-            inc_m = rd32(g_mv, b + 11);
-            atk = rd32(g_mvp, b + 0);
-            dec = rd32(g_mvp, b + 1);
-            sus = rd32(g_mvp, b + 2);
-            rel = rd32(g_mvp, b + 3);
-            dep = rd32(g_mvp, b + 4);
-            mrate = rd32(g_mvp, b + 5);
-            mrel = rd32(g_mvp, b + 6);
-            lvl = rd32(g_mvp, b + 9);
-            opm = rd32(g_mvp, b + 10);
+            pc = g_mv[b + 3];
+            pm = g_mv[b + 4];
+            env = g_mv[b + 5];
+            stg = g_mv[b + 6];
+            gate = g_mv[b + 7];
+            menv = g_mv[b + 8];
+            inc_c = g_mv[b + 10];
+            inc_m = g_mv[b + 11];
+            atk = g_mvp[b + 0];
+            dec = g_mvp[b + 1];
+            sus = g_mvp[b + 2];
+            rel = g_mvp[b + 3];
+            dep = g_mvp[b + 4];
+            mrate = g_mvp[b + 5];
+            mrel = g_mvp[b + 6];
+            lvl = g_mvp[b + 9];
+            opm = g_mvp[b + 10];
             outv = 0;
             if (stg == 0) {
                 env = env + atk;
@@ -2428,7 +2384,7 @@ void mt_mix()
                 env = env - rel;
                 if (env <= 0) {
                     env = 0;
-                    wr32(g_mv, b + 0, 0);
+                    g_mv[b + 0] = 0;
                 }
             }
             if (stg != 3) {
@@ -2444,7 +2400,7 @@ void mt_mix()
                     menv = menv - mrate;
                 }
             }
-            if (rd32(g_mv, b + 0) != 0) {
+            if (g_mv[b + 0] != 0) {
                 int32 mod;
                 int32 depth;
                 int32 off;
@@ -2459,11 +2415,11 @@ void mt_mix()
                     int32 p2;
                     int32 o1;
                     int32 o2;
-                    p1 = (rd32(g_mv, b + 15) + inc_m) & 65535;
-                    wr32(g_mv, b + 15, p1);
+                    p1 = (g_mv[b + 15] + inc_m) & 65535;
+                    g_mv[b + 15] = p1;
                     o1 = (sine_at(p1) * (depth >> 2)) >> 15;
-                    p2 = (rd32(g_mv, b + 14) + inc_m + o1) & 65535;
-                    wr32(g_mv, b + 14, p2);
+                    p2 = (g_mv[b + 14] + inc_m + o1) & 65535;
+                    g_mv[b + 14] = p2;
                     o2 = (sine_at(p2) * (depth >> 1)) >> 15;
                     pm = (pm + inc_m + o2) & 65535;
                 } else {
@@ -2479,37 +2435,35 @@ void mt_mix()
                     int32 pmb;
                     int32 offb;
                     int32 carb;
-                    pmb = (rd32(g_mv, b + 15) + inc_m) & 65535;
-                    wr32(g_mv, b + 15, pmb);
+                    pmb = (g_mv[b + 15] + inc_m) & 65535;
+                    g_mv[b + 15] = pmb;
                     offb = (sine_at(pmb) * (depth >> 1)) >> 15;
-                    pcb = (rd32(g_mv, b + 14) + inc_c +
+                    pcb = (g_mv[b + 14] + inc_c +
                            (inc_c >> 8)) & 65535;
-                    wr32(g_mv, b + 14, pcb);
+                    g_mv[b + 14] = pcb;
                     carb = sine_at((pcb + offb) & 65535);
                     outv = (outv >> 1) + ((carb * env) >> 17);
                 }
                 t = outv >> lvl;
-                part = rd32(g_mv, b + 12);
-                vol = rd32(g_part, part * 8 + 1);
-                pan = rd32(g_part, part * 8 + 2);
+                part = g_mv[b + 12];
+                vol = g_part[part * 8 + 1];
+                pan = g_part[part * 8 + 2];
                 t = (t * vol) / 127;
                 sumL = sumL + ((t * (127 - pan)) >> 7);
                 sumR = sumR + ((t * pan) >> 7);
-                if (rd32(g_fxctl, 0) != 0) {
-                    wr32(g_psum, part * 2,
-                         rd32(g_psum, part * 2) +
-                         ((t * (127 - pan)) >> 7));
-                    wr32(g_psum, part * 2 + 1,
-                         rd32(g_psum, part * 2 + 1) +
-                         ((t * pan) >> 7));
+                if (g_fxctl[0] != 0) {
+                    g_psum[part * 2] = g_psum[part * 2] +
+                         ((t * (127 - pan)) >> 7);
+                    g_psum[part * 2 + 1] = g_psum[part * 2 + 1] +
+                         ((t * pan) >> 7);
                 }
             }
-            wr32(g_mv, b + 3, pc);
-            wr32(g_mv, b + 4, pm);
-            wr32(g_mv, b + 5, env);
-            wr32(g_mv, b + 6, stg);
-            wr32(g_mv, b + 7, gate);
-            wr32(g_mv, b + 8, menv);
+            g_mv[b + 3] = pc;
+            g_mv[b + 4] = pm;
+            g_mv[b + 5] = env;
+            g_mv[b + 6] = stg;
+            g_mv[b + 7] = gate;
+            g_mv[b + 8] = menv;
         }
         vi = vi + 1;
     }
@@ -2525,8 +2479,8 @@ void mt_mix()
     if (sumR < 0 - 30000) {
         sumR = 0 - 30000;
     }
-    wr32(g_mix, 0, sumL);
-    wr32(g_mix, 1, sumR);
+    g_mix[0] = sumL;
+    g_mix[1] = sumR;
 }
 
 void mt_event(int32 status, int32 d1, int32 d2)
@@ -2548,17 +2502,17 @@ void mt_event(int32 status, int32 d1, int32 d2)
         }
     } else if (hi == 176) {
         if (d1 == 7) {
-            wr32(g_part, ch * 8 + 1, d2);
+            g_part[ch * 8 + 1] = d2;
         } else if (d1 == 10) {
-            wr32(g_part, ch * 8 + 2, d2);
+            g_part[ch * 8 + 2] = d2;
         } else if (d1 == 120 || d1 == 123) {
             mt_all_off(ch);
         } else {
             int32 m2;
             m2 = 0;
             while (m2 < FX_N) {
-                if (rd32(g_fxmeta, m2 * 8 + 0) == d1) {
-                    wr32(g_part, ch * 8 + 3 + m2, d2);
+                if (g_fxmeta[m2 * 8 + 0] == d1) {
+                    g_part[ch * 8 + 3 + m2] = d2;
                 }
                 m2 = m2 + 1;
             }
@@ -2566,34 +2520,34 @@ void mt_event(int32 status, int32 d1, int32 d2)
     } else if (hi == 192) {
         int32 idx;
         idx = g_gmf[d1 >> 3] & 255;
-        wr32(g_part, ch * 8 + 0, idx);
+        g_part[ch * 8 + 0] = idx;
         print_part_preset(ch, idx);
     }
 }
 
 void mt_feed(int32 b)
 {
-    if (rd32(g_mst, 4) != 0) {
+    if (g_mst[4] != 0) {
         if (b == 247) {
-            if (rd32(g_mst, 5) == 2) {
-                wr32(g_mst, 8, 1);  /* 終了マーカー確定 */
+            if (g_mst[5] == 2) {
+                g_mst[8] = 1;  /* 終了マーカー確定 */
             }
-            wr32(g_mst, 4, 0);
-            wr32(g_mst, 5, 0);
-        } else if (rd32(g_mst, 5) == 0) {
+            g_mst[4] = 0;
+            g_mst[5] = 0;
+        } else if (g_mst[5] == 0) {
             if (b == 125) {
-                wr32(g_mst, 5, 1);
+                g_mst[5] = 1;
             } else {
-                wr32(g_mst, 5, 3);
+                g_mst[5] = 3;
             }
-        } else if (rd32(g_mst, 5) == 1) {
+        } else if (g_mst[5] == 1) {
             if (b == 0) {
-                wr32(g_mst, 5, 2);
+                g_mst[5] = 2;
             } else {
-                wr32(g_mst, 5, 3);
+                g_mst[5] = 3;
             }
         } else {
-            wr32(g_mst, 5, 3);
+            g_mst[5] = 3;
         }
         return;
     }
@@ -2601,52 +2555,52 @@ void mt_feed(int32 b)
         return;  /* リアルタイムメッセージは無視 */
     }
     if (b == 240) {
-        wr32(g_mst, 4, 1);
-        wr32(g_mst, 5, 0);
-        wr32(g_mst, 0, 0);
+        g_mst[4] = 1;
+        g_mst[5] = 0;
+        g_mst[0] = 0;
         return;
     }
     if (b >= 240) {
-        wr32(g_mst, 0, 0);
-        wr32(g_mst, 2, 0);
+        g_mst[0] = 0;
+        g_mst[2] = 0;
         if (b == 241 || b == 243) {
-            wr32(g_mst, 6, 1);
+            g_mst[6] = 1;
         } else if (b == 242) {
-            wr32(g_mst, 6, 2);
+            g_mst[6] = 2;
         } else {
-            wr32(g_mst, 6, 0);
+            g_mst[6] = 0;
         }
         return;
     }
     if (b >= 128) {
         int32 hi;
         hi = b & 240;
-        wr32(g_mst, 0, b);
+        g_mst[0] = b;
         if (hi == 192 || hi == 208) {
-            wr32(g_mst, 1, 1);
+            g_mst[1] = 1;
         } else {
-            wr32(g_mst, 1, 2);
+            g_mst[1] = 2;
         }
-        wr32(g_mst, 2, 0);
+        g_mst[2] = 0;
         return;
     }
-    if (rd32(g_mst, 6) > 0) {
-        wr32(g_mst, 6, rd32(g_mst, 6) - 1);
+    if (g_mst[6] > 0) {
+        g_mst[6] = g_mst[6] - 1;
         return;
     }
-    if (rd32(g_mst, 0) == 0) {
+    if (g_mst[0] == 0) {
         return;  /* 行き先のないデータバイトは捨てる */
     }
-    if (rd32(g_mst, 2) == 0) {
-        wr32(g_mst, 3, b);
-        wr32(g_mst, 2, 1);
-        if (rd32(g_mst, 1) == 1) {
-            mt_event(rd32(g_mst, 0), b, 0);
-            wr32(g_mst, 2, 0);
+    if (g_mst[2] == 0) {
+        g_mst[3] = b;
+        g_mst[2] = 1;
+        if (g_mst[1] == 1) {
+            mt_event(g_mst[0], b, 0);
+            g_mst[2] = 0;
         }
     } else {
-        mt_event(rd32(g_mst, 0), rd32(g_mst, 3), b);
-        wr32(g_mst, 2, 0);
+        mt_event(g_mst[0], g_mst[3], b);
+        g_mst[2] = 0;
     }
 }
 
@@ -2688,7 +2642,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     chunkno = 0;
     i = 0;
     while (i < 16) {
-        wr32(g_mst, i, 0);
+        g_mst[i] = 0;
         i = i + 1;
     }
     mt_init(pool, dbg, opovr);
@@ -2710,7 +2664,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     putc(10);
     i = 0;
     while (i < 8) {
-        print_part_preset(i, rd32(g_part, i * 8 + 0));
+        print_part_preset(i, g_part[i * 8 + 0]);
         i = i + 1;
     }
     fx_print_state();
@@ -2754,7 +2708,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
             while (bpos < blen) {
                 mt_feed(g_mbuf[bpos] & 255);
                 bpos = bpos + 1;
-                if (rd32(g_mst, 8) != 0) {
+                if (g_mst[8] != 0) {
                     tail = 0;
                     break;
                 }
@@ -2775,9 +2729,9 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 int32 L;
                 int32 R;
                 mt_mix();
-                L = rd32(g_mix, 0);
-                R = rd32(g_mix, 1);
-                if (rd32(g_fxctl, 0) != 0) {
+                L = g_mix[0];
+                R = g_mix[1];
+                if (g_fxctl[0] != 0) {
                     int32 mod2;
                     int32 p2;
                     mod2 = 0;
@@ -2789,18 +2743,18 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                         p2 = 0;
                         while (p2 < NPART) {
                             int32 snd;
-                            snd = rd32(g_part, p2 * 8 + 3 + mod2);
-                            bl = bl + (rd32(g_psum, p2 * 2) * snd) / 127;
-                            br = br + (rd32(g_psum, p2 * 2 + 1) * snd) / 127;
+                            snd = g_part[p2 * 8 + 3 + mod2];
+                            bl = bl + (g_psum[p2 * 2] * snd) / 127;
+                            br = br + (g_psum[p2 * 2 + 1] * snd) / 127;
                             p2 = p2 + 1;
                         }
-                        wr32(g_fxbus, mod2 * 2, bl);
-                        wr32(g_fxbus, mod2 * 2 + 1, br);
+                        g_fxbus[mod2 * 2] = bl;
+                        g_fxbus[mod2 * 2 + 1] = br;
                         mod2 = mod2 + 1;
                     }
                     fx_frame(2);
-                    L = fx_clip(L + rd32(g_fxwet, 0));
-                    R = fx_clip(R + rd32(g_fxwet, 1));
+                    L = fx_clip(L + g_fxwet[0]);
+                    R = fx_clip(R + g_fxwet[1]);
                 }
                 g_buf[k * 4] = (char)(L & 255);
                 g_buf[k * 4 + 1] = (char)((L >> 8) & 255);
@@ -2838,7 +2792,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 }
                 k = k + 1;
             }
-            if (rd32(g_fxctl, 3) != 0) {
+            if (g_fxctl[3] != 0) {
                 out_str("synth: fxdbg ");
                 out_num(chunkno);
                 putc(32);
@@ -2906,7 +2860,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
         out_num(0);
     }
     out_str("% peak=");
-    out_num(rd32(g_mctl, 3));
+    out_num(g_mctl[3]);
     out_str(" pool=");
     out_num(pool);
     putc(10);
