@@ -209,6 +209,111 @@ def build_song5():
     return smf(1, tracks)
 
 
+def build_song6():
+    """ディレイ確認曲 (format 0、ch1 のみ)。CC94=127、
+    CC91/CC93=0 で単音 (0.25 秒) の後に 6 秒の無音。
+    ディレイ (300ms) の繰り返しが無音部に見えるはず"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, 0),
+                     ch_ev(0, 1, 0xB0, 93, 0),
+                     ch_ev(0, 1, 0xB0, 94, 127),
+                     ch_ev(0, 3, 0x90, 72, 100),
+                     ch_ev(240, 2, 0x80, 72, 0),
+                     ch_ev(5760, 1, 0xB0, 123, 0)]
+    return smf(0, [ev])
+
+
+def build_song6b():
+    """ディレイ確認曲の先行書式版 (format 0、ch1 のみ)。
+    SONG6 と同じ CC 設定 (CC94=127、CC91/CC93=0) で、
+    ノートオン後にダミー CC 300 個、ノートオフ後に
+    ダミー CC 3500 個を挟み、先行書式でも描画が
+    ノートオフ後 約 0.9 秒分続いて、300ms ディレイの
+    繰り返しが描画列の中に見えるようにしたもの"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, 0),
+                     ch_ev(0, 1, 0xB0, 93, 0),
+                     ch_ev(0, 1, 0xB0, 94, 127),
+                     ch_ev(0, 3, 0x90, 72, 100)]
+    for i in range(300):
+        ev.append(ch_ev(120, 1, 0xB0, 99, i & 127))
+    ev.append(ch_ev(240, 2, 0x80, 72, 0))
+    for i in range(3500):
+        ev.append(ch_ev(480, 1, 0xB0, 99, i & 127))
+    ev.append(ch_ev(5760, 1, 0xB0, 123, 0))
+    return smf(0, [ev])
+
+
+def build_song7(cc91):
+    """リバーブ確認曲 (format 0、ch1 のみ)。CC91 は引数、
+    CC93/CC94=0。単音 (0.25 秒) の後に 3 秒の無音で、
+    残響の減衰を見る。cc91=0 版が SONG7Z で、リバーブ ON
+    でも nofx と一致するはずの対照になる"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, cc91),
+                     ch_ev(0, 1, 0xB0, 93, 0),
+                     ch_ev(0, 1, 0xB0, 94, 0),
+                     ch_ev(0, 3, 0x90, 72, 100),
+                     ch_ev(240, 2, 0x80, 72, 0),
+                     ch_ev(2880, 1, 0xB0, 123, 0)]
+    return smf(0, [ev])
+
+
+def build_song7b(cc91):
+    """リバーブ確認曲の先行書式版 (format 0、ch1 のみ)。
+    ノートオンの後にダミー CC (99 番) を 300 個挟んで、
+    先行書式でも読みが複数チャンクに分散し、ノートが
+    鳴り切ってからノートオフが届くようにしたもの。
+    SONG7 と同じく CC91 は引数 (0 版が SONG7BZ)"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, cc91),
+                     ch_ev(0, 1, 0xB0, 93, 0),
+                     ch_ev(0, 1, 0xB0, 94, 0),
+                     ch_ev(0, 3, 0x90, 72, 100)]
+    for i in range(300):
+        ev.append(ch_ev(120, 1, 0xB0, 99, i & 127))
+    ev.append(ch_ev(240, 2, 0x80, 72, 0))
+    ev.append(ch_ev(2880, 1, 0xB0, 123, 0))
+    return smf(0, [ev])
+
+
+def build_song9b():
+    """チェーン確認曲 (format 0、ch1 のみ)。SONG7B と同じ
+    骨格で CC91=127 かつ CC94=127 (CC93=0)。チェーンでは
+    ディレイの繰り返しがリバーブを通って戻るはずで、
+    余韻区間のエネルギーが rev 単体より大きくなる"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, 127),
+                     ch_ev(0, 1, 0xB0, 93, 0),
+                     ch_ev(0, 1, 0xB0, 94, 127),
+                     ch_ev(0, 3, 0x90, 72, 100)]
+    for i in range(300):
+        ev.append(ch_ev(120, 1, 0xB0, 99, i & 127))
+    ev.append(ch_ev(240, 2, 0x80, 72, 0))
+    ev.append(ch_ev(2880, 1, 0xB0, 123, 0))
+    return smf(0, [ev])
+
+
+def build_song8():
+    """コーラス確認曲 (format 0、ch1 のみ)。CC93=127、
+    CC91/CC94=0。4 秒の持続音で、LFO (0.6Hz) による
+    時間変調を見る"""
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 91, 0),
+                     ch_ev(0, 1, 0xB0, 93, 127),
+                     ch_ev(0, 1, 0xB0, 94, 0),
+                     ch_ev(0, 3, 0x90, 69, 100),
+                     ch_ev(3840, 2, 0x80, 69, 0),
+                     ch_ev(4320, 1, 0xB0, 123, 0)]
+    return smf(0, [ev])
+
+
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "."
     mel = melody_notes()
@@ -224,7 +329,15 @@ def main():
              ("SONG3L.MID", build_pan_song(0)),
              ("SONG3R.MID", build_pan_song(127)),
              ("SONG4.MID", build_song4()),
-             ("SONG5.MID", build_song5()))
+             ("SONG5.MID", build_song5()),
+             ("SONG6.MID", build_song6()),
+             ("SONG6B.MID", build_song6b()),
+             ("SONG7.MID", build_song7(127)),
+             ("SONG7Z.MID", build_song7(0)),
+             ("SONG7B.MID", build_song7b(127)),
+             ("SONG7BZ.MID", build_song7b(0)),
+             ("SONG9B.MID", build_song9b()),
+             ("SONG8.MID", build_song8()))
     for name, data in songs:
         path = outdir.rstrip("/") + "/" + name
         with open(path, "wb") as f:

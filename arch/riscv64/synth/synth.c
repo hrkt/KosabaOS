@@ -14,6 +14,9 @@
  *                      [2op|4op] [dbg] も指定可)
  *                      (smfplay の file モードの受け手。解釈は
  *                      下の run_midi のコメント参照)
+ *   全モード共通の追加引数 (エフェクトラック):
+ *                      [nofx] [rev|dly|cho] [fxchain] [fxdbg]
+ *                      (下のエフェクトラックの節、doc 参照)
  *
  * IwaC の C サブセットで書く (nami / wavgen と同じ作法):
  * #include / libc なし、switch なし、文字リテラルなし
@@ -256,197 +259,21 @@ void fill_sine()
     wr32(g_sine, 62, 32728);
     wr32(g_sine, 63, 32757);
     wr32(g_sine, 64, 32767);
-    wr32(g_sine, 65, 32757);
-    wr32(g_sine, 66, 32728);
-    wr32(g_sine, 67, 32678);
-    wr32(g_sine, 68, 32609);
-    wr32(g_sine, 69, 32521);
-    wr32(g_sine, 70, 32412);
-    wr32(g_sine, 71, 32285);
-    wr32(g_sine, 72, 32137);
-    wr32(g_sine, 73, 31971);
-    wr32(g_sine, 74, 31785);
-    wr32(g_sine, 75, 31580);
-    wr32(g_sine, 76, 31356);
-    wr32(g_sine, 77, 31113);
-    wr32(g_sine, 78, 30852);
-    wr32(g_sine, 79, 30571);
-    wr32(g_sine, 80, 30273);
-    wr32(g_sine, 81, 29956);
-    wr32(g_sine, 82, 29621);
-    wr32(g_sine, 83, 29268);
-    wr32(g_sine, 84, 28898);
-    wr32(g_sine, 85, 28510);
-    wr32(g_sine, 86, 28105);
-    wr32(g_sine, 87, 27683);
-    wr32(g_sine, 88, 27245);
-    wr32(g_sine, 89, 26790);
-    wr32(g_sine, 90, 26319);
-    wr32(g_sine, 91, 25832);
-    wr32(g_sine, 92, 25329);
-    wr32(g_sine, 93, 24811);
-    wr32(g_sine, 94, 24279);
-    wr32(g_sine, 95, 23731);
-    wr32(g_sine, 96, 23170);
-    wr32(g_sine, 97, 22594);
-    wr32(g_sine, 98, 22005);
-    wr32(g_sine, 99, 21403);
-    wr32(g_sine, 100, 20787);
-    wr32(g_sine, 101, 20159);
-    wr32(g_sine, 102, 19519);
-    wr32(g_sine, 103, 18868);
-    wr32(g_sine, 104, 18204);
-    wr32(g_sine, 105, 17530);
-    wr32(g_sine, 106, 16846);
-    wr32(g_sine, 107, 16151);
-    wr32(g_sine, 108, 15446);
-    wr32(g_sine, 109, 14732);
-    wr32(g_sine, 110, 14010);
-    wr32(g_sine, 111, 13279);
-    wr32(g_sine, 112, 12539);
-    wr32(g_sine, 113, 11793);
-    wr32(g_sine, 114, 11039);
-    wr32(g_sine, 115, 10278);
-    wr32(g_sine, 116, 9512);
-    wr32(g_sine, 117, 8739);
-    wr32(g_sine, 118, 7962);
-    wr32(g_sine, 119, 7179);
-    wr32(g_sine, 120, 6393);
-    wr32(g_sine, 121, 5602);
-    wr32(g_sine, 122, 4808);
-    wr32(g_sine, 123, 4011);
-    wr32(g_sine, 124, 3212);
-    wr32(g_sine, 125, 2410);
-    wr32(g_sine, 126, 1608);
-    wr32(g_sine, 127, 804);
-    wr32(g_sine, 128, 0);
-    wr32(g_sine, 129, -804);
-    wr32(g_sine, 130, -1608);
-    wr32(g_sine, 131, -2410);
-    wr32(g_sine, 132, -3212);
-    wr32(g_sine, 133, -4011);
-    wr32(g_sine, 134, -4808);
-    wr32(g_sine, 135, -5602);
-    wr32(g_sine, 136, -6393);
-    wr32(g_sine, 137, -7179);
-    wr32(g_sine, 138, -7962);
-    wr32(g_sine, 139, -8739);
-    wr32(g_sine, 140, -9512);
-    wr32(g_sine, 141, -10278);
-    wr32(g_sine, 142, -11039);
-    wr32(g_sine, 143, -11793);
-    wr32(g_sine, 144, -12539);
-    wr32(g_sine, 145, -13279);
-    wr32(g_sine, 146, -14010);
-    wr32(g_sine, 147, -14732);
-    wr32(g_sine, 148, -15446);
-    wr32(g_sine, 149, -16151);
-    wr32(g_sine, 150, -16846);
-    wr32(g_sine, 151, -17530);
-    wr32(g_sine, 152, -18204);
-    wr32(g_sine, 153, -18868);
-    wr32(g_sine, 154, -19519);
-    wr32(g_sine, 155, -20159);
-    wr32(g_sine, 156, -20787);
-    wr32(g_sine, 157, -21403);
-    wr32(g_sine, 158, -22005);
-    wr32(g_sine, 159, -22594);
-    wr32(g_sine, 160, -23170);
-    wr32(g_sine, 161, -23731);
-    wr32(g_sine, 162, -24279);
-    wr32(g_sine, 163, -24811);
-    wr32(g_sine, 164, -25329);
-    wr32(g_sine, 165, -25832);
-    wr32(g_sine, 166, -26319);
-    wr32(g_sine, 167, -26790);
-    wr32(g_sine, 168, -27245);
-    wr32(g_sine, 169, -27683);
-    wr32(g_sine, 170, -28105);
-    wr32(g_sine, 171, -28510);
-    wr32(g_sine, 172, -28898);
-    wr32(g_sine, 173, -29268);
-    wr32(g_sine, 174, -29621);
-    wr32(g_sine, 175, -29956);
-    wr32(g_sine, 176, -30273);
-    wr32(g_sine, 177, -30571);
-    wr32(g_sine, 178, -30852);
-    wr32(g_sine, 179, -31113);
-    wr32(g_sine, 180, -31356);
-    wr32(g_sine, 181, -31580);
-    wr32(g_sine, 182, -31785);
-    wr32(g_sine, 183, -31971);
-    wr32(g_sine, 184, -32137);
-    wr32(g_sine, 185, -32285);
-    wr32(g_sine, 186, -32412);
-    wr32(g_sine, 187, -32521);
-    wr32(g_sine, 188, -32609);
-    wr32(g_sine, 189, -32678);
-    wr32(g_sine, 190, -32728);
-    wr32(g_sine, 191, -32757);
-    wr32(g_sine, 192, -32767);
-    wr32(g_sine, 193, -32757);
-    wr32(g_sine, 194, -32728);
-    wr32(g_sine, 195, -32678);
-    wr32(g_sine, 196, -32609);
-    wr32(g_sine, 197, -32521);
-    wr32(g_sine, 198, -32412);
-    wr32(g_sine, 199, -32285);
-    wr32(g_sine, 200, -32137);
-    wr32(g_sine, 201, -31971);
-    wr32(g_sine, 202, -31785);
-    wr32(g_sine, 203, -31580);
-    wr32(g_sine, 204, -31356);
-    wr32(g_sine, 205, -31113);
-    wr32(g_sine, 206, -30852);
-    wr32(g_sine, 207, -30571);
-    wr32(g_sine, 208, -30273);
-    wr32(g_sine, 209, -29956);
-    wr32(g_sine, 210, -29621);
-    wr32(g_sine, 211, -29268);
-    wr32(g_sine, 212, -28898);
-    wr32(g_sine, 213, -28510);
-    wr32(g_sine, 214, -28105);
-    wr32(g_sine, 215, -27683);
-    wr32(g_sine, 216, -27245);
-    wr32(g_sine, 217, -26790);
-    wr32(g_sine, 218, -26319);
-    wr32(g_sine, 219, -25832);
-    wr32(g_sine, 220, -25329);
-    wr32(g_sine, 221, -24811);
-    wr32(g_sine, 222, -24279);
-    wr32(g_sine, 223, -23731);
-    wr32(g_sine, 224, -23170);
-    wr32(g_sine, 225, -22594);
-    wr32(g_sine, 226, -22005);
-    wr32(g_sine, 227, -21403);
-    wr32(g_sine, 228, -20787);
-    wr32(g_sine, 229, -20159);
-    wr32(g_sine, 230, -19519);
-    wr32(g_sine, 231, -18868);
-    wr32(g_sine, 232, -18204);
-    wr32(g_sine, 233, -17530);
-    wr32(g_sine, 234, -16846);
-    wr32(g_sine, 235, -16151);
-    wr32(g_sine, 236, -15446);
-    wr32(g_sine, 237, -14732);
-    wr32(g_sine, 238, -14010);
-    wr32(g_sine, 239, -13279);
-    wr32(g_sine, 240, -12539);
-    wr32(g_sine, 241, -11793);
-    wr32(g_sine, 242, -11039);
-    wr32(g_sine, 243, -10278);
-    wr32(g_sine, 244, -9512);
-    wr32(g_sine, 245, -8739);
-    wr32(g_sine, 246, -7962);
-    wr32(g_sine, 247, -7179);
-    wr32(g_sine, 248, -6393);
-    wr32(g_sine, 249, -5602);
-    wr32(g_sine, 250, -4808);
-    wr32(g_sine, 251, -4011);
-    wr32(g_sine, 252, -3212);
-    wr32(g_sine, 253, -2410);
-    wr32(g_sine, 254, -1608);
-    wr32(g_sine, 255, -804);
+    /* 残りは対称性で展開する: 65..127 は 128-i の鏡像、
+     * 128..255 は前半の符号反転 (表の値は従来と同一) */
+    {
+        int32 i;
+        i = 65;
+        while (i < 128) {
+            wr32(g_sine, i, rd32(g_sine, 128 - i));
+            i = i + 1;
+        }
+        i = 128;
+        while (i < 256) {
+            wr32(g_sine, i, 0 - rd32(g_sine, i - 128));
+            i = i + 1;
+        }
+    }
  }
 
 /* MIDI ノート 36..96 の位相増分を代入で埋める */
@@ -1180,6 +1007,545 @@ int64 fnv_init()
     return v;
 }
 
+/* ============================================================
+ * エフェクトラック (マスターのセンド/リターン)
+ *
+ * エフェクトは共通の枠組み (モジュール登録表) で管理する。
+ * 各モジュールは「名前・センド CC・既定 ON/OFF・既定センド・
+ * wet トリム・1 フレーム処理・自分の状態置き場」を持ち、
+ * ラック側 (fx_frame) は登録表を回してセンドバスの受け渡しと
+ * 処理呼び出しをする。新エフェクトの追加は「処理関数を 1 つ
+ * 書いて fx_init の登録表に 1 行足し、fx_proc の振り分けに
+ * 1 行足す」で済む (doc/synth-design.md のエフェクトラック
+ * の節に手順)。
+ *
+ * 登録表の並び順がそのままチェーンモードの直列順になる:
+ *   0 Chorus (CC93) -> 1 Delay (CC94) -> 2 Reverb (CC91)
+ * パラレルモード (既定) では各モジュールが自分のセンドバス
+ * だけを受けて wet をマスターへ直接返す。チェーンモード
+ * では信号が表の順に直列を通る: 各段の入力は「前段の出力 +
+ * その段へのセンドバス」で、戻りは最終段の出力だけになる
+ * (センドは各段への注入量として働く。割り切りは doc 参照)。
+ *
+ * 処理関数は入力フレーム (g_fxin) とパラメータと自分の状態
+ * だけで動き、synth 本体の状態 (ボイス等) には触れない。
+ * 将来ミキサー側へ同じモジュールを持っていくための形。
+ *
+ * 状態置き場は既存の作法どおりファイルスコープの char 配列。
+ * 遅延ラインはサンプルを int16 で持ち、fx_rd16 / fx_wr16 の
+ * バイト合成で読み書きする (nori 配置ずれ対策)。
+ * ============================================================ */
+#define FX_N 3
+#define FX_CHO 0
+#define FX_DLY 1
+#define FX_RVB 2
+
+char g_fxnm[48];    /* モジュール名 16 バイト x 3 */
+char g_fxmeta[96];  /* 登録表 3 モジュール x 8 ワード:
+                       +0 センド CC +1 既定 ON +2 既定センド
+                       +3 wet トリム (256 = 1.0) */
+char g_fxmod[48];   /* モジュール実行時状態 3 x 4 ワード:
+                       +0 ON/OFF */
+char g_fxctl[64];   /* ラック全体 16 ワード:
+                       +0 どれか ON か +1 チェーンモード
+                       +2 個別指定を見た +3 fxdbg
+                       +4..+6 モノラルセンド (モジュール順)
+                       +7 コーラス LFO 位相 (32bit 蓄積) */
+char g_fxin[32];    /* 処理への入力フレーム (0=L 1=R) */
+char g_fxout[32];   /* 処理からの出力フレーム (同上) */
+char g_fxbus[96];   /* モジュールごとのセンドバス 3 x 2 ワード */
+char g_fxwet[32];   /* ラックの wet リターン (0=L 1=R) */
+char g_psum[64];    /* MT のパート別ドライ和 8 x 2 ワード */
+char g_cho[8192];   /* コーラス遅延 2ch x 2048 サンプル x 2B */
+char g_dly[65536];  /* ディレイ遅延 2ch x 16384 サンプル x 2B */
+char g_rvb[50900];  /* リバーブ遅延 (配置は fx_init) */
+char g_fxoff[128];  /* リバーブ各ラインの先頭位置 32 ワード
+                       (ch*12 + line、line = comb 8 + allpass 4) */
+char g_fxlen[128];  /* リバーブ各ラインの長さ (同上) */
+char g_fxpos[64];   /* 書き位置 int16 x 32: リバーブ 0..23、
+                       コーラス 24/25 (L/R)、ディレイ 26/27 */
+char g_fxdamp[64];  /* リバーブ comb のダンピング状態
+                       int16 x 16 (ch*8 + comb) */
+
+int32 fx_rd16(char *p, int32 idx)
+{
+    int32 o;
+    int32 v;
+    o = idx * 2;
+    v = (p[o] & 255) | ((p[o + 1] & 255) << 8);
+    if (v >= 32768) {
+        v = v - 65536;
+    }
+    return v;
+}
+
+void fx_wr16(char *p, int32 idx, int32 v)
+{
+    int32 o;
+    o = idx * 2;
+    if (v > 32767) {
+        v = 32767;
+    }
+    if (v < 0 - 32768) {
+        v = 0 - 32768;
+    }
+    p[o] = (char)(v & 255);
+    p[o + 1] = (char)((v >> 8) & 255);
+}
+
+int32 fx_clip(int32 v)
+{
+    if (v > 30000) {
+        return 30000;
+    }
+    if (v < 0 - 30000) {
+        return 0 - 30000;
+    }
+    return v;
+}
+
+/* Freeverb 系の遅延長 (44100Hz)。右 ch は +23 サンプルずらす */
+int32 fx_comb_len(int32 i)
+{
+    if (i == 0) { return 1116; }
+    if (i == 1) { return 1188; }
+    if (i == 2) { return 1277; }
+    if (i == 3) { return 1356; }
+    if (i == 4) { return 1422; }
+    if (i == 5) { return 1491; }
+    if (i == 6) { return 1557; }
+    return 1617;
+}
+
+int32 fx_ap_len(int32 i)
+{
+    if (i == 0) { return 556; }
+    if (i == 1) { return 441; }
+    if (i == 2) { return 341; }
+    return 225;
+}
+
+void fx_refresh()
+{
+    int32 m;
+    int32 any;
+    any = 0;
+    m = 0;
+    while (m < FX_N) {
+        if (rd32(g_fxmod, m * 4) != 0) {
+            any = 1;
+        }
+        m = m + 1;
+    }
+    wr32(g_fxctl, 0, any);
+}
+
+/* 登録表の初期化と状態クリア。モジュールを足すときは
+ * ここの表に 1 行 (名前・CC・既定 ON・既定センド・トリム)
+ * を足す */
+void fx_init()
+{
+    int32 m;
+    int32 i;
+    int32 off;
+    int32 ch;
+    set_name(g_fxnm, 0, "Chorus");
+    set_name(g_fxnm, 1, "Delay");
+    set_name(g_fxnm, 2, "Reverb");
+    wr32(g_fxmeta, 0 * 8 + 0, 93);   /* Chorus: CC93 */
+    wr32(g_fxmeta, 0 * 8 + 1, 0);
+    wr32(g_fxmeta, 0 * 8 + 2, 32);
+    wr32(g_fxmeta, 0 * 8 + 3, 256);
+    wr32(g_fxmeta, 1 * 8 + 0, 94);   /* Delay: CC94 */
+    wr32(g_fxmeta, 1 * 8 + 1, 0);
+    wr32(g_fxmeta, 1 * 8 + 2, 32);
+    wr32(g_fxmeta, 1 * 8 + 3, 256);
+    wr32(g_fxmeta, 2 * 8 + 0, 91);   /* Reverb: CC91 */
+    wr32(g_fxmeta, 2 * 8 + 1, 1);
+    wr32(g_fxmeta, 2 * 8 + 2, 40);
+    wr32(g_fxmeta, 2 * 8 + 3, 192);
+    m = 0;
+    while (m < FX_N) {
+        wr32(g_fxmod, m * 4 + 0, rd32(g_fxmeta, m * 8 + 1));
+        wr32(g_fxctl, 4 + m, rd32(g_fxmeta, m * 8 + 2));
+        m = m + 1;
+    }
+    wr32(g_fxctl, 1, 0);
+    wr32(g_fxctl, 2, 0);
+    wr32(g_fxctl, 3, 0);
+    wr32(g_fxctl, 7, 0);
+    off = 0;
+    ch = 0;
+    while (ch < 2) {
+        i = 0;
+        while (i < 8) {
+            int32 ln;
+            ln = fx_comb_len(i);
+            if (ch == 1) {
+                ln = ln + 23;
+            }
+            wr32(g_fxoff, ch * 12 + i, off);
+            wr32(g_fxlen, ch * 12 + i, ln);
+            off = off + ln;
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 4) {
+            int32 ln2;
+            ln2 = fx_ap_len(i);
+            if (ch == 1) {
+                ln2 = ln2 + 23;
+            }
+            wr32(g_fxoff, ch * 12 + 8 + i, off);
+            wr32(g_fxlen, ch * 12 + 8 + i, ln2);
+            off = off + ln2;
+            i = i + 1;
+        }
+        ch = ch + 1;
+    }
+    i = 0;
+    while (i < 8192) {
+        g_cho[i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 65536) {
+        g_dly[i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 50900) {
+        g_rvb[i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 64) {
+        g_fxpos[i] = 0;
+        g_fxdamp[i] = 0;
+        i = i + 1;
+    }
+    fx_refresh();
+}
+
+void fx_toggle(int32 mod)
+{
+    if (rd32(g_fxmod, mod * 4) != 0) {
+        wr32(g_fxmod, mod * 4, 0);
+    } else {
+        wr32(g_fxmod, mod * 4, 1);
+    }
+    fx_refresh();
+}
+
+void fx_print_state()
+{
+    int32 m;
+    int32 i;
+    out_str("synth: fx");
+    m = 0;
+    while (m < FX_N) {
+        putc(32);
+        i = 0;
+        while (i < 16 && g_fxnm[m * 16 + i] != 0) {
+            putc(g_fxnm[m * 16 + i]);
+            i = i + 1;
+        }
+        putc(61);
+        if (rd32(g_fxmod, m * 4) != 0) {
+            out_str("on");
+        } else {
+            out_str("off");
+        }
+        m = m + 1;
+    }
+    out_str(" route=");
+    if (rd32(g_fxctl, 1) != 0) {
+        out_str("chain");
+    } else {
+        out_str("parallel");
+    }
+    putc(10);
+}
+
+/* 起動引数のエフェクト指定。消費したら 1 を返す。
+ * nofx = 全 OFF、rev / dly / cho = 挙げたものだけ ON
+ * (最初に 1 つ挙がった時点で全 OFF から始める)、
+ * fxchain = チェーンモード、fxdbg = チャンクエネルギー印字 */
+int32 fx_arg(char *s)
+{
+    int32 m;
+    int32 k;
+    if (streq(s, "nofx")) {
+        m = 0;
+        while (m < FX_N) {
+            wr32(g_fxmod, m * 4, 0);
+            m = m + 1;
+        }
+        wr32(g_fxctl, 2, 1);
+        fx_refresh();
+        return 1;
+    }
+    if (streq(s, "fxchain")) {
+        wr32(g_fxctl, 1, 1);
+        return 1;
+    }
+    if (streq(s, "fxdbg")) {
+        wr32(g_fxctl, 3, 1);
+        return 1;
+    }
+    m = 0 - 1;
+    if (streq(s, "cho")) {
+        m = FX_CHO;
+    }
+    if (streq(s, "dly")) {
+        m = FX_DLY;
+    }
+    if (streq(s, "rev")) {
+        m = FX_RVB;
+    }
+    if (m >= 0) {
+        if (rd32(g_fxctl, 2) == 0) {
+            k = 0;
+            while (k < FX_N) {
+                wr32(g_fxmod, k * 4, 0);
+                k = k + 1;
+            }
+            wr32(g_fxctl, 2, 1);
+        }
+        wr32(g_fxmod, m * 4, 1);
+        fx_refresh();
+        return 1;
+    }
+    return 0;
+}
+
+/* コーラス: 基準 20ms (882 サンプル) の遅延を LFO 0.6Hz で
+ * ±264 サンプル (約 ±6ms) 変調する変調ディレイ。読みは
+ * 隣接 2 サンプルの平均 (安い補間)。wet は遅延信号そのもの
+ * で、ドライとの干渉がコーラス感になる */
+void fx_proc_cho(int32 nch)
+{
+    int32 ch;
+    int32 ph;
+    int32 dly;
+    ph = rd32(g_fxctl, 7);
+    wr32(g_fxctl, 7, ph + 58426);
+    dly = 882 + ((sine_at((ph >> 16) & 65535) * 264) >> 15);
+    ch = 0;
+    while (ch < nch) {
+        int32 wp;
+        int32 rp;
+        int32 s0;
+        int32 s1;
+        wp = fx_rd16(g_fxpos, 24 + ch);
+        fx_wr16(g_cho, ch * 2048 + wp, rd32(g_fxin, ch));
+        rp = wp - dly;
+        while (rp < 0) {
+            rp = rp + 2048;
+        }
+        s0 = fx_rd16(g_cho, ch * 2048 + rp);
+        rp = rp + 1;
+        if (rp >= 2048) {
+            rp = rp - 2048;
+        }
+        s1 = fx_rd16(g_cho, ch * 2048 + rp);
+        wr32(g_fxout, ch, (s0 + s1) >> 1);
+        wp = wp + 1;
+        if (wp >= 2048) {
+            wp = 0;
+        }
+        fx_wr16(g_fxpos, 24 + ch, wp);
+        ch = ch + 1;
+    }
+}
+
+/* ディレイ: 13230 サンプル (300ms) のフィードバック
+ * ディレイ。帰還率は 11468/32768 ≒ 0.35 */
+void fx_proc_dly(int32 nch)
+{
+    int32 ch;
+    ch = 0;
+    while (ch < nch) {
+        int32 wp;
+        int32 rp;
+        int32 d;
+        wp = fx_rd16(g_fxpos, 26 + ch);
+        rp = wp - 13230;
+        while (rp < 0) {
+            rp = rp + 16384;
+        }
+        d = fx_rd16(g_dly, ch * 16384 + rp);
+        fx_wr16(g_dly, ch * 16384 + wp,
+                rd32(g_fxin, ch) + ((d * 11468) >> 15));
+        wr32(g_fxout, ch, d);
+        wp = wp + 1;
+        if (wp >= 16384) {
+            wp = 0;
+        }
+        fx_wr16(g_fxpos, 26 + ch, wp);
+        ch = ch + 1;
+    }
+}
+
+/* リバーブ: Freeverb 系。ダンピング付き (帰還路の 1 次
+ * ローパス) コムフィルタ 8 本の並列 → オールパス 4 段直列。
+ * 入力ゲイン 1/4、コム帰還は 26214/32768 ≒ 0.80 で、
+ * ダンピングと合わせて発散しない */
+void fx_proc_rvb(int32 nch)
+{
+    int32 ch;
+    ch = 0;
+    while (ch < nch) {
+        int32 inp;
+        int32 acc;
+        int32 i;
+        inp = rd32(g_fxin, ch) >> 2;
+        acc = 0;
+        i = 0;
+        while (i < 8) {
+            int32 li;
+            int32 pos;
+            int32 y;
+            int32 filt;
+            li = ch * 12 + i;
+            pos = fx_rd16(g_fxpos, li);
+            y = fx_rd16(g_rvb, rd32(g_fxoff, li) + pos);
+            filt = fx_rd16(g_fxdamp, ch * 8 + i);
+            filt = filt + ((y - filt) >> 2);
+            fx_wr16(g_fxdamp, ch * 8 + i, filt);
+            fx_wr16(g_rvb, rd32(g_fxoff, li) + pos,
+                    inp + ((filt * 26214) >> 15));
+            acc = acc + y;
+            pos = pos + 1;
+            if (pos >= rd32(g_fxlen, li)) {
+                pos = 0;
+            }
+            fx_wr16(g_fxpos, li, pos);
+            i = i + 1;
+        }
+        acc = acc >> 3;
+        i = 0;
+        while (i < 4) {
+            int32 li2;
+            int32 pos2;
+            int32 buf;
+            int32 outv;
+            li2 = ch * 12 + 8 + i;
+            pos2 = fx_rd16(g_fxpos, li2);
+            buf = fx_rd16(g_rvb, rd32(g_fxoff, li2) + pos2);
+            outv = buf - acc;
+            fx_wr16(g_rvb, rd32(g_fxoff, li2) + pos2,
+                    acc + (outv >> 1));
+            acc = outv;
+            pos2 = pos2 + 1;
+            if (pos2 >= rd32(g_fxlen, li2)) {
+                pos2 = 0;
+            }
+            fx_wr16(g_fxpos, li2, pos2);
+            i = i + 1;
+        }
+        wr32(g_fxout, ch, acc);
+        ch = ch + 1;
+    }
+}
+
+/* モジュール処理の振り分け + wet トリム。モジュールを
+ * 足すときはここに 1 行足す */
+void fx_proc(int32 mod, int32 nch)
+{
+    int32 trim;
+    int32 ch;
+    if (mod == FX_CHO) {
+        fx_proc_cho(nch);
+    } else if (mod == FX_DLY) {
+        fx_proc_dly(nch);
+    } else {
+        fx_proc_rvb(nch);
+    }
+    trim = rd32(g_fxmeta, mod * 8 + 3);
+    if (trim != 256) {
+        ch = 0;
+        while (ch < nch) {
+            wr32(g_fxout, ch, (rd32(g_fxout, ch) * trim) >> 8);
+            ch = ch + 1;
+        }
+    }
+    if (nch == 1) {
+        wr32(g_fxout, 1, 0);
+    }
+}
+
+/* ラックの 1 フレーム処理。g_fxbus (モジュール x L/R) を
+ * 読んで wet を g_fxwet に置く。ルーティング:
+ *   パラレル: 各モジュールが自分のバスだけを受け、wet の
+ *             和が戻りになる
+ *   チェーン: 表の順に直列。各段の入力は前段の出力 + その
+ *             段へのバスで、最終段の出力だけが戻りになる。
+ *             OFF の段は素通りする */
+void fx_frame(int32 nch)
+{
+    int32 mod;
+    int32 ch;
+    wr32(g_fxwet, 0, 0);
+    wr32(g_fxwet, 1, 0);
+    if (rd32(g_fxctl, 0) == 0) {
+        return;
+    }
+    if (rd32(g_fxctl, 1) != 0) {
+        int32 curL;
+        int32 curR;
+        curL = 0;
+        curR = 0;
+        mod = 0;
+        while (mod < FX_N) {
+            if (rd32(g_fxmod, mod * 4) != 0) {
+                wr32(g_fxin, 0,
+                     fx_clip(curL + rd32(g_fxbus, mod * 2)));
+                wr32(g_fxin, 1,
+                     fx_clip(curR + rd32(g_fxbus, mod * 2 + 1)));
+                fx_proc(mod, nch);
+                curL = rd32(g_fxout, 0);
+                curR = rd32(g_fxout, 1);
+            }
+            mod = mod + 1;
+        }
+        wr32(g_fxwet, 0, curL);
+        wr32(g_fxwet, 1, curR);
+        return;
+    }
+    mod = 0;
+    while (mod < FX_N) {
+        if (rd32(g_fxmod, mod * 4) != 0) {
+            wr32(g_fxin, 0, rd32(g_fxbus, mod * 2));
+            wr32(g_fxin, 1, rd32(g_fxbus, mod * 2 + 1));
+            fx_proc(mod, nch);
+            ch = 0;
+            while (ch < nch) {
+                wr32(g_fxwet, ch,
+                     rd32(g_fxwet, ch) + rd32(g_fxout, ch));
+                ch = ch + 1;
+            }
+        }
+        mod = mod + 1;
+    }
+}
+
+/* モノラルモード用: ドライ 1 サンプルにラックを通した
+ * 出力を返す。バスはモノラルセンド (g_fxctl +4..) で作る */
+int32 fx_mono(int32 dry)
+{
+    int32 mod;
+    mod = 0;
+    while (mod < FX_N) {
+        wr32(g_fxbus, mod * 2,
+             (dry * rd32(g_fxctl, 4 + mod)) / 127);
+        wr32(g_fxbus, mod * 2 + 1, 0);
+        mod = mod + 1;
+    }
+    fx_frame(1);
+    return fx_clip(dry + rd32(g_fxwet, 0));
+}
+
 int32 run_demo(int32 engine)
 {
     int64 fnv;
@@ -1203,6 +1569,7 @@ int32 run_demo(int32 engine)
         out_str("synth: psg demo\n");
     }
     print_preset(engine, rd32(g_cur, 1));
+    fx_print_state();
     step = 0;
     while (step < NSTEPS) {
         int32 remain;
@@ -1230,6 +1597,9 @@ int32 run_demo(int32 engine)
             while (k < n) {
                 int32 smp;
                 smp = mix_sample();
+                if (rd32(g_fxctl, 0) != 0) {
+                    smp = fx_mono(smp);
+                }
                 g_buf[k * 2] = (char)(smp & 255);
                 g_buf[k * 2 + 1] = (char)((smp >> 8) & 255);
                 fnv = (fnv ^ (g_buf[k * 2] & 255)) * fnv_prime;
@@ -1280,8 +1650,9 @@ int32 run_play(int32 engine)
         out_str("synth: cannot open audio\n");
         return 1;
     }
-    out_str("synth: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, ESC=end\n");
+    out_str("synth: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, R/D/C=fx toggle, X=chain, ESC=end\n");
     print_preset(engine, rd32(g_cur, 1));
+    fx_print_state();
     while (done == 0) {
         int64 c;
         int32 k;
@@ -1302,6 +1673,22 @@ int32 run_play(int32 engine)
         } else if (c == 93) {
             load_preset(engine, (rd32(g_cur, 1) + 1) & 15);
             print_preset(engine, rd32(g_cur, 1));
+        } else if (c == 82) {
+            fx_toggle(FX_RVB);
+            fx_print_state();
+        } else if (c == 68) {
+            fx_toggle(FX_DLY);
+            fx_print_state();
+        } else if (c == 67) {
+            fx_toggle(FX_CHO);
+            fx_print_state();
+        } else if (c == 88) {
+            if (rd32(g_fxctl, 1) != 0) {
+                wr32(g_fxctl, 1, 0);
+            } else {
+                wr32(g_fxctl, 1, 1);
+            }
+            fx_print_state();
         } else if (c > 0) {
             int32 semi;
             semi = key_semi((int32)c);
@@ -1314,6 +1701,9 @@ int32 run_play(int32 engine)
         while (k < 512) {
             int32 smp;
             smp = mix_sample();
+            if (rd32(g_fxctl, 0) != 0) {
+                smp = fx_mono(smp);
+            }
             g_buf[k * 2] = (char)(smp & 255);
             g_buf[k * 2 + 1] = (char)((smp >> 8) & 255);
             fnv = (fnv ^ (g_buf[k * 2] & 255)) * fnv_prime;
@@ -1416,6 +1806,15 @@ void midi_event(int32 status, int32 d1, int32 d2)
     } else if (hi == 176) {
         if (d1 == 120 || d1 == 123) {
             midi_all_off();
+        } else if (d1 == 91 || d1 == 93 || d1 == 94) {
+            int32 m2;
+            m2 = 0;
+            while (m2 < FX_N) {
+                if (rd32(g_fxmeta, m2 * 8 + 0) == d1) {
+                    wr32(g_fxctl, 4 + m2, d2);
+                }
+                m2 = m2 + 1;
+            }
         }
     } else if (hi == 192) {
         int32 eng;
@@ -1563,6 +1962,7 @@ int32 run_midi(char *path, int32 engine)
         return 1;
     }
     out_str("synth: midi mode\n");
+    fx_print_state();
     load_preset(engine, 0);
     print_preset(engine, 0);
     while (1) {
@@ -1602,6 +2002,9 @@ int32 run_midi(char *path, int32 engine)
         while (k < 512) {
             int32 smp;
             smp = mix_sample();
+            if (rd32(g_fxctl, 0) != 0) {
+                smp = fx_mono(smp);
+            }
             g_buf[k * 2] = (char)(smp & 255);
             g_buf[k * 2 + 1] = (char)((smp >> 8) & 255);
             fnv = (fnv ^ (g_buf[k * 2] & 255)) * fnv_prime;
@@ -1666,7 +2069,9 @@ char g_mv[2048];   /* MT ボイス 32 x 16 ワード (g_vs と同じ
 char g_mvp[2048];  /* MT ボイスごとの実効パラメータ
                       (g_vp と同じ並び、+10 に op モード) */
 char g_part[256];  /* パート 8 x 8 ワード:
-                      +0 preset +1 vol (CC7) +2 pan (CC10) */
+                      +0 preset +1 vol (CC7) +2 pan (CC10)
+                      +3..+5 エフェクトセンド (モジュール順、
+                      登録表の CC に対応) */
 char g_mctl[64];   /* +0 次の seq +1 pool 上限 +2 dbg
                       +3 同時発音ピーク +4 op 上書き
                       (0=プリセット通り 1=2op 固定
@@ -1726,9 +2131,15 @@ void mt_init(int32 pool, int32 dbg, int32 opovr)
     int32 v;
     p = 0;
     while (p < NPART) {
+        int32 m;
         wr32(g_part, p * 8 + 0, mt_def_preset(p));
         wr32(g_part, p * 8 + 1, 127);
         wr32(g_part, p * 8 + 2, 64);
+        m = 0;
+        while (m < FX_N) {
+            wr32(g_part, p * 8 + 3 + m, rd32(g_fxmeta, m * 8 + 2));
+            m = m + 1;
+        }
         p = p + 1;
     }
     v = 0;
@@ -1952,6 +2363,14 @@ void mt_mix()
     int32 vi;
     sumL = 0;
     sumR = 0;
+    if (rd32(g_fxctl, 0) != 0) {
+        int32 pp;
+        pp = 0;
+        while (pp < 16) {
+            wr32(g_psum, pp, 0);
+            pp = pp + 1;
+        }
+    }
     vi = 0;
     while (vi < NVOICE) {
         int32 b;
@@ -2076,6 +2495,14 @@ void mt_mix()
                 t = (t * vol) / 127;
                 sumL = sumL + ((t * (127 - pan)) >> 7);
                 sumR = sumR + ((t * pan) >> 7);
+                if (rd32(g_fxctl, 0) != 0) {
+                    wr32(g_psum, part * 2,
+                         rd32(g_psum, part * 2) +
+                         ((t * (127 - pan)) >> 7));
+                    wr32(g_psum, part * 2 + 1,
+                         rd32(g_psum, part * 2 + 1) +
+                         ((t * pan) >> 7));
+                }
             }
             wr32(g_mv, b + 3, pc);
             wr32(g_mv, b + 4, pm);
@@ -2126,6 +2553,15 @@ void mt_event(int32 status, int32 d1, int32 d2)
             wr32(g_part, ch * 8 + 2, d2);
         } else if (d1 == 120 || d1 == 123) {
             mt_all_off(ch);
+        } else {
+            int32 m2;
+            m2 = 0;
+            while (m2 < FX_N) {
+                if (rd32(g_fxmeta, m2 * 8 + 0) == d1) {
+                    wr32(g_part, ch * 8 + 3 + m2, d2);
+                }
+                m2 = m2 + 1;
+            }
         }
     } else if (hi == 192) {
         int32 idx;
@@ -2233,6 +2669,8 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     int64 rabs;
     int64 cyc_per_ms;
     int64 ins0;
+    int32 peak;
+    int32 chunkno;
     fnv = fnv_init();
     fnv_prime = ((int64)256 << 32) + 435;
     total = 0;
@@ -2246,6 +2684,8 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     labs = 0;
     rabs = 0;
     cyc_per_ms = 0;
+    peak = 0;
+    chunkno = 0;
     i = 0;
     while (i < 16) {
         wr32(g_mst, i, 0);
@@ -2273,6 +2713,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
         print_part_preset(i, rd32(g_part, i * 8 + 0));
         i = i + 1;
     }
+    fx_print_state();
     /* サイクル/秒の較正: perf_read はマシン全体の通算
      * カウンタなので、100ms の sleep を挟んだ差分と
      * uptime の差分から 1ms あたりのサイクル数が測れる */
@@ -2326,7 +2767,9 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
         {
             int64 c0;
             int64 cost;
+            int64 ce;
             c0 = perf_read(0);
+            ce = 0;
             k = 0;
             while (k < 512) {
                 int32 L;
@@ -2334,6 +2777,31 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 mt_mix();
                 L = rd32(g_mix, 0);
                 R = rd32(g_mix, 1);
+                if (rd32(g_fxctl, 0) != 0) {
+                    int32 mod2;
+                    int32 p2;
+                    mod2 = 0;
+                    while (mod2 < FX_N) {
+                        int32 bl;
+                        int32 br;
+                        bl = 0;
+                        br = 0;
+                        p2 = 0;
+                        while (p2 < NPART) {
+                            int32 snd;
+                            snd = rd32(g_part, p2 * 8 + 3 + mod2);
+                            bl = bl + (rd32(g_psum, p2 * 2) * snd) / 127;
+                            br = br + (rd32(g_psum, p2 * 2 + 1) * snd) / 127;
+                            p2 = p2 + 1;
+                        }
+                        wr32(g_fxbus, mod2 * 2, bl);
+                        wr32(g_fxbus, mod2 * 2 + 1, br);
+                        mod2 = mod2 + 1;
+                    }
+                    fx_frame(2);
+                    L = fx_clip(L + rd32(g_fxwet, 0));
+                    R = fx_clip(R + rd32(g_fxwet, 1));
+                }
                 g_buf[k * 4] = (char)(L & 255);
                 g_buf[k * 4 + 1] = (char)((L >> 8) & 255);
                 g_buf[k * 4 + 2] = (char)(R & 255);
@@ -2344,16 +2812,40 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 fnv = (fnv ^ (g_buf[k * 4 + 3] & 255)) * fnv_prime;
                 if (L < 0) {
                     labs = labs - L;
+                    ce = ce - L;
+                    if (0 - L > peak) {
+                        peak = 0 - L;
+                    }
                 } else {
                     labs = labs + L;
+                    ce = ce + L;
+                    if (L > peak) {
+                        peak = L;
+                    }
                 }
                 if (R < 0) {
                     rabs = rabs - R;
+                    ce = ce - R;
+                    if (0 - R > peak) {
+                        peak = 0 - R;
+                    }
                 } else {
                     rabs = rabs + R;
+                    ce = ce + R;
+                    if (R > peak) {
+                        peak = R;
+                    }
                 }
                 k = k + 1;
             }
+            if (rd32(g_fxctl, 3) != 0) {
+                out_str("synth: fxdbg ");
+                out_num(chunkno);
+                putc(32);
+                out_num(ce);
+                putc(10);
+            }
+            chunkno = chunkno + 1;
             cost = perf_read(0) - c0;
             tot_cyc = tot_cyc + cost;
             if (cost > max_cyc) {
@@ -2391,6 +2883,9 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     out_str(" r=");
     out_num(rabs);
     putc(10);
+    out_str("synth: peak=");
+    out_num(peak);
+    putc(10);
     out_str("synth: perf cyc=");
     out_num(tot_cyc);
     out_str(" ins=");
@@ -2427,49 +2922,54 @@ int32 main(int32 argc, char **argv)
     int32 pool;
     int32 dbg;
     int32 opovr;
+    int32 ai;
     mode = 0;
     engine = 0;
     preset = 0;
     pool = 32;
     dbg = 0;
     opovr = 0;
+    fx_init();
     if (argc >= 2) {
         if (streq(argv[1], "fm") || streq(argv[1], "psg")) {
             mode = 0;
             if (streq(argv[1], "psg")) {
                 engine = 1;
             }
-            if (argc >= 3) {
-                preset = parse_num(argv[2]);
-                if (preset < 0 || preset > 15) {
-                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
-                    return 2;
+            ai = 2;
+            while (ai < argc) {
+                if (fx_arg(argv[ai])) {
+                } else {
+                    preset = parse_num(argv[ai]);
+                    if (preset < 0 || preset > 15) {
+                        out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
+                        return 2;
+                    }
                 }
+                ai = ai + 1;
             }
         } else if (streq(argv[1], "play")) {
             mode = 1;
             engine = 0;
-            if (argc >= 3) {
-                if (streq(argv[2], "psg")) {
+            ai = 2;
+            while (ai < argc) {
+                if (fx_arg(argv[ai])) {
+                } else if (ai == 2 && streq(argv[ai], "psg")) {
                     engine = 1;
-                } else if (streq(argv[2], "fm")) {
+                } else if (ai == 2 && streq(argv[ai], "fm")) {
                     engine = 0;
                 } else {
-                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
-                    return 2;
+                    preset = parse_num(argv[ai]);
+                    if (preset < 0 || preset > 15) {
+                        out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
+                        return 2;
+                    }
                 }
-            }
-            if (argc >= 4) {
-                preset = parse_num(argv[3]);
-                if (preset < 0 || preset > 15) {
-                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
-                    return 2;
-                }
+                ai = ai + 1;
             }
         } else if (streq(argv[1], "midi")) {
-            int32 ai;
             if (argc < 3) {
-                out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg]\n");
+                out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
                 return 2;
             }
             mode = 2;
@@ -2481,6 +2981,7 @@ int32 main(int32 argc, char **argv)
                     engine = 0;
                 } else if (streq(argv[ai], "dbg")) {
                     dbg = 1;
+                } else if (fx_arg(argv[ai])) {
                 } else if (streq(argv[ai], "2op")) {
                     opovr = 1;
                 } else if (streq(argv[ai], "4op")) {
@@ -2491,14 +2992,14 @@ int32 main(int32 argc, char **argv)
                     if (pv >= 1 && pv <= 32) {
                         pool = pv;
                     } else {
-                        out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg]\n");
+                        out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
                         return 2;
                     }
                 }
                 ai = ai + 1;
             }
         } else {
-            out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
+            out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
             return 2;
         }
     }
