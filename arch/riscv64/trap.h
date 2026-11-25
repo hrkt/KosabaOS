@@ -8,7 +8,7 @@
 
 void trap_init(void);  /* stvec を設定し、タイマ割り込みを有効にする */
 uint64_t trap_tick_count(void);  /* 起動以来の秒数 (klog の接頭辞用) */
-uint64_t trap_uptime_ms(void);   /* 起動以来のミリ秒 (uptime 用、実分解能 100ms) */
+uint64_t trap_uptime_ms(void);   /* 起動以来のミリ秒 (uptime 用、r_time 基準で 1ms 分解能) */
 
 /* スクリーンセーバー (doc/screensaver-design.md) へ走者の
  * 状態を渡す読み口。段2 (全面) に入ってよいかの判定材料 */
