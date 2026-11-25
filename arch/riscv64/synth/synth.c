@@ -5,7 +5,11 @@
  *   run synth psg      PSG デモ曲 (同じ曲)
  *   run synth play fm  シリアル鍵盤で FM を弾く
  *   run synth play psg シリアル鍵盤で PSG を弾く
- *   run synth midi <p> MIDI バイト列ストリームを読んで鳴らす
+ *   run synth fm <n>   プリセット n (0..15) でデモ曲
+ *                      (play でも第 3 引数で指定可。対話中は
+ *                      [ / ] キーで切り替え)
+ *   run synth midi <p> [fm|psg] MIDI バイト列ストリームを
+ *                      読んで鳴らす (エンジン既定は fm)
  *                      (smfplay の file モードの受け手。解釈は
  *                      下の run_midi のコメント参照)
  *
@@ -137,6 +141,30 @@ char g_ninc[244];   /* 音程表 61 点 x 4 バイト */
 char g_mel[32];
 char g_bas[32];
 char g_vs[512];     /* ボイス状態 64 ワード x 4 バイト */
+
+/* プリセット (doc/synth-design.md のプリセットの節)。
+ * 1 件 20 バイトのバイトパックで、FM / PSG 各 16 件:
+ *   +0 波形 (FM=0, PSG=1 矩形 / 2 ノイズ)  +1 レベルシフト
+ *   +2 atk  +4 dec  +6 sus  +8 rel (各 2 バイト LE)
+ *   FM : +10 変調比 x2  +12 変調の深さ  +14 変調 env 減衰
+ *        +16 変調 env 減衰 (release 時)
+ *   PSG: +10 デューティ閾値  +12 ノイズ混合量  +13 オクターブ
+ * 名前は 16 バイト枠 x 16 件。g_vp はボイスごとの実効
+ * パラメータ (trig がプリセットから写す、1 ボイス 16 ワード):
+ *   +0 atk +1 dec +2 sus +3 rel +4 変調の深さ +5 変調 env
+ *   減衰 +6 同 (release) +7 デューティ +8 ノイズ混合
+ *   +9 レベルシフト
+ * g_cur は現在の (エンジン, プリセット番号) の 2 ワード。
+ * g_gmf / g_gmp は GM プログラム番号 (>>3 のファミリー)
+ * からプリセット番号への対応表 */
+char g_pfm[320];
+char g_pps[320];
+char g_fnm[256];
+char g_pnm[256];
+char g_vp[512];
+char g_cur[32];
+char g_gmf[16];
+char g_gmp[16];
 
 int32 rd32(char *p, int32 idx)
 {
@@ -567,16 +595,250 @@ int32 sine_at(int32 phase)
     return a + (((b - a) * frac) >> 8);
 }
 
+
+int32 rd16u(char *p, int32 off)
+{
+    return (p[off] & 255) | ((p[off + 1] & 255) << 8);
+}
+
+void put16(char *p, int32 off, int32 v)
+{
+    p[off] = (char)(v & 255);
+    p[off + 1] = (char)((v >> 8) & 255);
+}
+
+void pset_c(char *tab, int32 idx, int32 wave, int32 lvl,
+            int32 atk, int32 dec, int32 sus, int32 rel)
+{
+    int32 o;
+    o = idx * 20;
+    tab[o] = (char)wave;
+    tab[o + 1] = (char)lvl;
+    put16(tab, o + 2, atk);
+    put16(tab, o + 4, dec);
+    put16(tab, o + 6, sus);
+    put16(tab, o + 8, rel);
+}
+
+/* FM の追加分 (変調比・深さ・変調 env)。pset_c と対で使う
+ * (IwaC は引数 8 つまでなので分けてある) */
+void pset_fx(int32 idx, int32 ratio, int32 depth,
+             int32 mrate, int32 mrel)
+{
+    int32 o;
+    o = idx * 20;
+    g_pfm[o + 10] = (char)ratio;
+    put16(g_pfm, o + 12, depth);
+    put16(g_pfm, o + 14, mrate);
+    put16(g_pfm, o + 16, mrel);
+}
+
+/* PSG の追加分 (デューティ・ノイズ混合・オクターブ)。
+ * pset_c と対で使う (引数 8 つまでのため) */
+void pset_px(int32 idx, int32 duty, int32 nmix, int32 oct)
+{
+    int32 o;
+    o = idx * 20;
+    put16(g_pps, o + 10, duty);
+    g_pps[o + 12] = (char)nmix;
+    g_pps[o + 13] = (char)oct;
+}
+
+void set_name(char *tab, int32 idx, char *s)
+{
+    int32 i;
+    i = 0;
+    while (i < 15 && s[i] != 0) {
+        tab[idx * 16 + i] = s[i];
+        i = i + 1;
+    }
+    while (i < 16) {
+        tab[idx * 16 + i] = 0;
+        i = i + 1;
+    }
+}
+
+/* プリセット表を埋める。0 番は段1 の従来音色そのもの
+ * (パラメータが全て従来の固定値と一致し、デモの FNV が
+ * 変わらないことを確認済み) */
+void fill_presets()
+{
+    pset_c(g_pfm, 0, 0, 2, 600, 20, 40000, 80);
+    pset_fx(0, 7, 20000, 30, 200);
+    pset_c(g_pfm, 1, 0, 2, 1200, 2, 14000, 50);
+    pset_fx(1, 2, 16000, 12, 80);
+    pset_c(g_pfm, 2, 0, 2, 2000, 6, 0, 90);
+    pset_fx(2, 8, 14000, 60, 300);
+    pset_c(g_pfm, 3, 0, 2, 800, 2, 20000, 40);
+    pset_fx(3, 6, 8000, 8, 60);
+    pset_c(g_pfm, 4, 0, 2, 1800, 10, 0, 120);
+    pset_fx(4, 8, 10000, 45, 200);
+    pset_c(g_pfm, 5, 0, 2, 120, 1, 60000, 30);
+    pset_fx(5, 4, 5000, 2, 20);
+    pset_c(g_pfm, 6, 0, 2, 1600, 5, 6000, 70);
+    pset_fx(6, 3, 11000, 35, 150);
+    pset_c(g_pfm, 7, 0, 1, 1400, 3, 22000, 45);
+    pset_fx(7, 5, 15000, 15, 60);
+    pset_c(g_pfm, 8, 0, 1, 1300, 4, 12000, 55);
+    pset_fx(8, 2, 7000, 25, 100);
+    pset_c(g_pfm, 9, 0, 1, 1500, 4, 10000, 55);
+    pset_fx(9, 3, 12000, 30, 120);
+    pset_c(g_pfm, 10, 0, 2, 60, 1, 52000, 25);
+    pset_fx(10, 4, 4500, 3, 25);
+    pset_c(g_pfm, 11, 0, 1, 220, 2, 46000, 35);
+    pset_fx(11, 4, 6500, 6, 40);
+    pset_c(g_pfm, 12, 0, 2, 150, 1, 50000, 30);
+    pset_fx(12, 2, 2500, 4, 30);
+    pset_c(g_pfm, 13, 0, 2, 1700, 2, 6000, 35);
+    pset_fx(13, 11, 13000, 18, 90);
+    pset_c(g_pfm, 14, 0, 1, 700, 1, 48000, 40);
+    pset_fx(14, 2, 8000, 5, 50);
+    pset_c(g_pfm, 15, 0, 2, 45, 1, 54000, 18);
+    pset_fx(15, 6, 6000, 2, 20);
+    set_name(g_fnm, 0, "Grand Piano");
+    set_name(g_fnm, 1, "Electric Piano");
+    set_name(g_fnm, 2, "Music Box");
+    set_name(g_fnm, 3, "Vibraphone");
+    set_name(g_fnm, 4, "Marimba");
+    set_name(g_fnm, 5, "Church Organ");
+    set_name(g_fnm, 6, "Acoustic Guitar");
+    set_name(g_fnm, 7, "Electric Guitar");
+    set_name(g_fnm, 8, "Acoustic Bass");
+    set_name(g_fnm, 9, "Electric Bass");
+    set_name(g_fnm, 10, "Strings");
+    set_name(g_fnm, 11, "Trumpet");
+    set_name(g_fnm, 12, "Flute");
+    set_name(g_fnm, 13, "Tubular Bells");
+    set_name(g_fnm, 14, "Synth Lead");
+    set_name(g_fnm, 15, "Synth Pad");
+    pset_c(g_pps, 0, 1, 2, 600, 20, 40000, 80);
+    pset_px(0, 32768, 0, 0);
+    pset_c(g_pps, 1, 1, 2, 900, 4, 14000, 60);
+    pset_px(1, 16384, 0, 0);
+    pset_c(g_pps, 2, 1, 2, 1600, 8, 0, 100);
+    pset_px(2, 8192, 0, 1);
+    pset_c(g_pps, 3, 1, 2, 500, 2, 20000, 45);
+    pset_px(3, 24576, 0, 0);
+    pset_c(g_pps, 4, 1, 2, 1700, 12, 0, 130);
+    pset_px(4, 32768, 30, 0);
+    pset_c(g_pps, 5, 1, 2, 130, 1, 60000, 30);
+    pset_px(5, 32768, 0, 0);
+    pset_c(g_pps, 6, 1, 2, 1500, 5, 6000, 70);
+    pset_px(6, 20500, 15, 0);
+    pset_c(g_pps, 7, 1, 1, 1200, 4, 14000, 55);
+    pset_px(7, 32768, 0, -1);
+    pset_c(g_pps, 8, 1, 2, 55, 1, 52000, 25);
+    pset_px(8, 16384, 0, 0);
+    pset_c(g_pps, 9, 1, 1, 200, 2, 46000, 35);
+    pset_px(9, 12288, 0, 0);
+    pset_c(g_pps, 10, 1, 2, 140, 1, 50000, 30);
+    pset_px(10, 40960, 0, 0);
+    pset_c(g_pps, 11, 1, 2, 1800, 3, 4000, 40);
+    pset_px(11, 8192, 0, 1);
+    pset_c(g_pps, 12, 1, 1, 800, 1, 48000, 40);
+    pset_px(12, 32768, 0, 0);
+    pset_c(g_pps, 13, 1, 1, 800, 1, 48000, 40);
+    pset_px(13, 6000, 20, 0);
+    pset_c(g_pps, 14, 2, 2, 2000, 25, 0, 200);
+    pset_px(14, 0, 0, 0);
+    pset_c(g_pps, 15, 1, 2, 40, 1, 54000, 18);
+    pset_px(15, 24576, 0, 0);
+    set_name(g_pnm, 0, "Chiptune Piano");
+    set_name(g_pnm, 1, "E.Piano");
+    set_name(g_pnm, 2, "Music Box");
+    set_name(g_pnm, 3, "Vibraphone");
+    set_name(g_pnm, 4, "Marimba");
+    set_name(g_pnm, 5, "Organ");
+    set_name(g_pnm, 6, "Guitar");
+    set_name(g_pnm, 7, "Bass");
+    set_name(g_pnm, 8, "Strings");
+    set_name(g_pnm, 9, "Trumpet");
+    set_name(g_pnm, 10, "Flute");
+    set_name(g_pnm, 11, "Bell");
+    set_name(g_pnm, 12, "Square Lead");
+    set_name(g_pnm, 13, "Saw Lead");
+    set_name(g_pnm, 14, "Noise Perc.");
+    set_name(g_pnm, 15, "Synth Pad");
+    g_gmf[0] = 0; g_gmf[1] = 2; g_gmf[2] = 5; g_gmf[3] = 6;
+    g_gmf[4] = 8; g_gmf[5] = 10; g_gmf[6] = 10; g_gmf[7] = 11;
+    g_gmf[8] = 11; g_gmf[9] = 12; g_gmf[10] = 14; g_gmf[11] = 15;
+    g_gmf[12] = 14; g_gmf[13] = 6; g_gmf[14] = 13; g_gmf[15] = 13;
+    g_gmp[0] = 0; g_gmp[1] = 2; g_gmp[2] = 5; g_gmp[3] = 6;
+    g_gmp[4] = 7; g_gmp[5] = 8; g_gmp[6] = 8; g_gmp[7] = 9;
+    g_gmp[8] = 9; g_gmp[9] = 10; g_gmp[10] = 12; g_gmp[11] = 15;
+    g_gmp[12] = 12; g_gmp[13] = 6; g_gmp[14] = 14; g_gmp[15] = 14;
+}
+
+/* "synth: preset <番号> <名前>" を印字する */
+void print_preset(int32 eng, int32 idx)
+{
+    int32 i;
+    out_str("synth: preset ");
+    out_num(idx);
+    putc(32);
+    i = 0;
+    while (i < 16) {
+        int32 c;
+        if (eng == 0) {
+            c = g_fnm[idx * 16 + i] & 255;
+        } else {
+            c = g_pnm[idx * 16 + i] & 255;
+        }
+        if (c == 0) {
+            break;
+        }
+        putc(c);
+        i = i + 1;
+    }
+    putc(10);
+}
+
+/* 10 進文字列を数にする。不正な文字があれば -1 */
+int32 parse_num(char *s)
+{
+    int32 v;
+    int32 i;
+    v = 0;
+    i = 0;
+    if (s[0] == 0) {
+        return 0 - 1;
+    }
+    while (s[i] != 0) {
+        if (s[i] < 48 || s[i] > 57) {
+            return 0 - 1;
+        }
+        v = v * 10 + (s[i] - 48);
+        i = i + 1;
+    }
+    return v;
+}
+
 /* ボイス状態 (g_vs の中): 1 ボイス 16 ワード、4 ボイス分。
  *   +0 active  +1 type (0=FM 1=矩形 2=ノイズ)  +2 note
  *   +3 搬送位相  +4 変調位相  +5 env (0..65535)
  *   +6 env stage (0=A 1=D 2=S 3=R)  +7 gate 残りサンプル
  *   +8 変調 env  +9 LFSR  +10 搬送増分  +11 変調増分
- * trig の引数 rr が次に使うボイス番号 (ラウンドロビン) */
+ * trig の引数 rr が次に使うボイス番号 (ラウンドロビン)。
+ * type が負なら波形は現在のプリセットから取る */
 void trig(int32 rr, int32 note, int32 gate, int32 type)
 {
     int32 b;
+    int32 eng;
+    int32 o;
+    char *tab;
+    int32 inc;
+    int32 oct;
     b = rr * 16;
+    eng = rd32(g_cur, 0);
+    if (eng == 0) {
+        tab = g_pfm;
+    } else {
+        tab = g_pps;
+    }
+    o = rd32(g_cur, 1) * 20;
+    if (type < 0) {
+        type = tab[o] & 255;  /* 波形はプリセットから */
+    }
     wr32(g_vs, b + 0, 1);
     wr32(g_vs, b + 1, type);
     wr32(g_vs, b + 2, note);
@@ -587,12 +849,46 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
     wr32(g_vs, b + 7, gate);
     wr32(g_vs, b + 8, 65535);
     wr32(g_vs, b + 9, 257);
-    if (note >= 36 && note <= 96) {
-        wr32(g_vs, b + 10, rd32(g_ninc, note - 36));
+    wr32(g_vp, b + 0, rd16u(tab, o + 2));
+    wr32(g_vp, b + 1, rd16u(tab, o + 4));
+    wr32(g_vp, b + 2, rd16u(tab, o + 6));
+    wr32(g_vp, b + 3, rd16u(tab, o + 8));
+    wr32(g_vp, b + 9, tab[o + 1] & 255);
+    if (eng == 0) {
+        wr32(g_vp, b + 4, rd16u(tab, o + 12));
+        wr32(g_vp, b + 5, rd16u(tab, o + 14));
+        wr32(g_vp, b + 6, rd16u(tab, o + 16));
+        wr32(g_vp, b + 7, 32768);
+        wr32(g_vp, b + 8, 0);
     } else {
-        wr32(g_vs, b + 10, 0);
+        wr32(g_vp, b + 4, 0);
+        wr32(g_vp, b + 5, 30);
+        wr32(g_vp, b + 6, 200);
+        wr32(g_vp, b + 7, rd16u(tab, o + 10));
+        wr32(g_vp, b + 8, tab[o + 12] & 255);
     }
-    wr32(g_vs, b + 11, (rd32(g_vs, b + 10) * 7) / 2);
+    if (note >= 36 && note <= 96) {
+        inc = rd32(g_ninc, note - 36);
+    } else {
+        inc = 0;
+    }
+    if (eng == 1) {
+        oct = tab[o + 13] & 255;
+        if (oct >= 128) {
+            oct = oct - 256;
+        }
+        if (oct > 0) {
+            inc = inc << oct;
+        } else if (oct < 0) {
+            inc = inc >> (0 - oct);
+        }
+    }
+    wr32(g_vs, b + 10, inc);
+    if (eng == 0) {
+        wr32(g_vs, b + 11, (inc * (tab[o + 10] & 255)) / 2);
+    } else {
+        wr32(g_vs, b + 11, inc);
+    }
 }
 
 /* 1 サンプル分のミックス (全ボイスの env も 1 段進める) */
@@ -616,6 +912,16 @@ int32 mix_sample()
             int32 lfsr;
             int32 inc_c;
             int32 inc_m;
+            int32 atk;
+            int32 dec;
+            int32 sus;
+            int32 rel;
+            int32 dep;
+            int32 mrate;
+            int32 mrel;
+            int32 duty;
+            int32 nmix;
+            int32 lvl;
             int32 outv;
             typ = rd32(g_vs, b + 1);
             pc = rd32(g_vs, b + 3);
@@ -627,21 +933,31 @@ int32 mix_sample()
             lfsr = rd32(g_vs, b + 9);
             inc_c = rd32(g_vs, b + 10);
             inc_m = rd32(g_vs, b + 11);
+            atk = rd32(g_vp, b + 0);
+            dec = rd32(g_vp, b + 1);
+            sus = rd32(g_vp, b + 2);
+            rel = rd32(g_vp, b + 3);
+            dep = rd32(g_vp, b + 4);
+            mrate = rd32(g_vp, b + 5);
+            mrel = rd32(g_vp, b + 6);
+            duty = rd32(g_vp, b + 7);
+            nmix = rd32(g_vp, b + 8);
+            lvl = rd32(g_vp, b + 9);
             outv = 0;
             if (stg == 0) {
-                env = env + 600;
+                env = env + atk;
                 if (env >= 65535) {
                     env = 65535;
                     stg = 1;
                 }
             } else if (stg == 1) {
-                env = env - 20;
-                if (env <= 40000) {
-                    env = 40000;
+                env = env - dec;
+                if (env <= sus) {
+                    env = sus;
                     stg = 2;
                 }
             } else if (stg == 3) {
-                env = env - 80;
+                env = env - rel;
                 if (env <= 0) {
                     env = 0;
                     wr32(g_vs, b + 0, 0);
@@ -655,9 +971,9 @@ int32 mix_sample()
             }
             if (menv > 12000) {
                 if (stg == 3) {
-                    menv = menv - 200;
+                    menv = menv - mrel;
                 } else {
-                    menv = menv - 30;
+                    menv = menv - mrate;
                 }
             }
             if (rd32(g_vs, b + 0) != 0) {
@@ -668,22 +984,35 @@ int32 mix_sample()
                     int32 car;
                     pm = (pm + inc_m) & 65535;
                     mod = sine_at(pm);
-                    depth = (20000 * menv) >> 16;
+                    depth = (dep * menv) >> 16;
                     off = (mod * depth) >> 15;
                     pc = (pc + inc_c) & 65535;
                     car = sine_at((pc + off) & 65535);
                     outv = (car * env) >> 16;
-                    sum = sum + (outv >> 2);
+                    sum = sum + (outv >> lvl);
                 } else if (typ == 1) {
                     int32 sq;
                     pc = (pc + inc_c) & 65535;
-                    if (pc < 32768) {
+                    if (pc < duty) {
                         sq = 32767;
                     } else {
                         sq = 0 - 32767;
                     }
                     outv = (sq * env) >> 16;
-                    sum = sum + (outv >> 2);
+                    if (nmix > 0) {
+                        int32 bit2;
+                        int32 nv2;
+                        bit2 = (lfsr ^ (lfsr >> 2) ^ (lfsr >> 3) ^
+                                (lfsr >> 5)) & 1;
+                        lfsr = ((lfsr >> 1) | (bit2 << 15)) & 65535;
+                        if ((lfsr & 1) != 0) {
+                            nv2 = 32767;
+                        } else {
+                            nv2 = 0 - 32767;
+                        }
+                        outv = outv + (((nv2 * env) >> 16) * nmix >> 8);
+                    }
+                    sum = sum + (outv >> lvl);
                 } else {
                     int32 bit;
                     int32 nv;
@@ -696,7 +1025,7 @@ int32 mix_sample()
                         nv = 0 - 32767;
                     }
                     outv = (nv * env) >> 16;
-                    sum = sum + (outv >> 3);
+                    sum = sum + (outv >> (lvl + 1));
                 }
             }
             wr32(g_vs, b + 3, pc);
@@ -762,6 +1091,19 @@ char g_buf[2048];   /* CHUNK * 2 バイト (サンプルは LE で詰める) */
 char g_mst[64];
 char g_mbuf[512];   /* ストリームの読みバッファ */
 
+/* プリセットを現在の音色にする。MIDI モードのノートオンが
+ * 波形を読む g_mst +9 も一緒に更新する */
+void load_preset(int32 eng, int32 idx)
+{
+    wr32(g_cur, 0, eng);
+    wr32(g_cur, 1, idx);
+    if (eng == 0) {
+        wr32(g_mst, 9, g_pfm[idx * 20] & 255);
+    } else {
+        wr32(g_mst, 9, g_pps[idx * 20] & 255);
+    }
+}
+
 /* audio_write の部分受け付けに残りを再送する。失敗は -1 */
 int32 audio_write_all(int32 n)
 {
@@ -812,15 +1154,16 @@ int32 run_demo(int32 engine)
     } else {
         out_str("synth: psg demo\n");
     }
+    print_preset(engine, rd32(g_cur, 1));
     step = 0;
     while (step < NSTEPS) {
         int32 remain;
         if (g_mel[step] != 0) {
-            trig(rr, g_mel[step] & 255, STEP_LEN, engine);
+            trig(rr, g_mel[step] & 255, STEP_LEN, 0 - 1);
             rr = (rr + 1) & 3;
         }
         if ((step & 1) == 0 && g_bas[step] != 0) {
-            trig(rr, g_bas[step] & 255, STEP_LEN * 2, engine);
+            trig(rr, g_bas[step] & 255, STEP_LEN * 2, 0 - 1);
             rr = (rr + 1) & 3;
         }
         if (engine == 1 && (step & 3) == 2) {
@@ -889,7 +1232,8 @@ int32 run_play(int32 engine)
         out_str("synth: cannot open audio\n");
         return 1;
     }
-    out_str("synth: play mode. keys=z..m/q..i, o/p=octave, ESC=end\n");
+    out_str("synth: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, ESC=end\n");
+    print_preset(engine, rd32(g_cur, 1));
     while (done == 0) {
         int64 c;
         int32 k;
@@ -904,11 +1248,17 @@ int32 run_play(int32 engine)
             if (base < 84) {
                 base = base + 12;
             }
+        } else if (c == 91) {
+            load_preset(engine, (rd32(g_cur, 1) + 15) & 15);
+            print_preset(engine, rd32(g_cur, 1));
+        } else if (c == 93) {
+            load_preset(engine, (rd32(g_cur, 1) + 1) & 15);
+            print_preset(engine, rd32(g_cur, 1));
         } else if (c > 0) {
             int32 semi;
             semi = key_semi((int32)c);
             if (semi >= 0) {
-                trig(rr, base + semi, 16000, engine);
+                trig(rr, base + semi, 16000, 0 - 1);
                 rr = (rr + 1) & 3;
             }
         }
@@ -1020,12 +1370,17 @@ void midi_event(int32 status, int32 d1, int32 d2)
             midi_all_off();
         }
     } else if (hi == 192) {
+        int32 eng;
+        int32 idx;
+        eng = rd32(g_cur, 0);
         wr32(g_mst, 7, d1);
-        if (d1 == 0) {
-            wr32(g_mst, 9, 0);
-        } else if (d1 == 1) {
-            wr32(g_mst, 9, 1);
+        if (eng == 0) {
+            idx = g_gmf[(d1 >> 3) & 15] & 255;
+        } else {
+            idx = g_gmp[(d1 >> 3) & 15] & 255;
         }
+        load_preset(eng, idx);
+        print_preset(eng, idx);
     }
 }
 
@@ -1122,7 +1477,7 @@ void midi_feed(int32 b)
  * 余韻として 11025 サンプル描いてから閉じる。マーカーが
  * 来ないまま約 30 秒分 (サンプル数換算) 新着が無ければ、
  * 書き手が死んだとみなして同じく閉じる */
-int32 run_midi(char *path)
+int32 run_midi(char *path, int32 engine)
 {
     int64 fnv;
     int64 fnv_prime;
@@ -1160,6 +1515,8 @@ int32 run_midi(char *path)
         return 1;
     }
     out_str("synth: midi mode\n");
+    load_preset(engine, 0);
+    print_preset(engine, 0);
     while (1) {
         int32 k;
         if (tail < 0) {
@@ -1236,15 +1593,23 @@ int32 main(int32 argc, char **argv)
 {
     int32 mode;
     int32 engine;
+    int32 preset;
     mode = 0;
     engine = 0;
+    preset = 0;
     if (argc >= 2) {
-        if (streq(argv[1], "fm")) {
+        if (streq(argv[1], "fm") || streq(argv[1], "psg")) {
             mode = 0;
-            engine = 0;
-        } else if (streq(argv[1], "psg")) {
-            mode = 0;
-            engine = 1;
+            if (streq(argv[1], "psg")) {
+                engine = 1;
+            }
+            if (argc >= 3) {
+                preset = parse_num(argv[2]);
+                if (preset < 0 || preset > 15) {
+                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
+                    return 2;
+                }
+            }
         } else if (streq(argv[1], "play")) {
             mode = 1;
             engine = 0;
@@ -1254,29 +1619,48 @@ int32 main(int32 argc, char **argv)
                 } else if (streq(argv[2], "fm")) {
                     engine = 0;
                 } else {
-                    out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
+                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
+                    return 2;
+                }
+            }
+            if (argc >= 4) {
+                preset = parse_num(argv[3]);
+                if (preset < 0 || preset > 15) {
+                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
                     return 2;
                 }
             }
         } else if (streq(argv[1], "midi")) {
             if (argc < 3) {
-                out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
+                out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
                 return 2;
             }
             mode = 2;
+            if (argc >= 4) {
+                if (streq(argv[3], "psg")) {
+                    engine = 1;
+                } else if (streq(argv[3], "fm")) {
+                    engine = 0;
+                } else {
+                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
+                    return 2;
+                }
+            }
         } else {
-            out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
+            out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
             return 2;
         }
     }
     fill_sine();
     fill_ninc();
     fill_song();
+    fill_presets();
+    if (mode == 2) {
+        return run_midi(argv[2], engine);
+    }
+    load_preset(engine, preset);
     if (mode == 0) {
         return run_demo(engine);
-    }
-    if (mode == 2) {
-        return run_midi(argv[2]);
     }
     return run_play(engine);
 }

@@ -15,7 +15,8 @@ SONG0.MID (format 0) と SONG1.MID (format 1) を、同じ曲で
   和音      2 小節ごとに 3 和音のスタブ
   ベース    和音と同時に低音
   その他    tick 0 で program 0 + CC7=100、tick 4800 で
-            program 1、最後に CC123 (all notes off)
+            program 88 (GM Synth Pad)、最後に CC123
+            (all notes off)
 """
 
 import struct
@@ -73,7 +74,7 @@ def chan_events(notes, prog_cc=True):
     if prog_cc:
         ev.append((0, 1, ("ch", bytes([0xC0, 0]))))
         ev.append((0, 1, ("ch", bytes([0xB0, 7, 100]))))
-        ev.append((4800, 1, ("ch", bytes([0xC0, 1]))))
+        ev.append((4800, 1, ("ch", bytes([0xC0, 88]))))
         ev.append((10600, 1, ("ch", bytes([0xB0, 123, 0]))))
     for start, dur, note, vel in notes:
         ev.append((start, 3, ("ch", bytes([0x90, note, vel]))))
