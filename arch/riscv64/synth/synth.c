@@ -5,6 +5,9 @@
  *   run synth psg      PSG デモ曲 (同じ曲)
  *   run synth play fm  シリアル鍵盤で FM を弾く
  *   run synth play psg シリアル鍵盤で PSG を弾く
+ *   run synth midi <p> MIDI バイト列ストリームを読んで鳴らす
+ *                      (smfplay の file モードの受け手。解釈は
+ *                      下の run_midi のコメント参照)
  *
  * IwaC の C サブセットで書く (nami / wavgen と同じ作法):
  * #include / libc なし、switch なし、文字リテラルなし
@@ -45,6 +48,10 @@
  */
 
 #define SYS_GETC 2
+#define SYS_OPEN 4
+#define SYS_READ 5
+#define SYS_FCLOSE 6
+#define SYS_SLEEP 34
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
@@ -746,6 +753,15 @@ int32 key_semi(int32 c)
 
 char g_buf[2048];   /* CHUNK * 2 バイト (サンプルは LE で詰める) */
 
+/* MIDI ストリーム解釈の状態 (run_midi 用、16 ワード):
+ *   +0 ランニングステータス  +1 必要データ数  +2 受信済み数
+ *   +3 data1  +4 SysEx の中か  +5 SysEx の照合段
+ *   +6 システムコモンの残りデータ数  +7 プログラム番号
+ *   +8 終了マーカーを見た旗  +9 現在の音色 (0=FM 1=PSG)
+ *   +10 ボイス奪い取りのラウンドロビン */
+char g_mst[64];
+char g_mbuf[512];   /* ストリームの読みバッファ */
+
 /* audio_write の部分受け付けに残りを再送する。失敗は -1 */
 int32 audio_write_all(int32 n)
 {
@@ -927,6 +943,295 @@ int32 run_play(int32 engine)
     return 0;
 }
 
+/* --- MIDI ストリーム解釈 (run_midi の部品) ----------------
+ * ノートオンは gate を実質無限にして本当のホールドにし、
+ * ノートオフで release 段 (stage 3) へ落とす (対話モードの
+ * gate 方式とは違う、本物のゲート)。ベロシティの大きさは
+ * 使わない (0 = オフの扱いだけ守る) */
+
+void midi_note_off(int32 note)
+{
+    int32 vi;
+    vi = 0;
+    while (vi < 4) {
+        int32 b;
+        b = vi * 16;
+        if (rd32(g_vs, b + 0) != 0 && rd32(g_vs, b + 2) == note) {
+            wr32(g_vs, b + 6, 3);
+            return;
+        }
+        vi = vi + 1;
+    }
+}
+
+void midi_note_on(int32 note, int32 vel)
+{
+    int32 vi;
+    int32 rr;
+    if (vel == 0) {
+        midi_note_off(note);
+        return;
+    }
+    vi = 0;
+    while (vi < 4) {
+        int32 b;
+        b = vi * 16;
+        if (rd32(g_vs, b + 0) != 0 && rd32(g_vs, b + 2) == note) {
+            trig(vi, note, 2000000000, rd32(g_mst, 9));
+            return;
+        }
+        vi = vi + 1;
+    }
+    vi = 0;
+    while (vi < 4) {
+        if (rd32(g_vs, vi * 16) == 0) {
+            trig(vi, note, 2000000000, rd32(g_mst, 9));
+            return;
+        }
+        vi = vi + 1;
+    }
+    rr = rd32(g_mst, 10);
+    trig(rr, note, 2000000000, rd32(g_mst, 9));
+    wr32(g_mst, 10, (rr + 1) & 3);
+}
+
+void midi_all_off()
+{
+    int32 vi;
+    vi = 0;
+    while (vi < 4) {
+        if (rd32(g_vs, vi * 16) != 0) {
+            wr32(g_vs, vi * 16 + 6, 3);
+        }
+        vi = vi + 1;
+    }
+}
+
+void midi_event(int32 status, int32 d1, int32 d2)
+{
+    int32 hi;
+    hi = status & 240;
+    if (hi == 128) {
+        midi_note_off(d1);
+    } else if (hi == 144) {
+        midi_note_on(d1, d2);
+    } else if (hi == 176) {
+        if (d1 == 120 || d1 == 123) {
+            midi_all_off();
+        }
+    } else if (hi == 192) {
+        wr32(g_mst, 7, d1);
+        if (d1 == 0) {
+            wr32(g_mst, 9, 0);
+        } else if (d1 == 1) {
+            wr32(g_mst, 9, 1);
+        }
+    }
+}
+
+/* ストリームの 1 バイトを解釈する。ランニングステータス、
+ * SysEx (終了マーカー F0 7D 00 F7 の検出だけし、他は読み
+ * 飛ばす)、システムコモン、リアルタイム (無視) を捌く */
+void midi_feed(int32 b)
+{
+    if (rd32(g_mst, 4) != 0) {
+        if (b == 247) {
+            if (rd32(g_mst, 5) == 2) {
+                wr32(g_mst, 8, 1);  /* 終了マーカー確定 */
+            }
+            wr32(g_mst, 4, 0);
+            wr32(g_mst, 5, 0);
+        } else if (rd32(g_mst, 5) == 0) {
+            if (b == 125) {
+                wr32(g_mst, 5, 1);
+            } else {
+                wr32(g_mst, 5, 3);
+            }
+        } else if (rd32(g_mst, 5) == 1) {
+            if (b == 0) {
+                wr32(g_mst, 5, 2);
+            } else {
+                wr32(g_mst, 5, 3);
+            }
+        } else {
+            wr32(g_mst, 5, 3);
+        }
+        return;
+    }
+    if (b >= 248) {
+        return;  /* リアルタイムメッセージは無視 */
+    }
+    if (b == 240) {
+        wr32(g_mst, 4, 1);
+        wr32(g_mst, 5, 0);
+        wr32(g_mst, 0, 0);
+        return;
+    }
+    if (b >= 240) {
+        wr32(g_mst, 0, 0);
+        wr32(g_mst, 2, 0);
+        if (b == 241 || b == 243) {
+            wr32(g_mst, 6, 1);
+        } else if (b == 242) {
+            wr32(g_mst, 6, 2);
+        } else {
+            wr32(g_mst, 6, 0);
+        }
+        return;
+    }
+    if (b >= 128) {
+        int32 hi;
+        hi = b & 240;
+        wr32(g_mst, 0, b);
+        if (hi == 192 || hi == 208) {
+            wr32(g_mst, 1, 1);
+        } else {
+            wr32(g_mst, 1, 2);
+        }
+        wr32(g_mst, 2, 0);
+        return;
+    }
+    if (rd32(g_mst, 6) > 0) {
+        wr32(g_mst, 6, rd32(g_mst, 6) - 1);
+        return;
+    }
+    if (rd32(g_mst, 0) == 0) {
+        return;  /* 行き先のないデータバイトは捨てる */
+    }
+    if (rd32(g_mst, 2) == 0) {
+        wr32(g_mst, 3, b);
+        wr32(g_mst, 2, 1);
+        if (rd32(g_mst, 1) == 1) {
+            midi_event(rd32(g_mst, 0), b, 0);
+            wr32(g_mst, 2, 0);
+        }
+    } else {
+        midi_event(rd32(g_mst, 0), rd32(g_mst, 3), b);
+        wr32(g_mst, 2, 0);
+    }
+}
+
+/* MIDI ストリーム再生モード: ファイルをバイト列ストリーム
+ * としてポーリング読みし、MIDI を逐次解釈して鳴らす。
+ * 自分の読み位置 (fd) を持ち、まだ書かれていない分は
+ * read が 0 を返すので、描画を続けながら次の塊で再試行
+ * する (書き手が smfplay の同時実行ジョブでも、書き終えた
+ * 後から読み始めてもよい)。ストリーム自体に時刻情報は
+ * 無いので、タイミングは「届いた時刻」が全て (本物の MIDI
+ * と同じ)。終了マーカー F0 7D 00 F7 を読んだら、release の
+ * 余韻として 11025 サンプル描いてから閉じる。マーカーが
+ * 来ないまま約 30 秒分 (サンプル数換算) 新着が無ければ、
+ * 書き手が死んだとみなして同じく閉じる */
+int32 run_midi(char *path)
+{
+    int64 fnv;
+    int64 fnv_prime;
+    int32 total;
+    int64 r;
+    int64 fd;
+    int32 blen;
+    int32 bpos;
+    int32 idle;
+    int32 tail;
+    int32 i;
+    fnv = fnv_init();
+    fnv_prime = ((int64)256 << 32) + 435;
+    total = 0;
+    blen = 0;
+    bpos = 0;
+    idle = 0;
+    tail = -1;
+    i = 0;
+    while (i < 16) {
+        wr32(g_mst, i, 0);
+        i = i + 1;
+    }
+    fd = syscall3(SYS_OPEN, path, 0, 0);
+    if (fd < 0) {
+        out_str("synth: cannot open ");
+        out_str(path);
+        putc(10);
+        return 1;
+    }
+    r = syscall3(SYS_AUDIO_OPEN, RATE, 1, 0);
+    if (r != 0) {
+        out_str("synth: cannot open audio\n");
+        syscall3(SYS_FCLOSE, fd, 0, 0);
+        return 1;
+    }
+    out_str("synth: midi mode\n");
+    while (1) {
+        int32 k;
+        if (tail < 0) {
+            if (bpos >= blen) {
+                int64 n;
+                n = syscall3(SYS_READ, fd, g_mbuf, 128);
+                if (n < 0) {
+                    syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+                    syscall3(SYS_FCLOSE, fd, 0, 0);
+                    out_str("synth: read failed\n");
+                    return 1;
+                }
+                if (n == 0) {
+                    idle = idle + 1;
+                    syscall3(SYS_SLEEP, 5, 0, 0);
+                } else {
+                    blen = (int32)n;
+                    bpos = 0;
+                    idle = 0;
+                }
+            }
+            while (bpos < blen) {
+                midi_feed(g_mbuf[bpos] & 255);
+                bpos = bpos + 1;
+                if (rd32(g_mst, 8) != 0) {
+                    tail = 0;
+                    break;
+                }
+            }
+            if (idle > 2600) {
+                tail = 0;  /* 新着なしが長すぎる: 終わりとみなす */
+            }
+        }
+        k = 0;
+        while (k < 512) {
+            int32 smp;
+            smp = mix_sample();
+            g_buf[k * 2] = (char)(smp & 255);
+            g_buf[k * 2 + 1] = (char)((smp >> 8) & 255);
+            fnv = (fnv ^ (g_buf[k * 2] & 255)) * fnv_prime;
+            fnv = (fnv ^ (g_buf[k * 2 + 1] & 255)) * fnv_prime;
+            k = k + 1;
+        }
+        if (audio_write_all(512) != 0) {
+            syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+            syscall3(SYS_FCLOSE, fd, 0, 0);
+            out_str("synth: audio write failed\n");
+            return 1;
+        }
+        total = total + 512;
+        if (tail >= 0) {
+            tail = tail + 512;
+            if (tail >= 11025) {
+                break;
+            }
+        }
+    }
+    syscall3(SYS_FCLOSE, fd, 0, 0);
+    r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+    if (r != 0) {
+        out_str("synth: audio close failed\n");
+        return 1;
+    }
+    out_str("synth: samples=");
+    out_num(total);
+    out_str(" fnv=");
+    out_hex64(fnv);
+    putc(10);
+    out_str("synth: done\n");
+    return 0;
+}
+
 int32 main(int32 argc, char **argv)
 {
     int32 mode;
@@ -949,12 +1254,18 @@ int32 main(int32 argc, char **argv)
                 } else if (streq(argv[2], "fm")) {
                     engine = 0;
                 } else {
-                    out_str("usage: synth [fm|psg|play [fm|psg]]\n");
+                    out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
                     return 2;
                 }
             }
+        } else if (streq(argv[1], "midi")) {
+            if (argc < 3) {
+                out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
+                return 2;
+            }
+            mode = 2;
         } else {
-            out_str("usage: synth [fm|psg|play [fm|psg]]\n");
+            out_str("usage: synth [fm|psg|play [fm|psg]|midi <file>]\n");
             return 2;
         }
     }
@@ -963,6 +1274,9 @@ int32 main(int32 argc, char **argv)
     fill_song();
     if (mode == 0) {
         return run_demo(engine);
+    }
+    if (mode == 2) {
+        return run_midi(argv[2]);
     }
     return run_play(engine);
 }

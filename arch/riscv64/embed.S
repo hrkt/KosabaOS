@@ -204,3 +204,14 @@ synth_prog_start:
     .incbin "synth.elf"
 synth_prog_end:
 #endif
+
+/* smfplay (SMF プレーヤー) の素材。synth と同じ流儀で、
+ * build.sh が写してきたときだけ (-DSMFPLAY_EMBED) 取り込む
+ * (doc/synth-design.md) */
+#ifdef SMFPLAY_EMBED
+    .globl smfplay_prog_start
+    .globl smfplay_prog_end
+smfplay_prog_start:
+    .incbin "smfplay.elf"
+smfplay_prog_end:
+#endif

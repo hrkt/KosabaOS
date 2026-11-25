@@ -1,7 +1,7 @@
 #!/bin/sh
-# build-synth.sh -- synth を IwaC でビルドする
+# build-synth.sh -- synth と smfplay を IwaC でビルドする
 #
-#   sh build-synth.sh     → synth.elf (このディレクトリ)
+#   sh build-synth.sh     → synth.elf / smfplay.elf (このディレクトリ)
 #
 # 経路は iwac --kosaba --elf (ELF オブジェクト .eo) →
 # nori (リンク)。nami/build-nami.sh と同じ流儀。
@@ -25,4 +25,7 @@ fi
 "$IWAC_DIR/iwac" --kosaba --elf synth.c > synth.eo
 "$IWAC_DIR/nori/nori" synth.eo > synth.elf
 rm -f synth.eo
-ls -l synth.elf
+"$IWAC_DIR/iwac" --kosaba --elf smfplay.c > smfplay.eo
+"$IWAC_DIR/nori/nori" smfplay.eo > smfplay.elf
+rm -f smfplay.eo
+ls -l synth.elf smfplay.elf
