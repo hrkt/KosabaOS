@@ -185,14 +185,18 @@ uint64_t trap_tick_count(void)
     return ticks;
 }
 
-/* uptime (31) 用: 起動以来のミリ秒。秒 (ticks) に、現在の
- * 秒の端数を足して組み立てる。端数は tick_divider が
- * 100ms 単位で数えている (割り込み 10 回で ticks が 1 増
- * える)。タイマ割り込みが 100ms 間隔なので実分解能は
- * 100ms で、値は 100ms 刻みに進む (仕様にも明記) */
+/* uptime (31) 用: 起動以来のミリ秒。time CSR (r_time、
+ * K210 = 7.8MHz / virt = 10MHz) から直接組み立てるので
+ * 分解能は 1ms (読みのたびに進む)。以前は 100ms 間隔の
+ * タイマ割り込みで数える ticks + tick_divider から作って
+ * いて 100ms 刻みにしか進まなかったが、sleep_ms の期限や
+ * getc タイムアウトは既に r_time 基準だったので、読みの
+ * 時計もそちらへ揃えた (2026-11-25、SMF プレーヤーの
+ * 実時間ペーシングが ms で読める時計を要するため)。
+ * ticks の方は klog の [秒] 表示と時計表示が使うので残す */
 uint64_t trap_uptime_ms(void)
 {
-    return ticks * 1000 + (uint64_t)tick_divider * 100;
+    return r_time() * 1000 / TIMER_HZ;
 }
 
 /* perf_read (33) 用: ハードウェアの性能カウンタを読む。
