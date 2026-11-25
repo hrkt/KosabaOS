@@ -316,6 +316,40 @@ IwaC 生成コードでは 4 ボイス級が実時間の目安で、
 ただしこれは virt の命令数からの推算で、実機の負荷は
 未検証 (under と耳の確認は実機セッション待ち)。
 
+## レパートリー (モーツァルト)
+
+実演・負荷テスト用の本物の曲素材として、モーツァルトの
+ピアノ曲 2 曲を SMF 化して用意した。正本は生成スクリプト
+と出典メモ (`arch/riscv64/synth/music/make_repertoire.py` と
+同ディレクトリの README.md) で、生成した .mid は
+コミットしない (スクリプトが Mutopia Project の素材を
+取得して変換する)。
+
+- MOZ545.MID: ピアノソナタ第16番 K.545 第1楽章
+  (Mutopia ID 998、Alejandro Sierra 浄書、CC BY-SA 3.0。
+  1288 音、約 132 秒、素材のテンポ 454545 us を採用)
+- MOZ331.MID: ピアノソナタ第11番 K.331 第3楽章
+  Rondo alla Turca (Mutopia ID 108、Rune Zedeler /
+  Chris Sawer 浄書、Public Domain。1614 音、約 128 秒。
+  素材 MIDI が LilyPond 既定の 60 BPM だったため、
+  Allegretto の編集判断で 120 BPM に置いた)
+- 形式は format 1、右手 -> ch 1 / 左手 -> ch 2 で
+  マルチティンバーのパート 1/2 に載る。冒頭に program 0
+  を入れ、両手とも Grand Piano で鳴る
+- 対象外: ペダル (CC64、素材にも無い)、CC 類
+  (K.545 の CC7 ヘアピン含む。ベロシティは残してある)
+
+virt 検証 (2026-11-25): smfplay log で K.545 は
+全 2578 イベントが独立計算の予定と一致 (sched
+132,272 ms に対し actual 132,274 ms)。両曲とも
+同時実行 (smfplay を裏で流し synth がライブ読み) で
+全曲完走し FNV が audio close と一致した
+(K.545: 3,417,088 samples / d50102f8f70b9fea /
+ピーク同時発音 8。K.331: 3,040,256 samples /
+c4c0e2b104e5708c / ピーク 9)。virt では描画フレーム数が
+曲長×レートより少なくなる (ゲスト実行ペースのため) が、
+イベントは全て順序通り届いている。
+
 ## 段立て全体
 
 - **段1 (今回): FM + PSG** — 上記。共通ボイス/ミキサー/ADSR の枠を作る

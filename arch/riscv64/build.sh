@@ -205,6 +205,12 @@ if [ "$BOARD" = virt ]; then
             SD_FILES="$SD_FILES $f=synth/$f"
         fi
     done
+    # レパートリー (synth/music/make_repertoire.py の生成物があれば)
+    for f in MOZ545.MID MOZ331.MID; do
+        if [ -f synth/music/$f ]; then
+            SD_FILES="$SD_FILES $f=synth/music/$f"
+        fi
+    done
     python3 make_sd_image.py sd.img $SD_FILES
 fi
 
