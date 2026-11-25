@@ -200,6 +200,11 @@ if [ "$BOARD" = virt ]; then
         SD_FILES="$SD_FILES SONG0.MID=synth/SONG0.MID SONG1.MID=synth/SONG1.MID"
         echo "build: smfplay test songs embedded in sd image"
     fi
+    for f in SONG2.MID SONG3L.MID SONG3R.MID SONG4.MID SONG5.MID; do
+        if [ -f synth/$f ]; then
+            SD_FILES="$SD_FILES $f=synth/$f"
+        fi
+    done
     python3 make_sd_image.py sd.img $SD_FILES
 fi
 

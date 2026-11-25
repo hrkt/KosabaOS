@@ -9,7 +9,9 @@
  *                      (play でも第 3 引数で指定可。対話中は
  *                      [ / ] キーで切り替え)
  *   run synth midi <p> [fm|psg] MIDI バイト列ストリームを
- *                      読んで鳴らす (エンジン既定は fm)
+ *                      読んで鳴らす (エンジン既定は fm。
+ *                      fm はマルチティンバー版: [pool 1-32]
+ *                      [2op|4op] [dbg] も指定可)
  *                      (smfplay の file モードの受け手。解釈は
  *                      下の run_midi のコメント参照)
  *
@@ -56,6 +58,8 @@
 #define SYS_READ 5
 #define SYS_FCLOSE 6
 #define SYS_SLEEP 34
+#define SYS_UPTIME 31
+#define SYS_PERF 33
 #define SYS_AUDIO_OPEN 40
 #define SYS_AUDIO_WRITE 41
 #define SYS_AUDIO_CLOSE 42
@@ -767,6 +771,16 @@ void fill_presets()
     g_gmp[4] = 7; g_gmp[5] = 8; g_gmp[6] = 8; g_gmp[7] = 9;
     g_gmp[8] = 9; g_gmp[9] = 10; g_gmp[10] = 12; g_gmp[11] = 15;
     g_gmp[12] = 12; g_gmp[13] = 6; g_gmp[14] = 14; g_gmp[15] = 14;
+    /* FM の op モード (プリセット +18 バイト): 0=2op、
+     * 1=4op 直列スタック、2=4op 2+2 ペア。0 番は従来音色の
+     * 保存のため 2op のまま (デモ FNV 不変) */
+    g_pfm[1 * 20 + 18] = 1;
+    g_pfm[6 * 20 + 18] = 1;
+    g_pfm[7 * 20 + 18] = 2;
+    g_pfm[8 * 20 + 18] = 1;
+    g_pfm[9 * 20 + 18] = 2;
+    g_pfm[11 * 20 + 18] = 2;
+    g_pfm[14 * 20 + 18] = 2;
 }
 
 /* "synth: preset <番号> <名前>" を印字する */
@@ -849,6 +863,8 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
     wr32(g_vs, b + 7, gate);
     wr32(g_vs, b + 8, 65535);
     wr32(g_vs, b + 9, 257);
+    wr32(g_vs, b + 14, 0);
+    wr32(g_vs, b + 15, 0);
     wr32(g_vp, b + 0, rd16u(tab, o + 2));
     wr32(g_vp, b + 1, rd16u(tab, o + 4));
     wr32(g_vp, b + 2, rd16u(tab, o + 6));
@@ -860,12 +876,14 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
         wr32(g_vp, b + 6, rd16u(tab, o + 16));
         wr32(g_vp, b + 7, 32768);
         wr32(g_vp, b + 8, 0);
+        wr32(g_vp, b + 10, tab[o + 18] & 255);
     } else {
         wr32(g_vp, b + 4, 0);
         wr32(g_vp, b + 5, 30);
         wr32(g_vp, b + 6, 200);
         wr32(g_vp, b + 7, rd16u(tab, o + 10));
         wr32(g_vp, b + 8, tab[o + 12] & 255);
+        wr32(g_vp, b + 10, 0);
     }
     if (note >= 36 && note <= 96) {
         inc = rd32(g_ninc, note - 36);
@@ -982,13 +1000,43 @@ int32 mix_sample()
                     int32 depth;
                     int32 off;
                     int32 car;
-                    pm = (pm + inc_m) & 65535;
-                    mod = sine_at(pm);
+                    int32 opm;
+                    opm = rd32(g_vp, b + 10);
                     depth = (dep * menv) >> 16;
+                    if (opm == 1) {
+                        int32 p1;
+                        int32 p2;
+                        int32 o1;
+                        int32 o2;
+                        p1 = (rd32(g_vs, b + 15) + inc_m) & 65535;
+                        wr32(g_vs, b + 15, p1);
+                        o1 = (sine_at(p1) * (depth >> 2)) >> 15;
+                        p2 = (rd32(g_vs, b + 14) + inc_m + o1) & 65535;
+                        wr32(g_vs, b + 14, p2);
+                        o2 = (sine_at(p2) * (depth >> 1)) >> 15;
+                        pm = (pm + inc_m + o2) & 65535;
+                    } else {
+                        pm = (pm + inc_m) & 65535;
+                    }
+                    mod = sine_at(pm);
                     off = (mod * depth) >> 15;
                     pc = (pc + inc_c) & 65535;
                     car = sine_at((pc + off) & 65535);
                     outv = (car * env) >> 16;
+                    if (opm == 2) {
+                        int32 pcb;
+                        int32 pmb;
+                        int32 offb;
+                        int32 carb;
+                        pmb = (rd32(g_vs, b + 15) + inc_m) & 65535;
+                        wr32(g_vs, b + 15, pmb);
+                        offb = (sine_at(pmb) * (depth >> 1)) >> 15;
+                        pcb = (rd32(g_vs, b + 14) + inc_c +
+                               (inc_c >> 8)) & 65535;
+                        wr32(g_vs, b + 14, pcb);
+                        carb = sine_at((pcb + offb) & 65535);
+                        outv = (outv >> 1) + ((carb * env) >> 17);
+                    }
                     sum = sum + (outv >> lvl);
                 } else if (typ == 1) {
                     int32 sq;
@@ -1589,14 +1637,802 @@ int32 run_midi(char *path, int32 engine)
     return 0;
 }
 
+/* ============================================================
+ * マルチティンバー MIDI モード (FM 専用、ステレオ出力)
+ *
+ * 8 パート (MIDI ch 1..8) が個別にプリセット / ボリューム
+ * (CC7) / パン (CC10) を持ち、全パート共有のボイスプール
+ * (最大 NVOICE=32、起動引数で上限を絞れる) から dynamic
+ * voice allocation で割り当てる。割り当て規則:
+ *   同じ (ch, note) が鳴っていれば再トリガ -> 空きボイス
+ *   -> release 中の最も古いボイス -> 全体で最も古いボイス
+ *   (steal)。パートごとの同時発音上限は PARTMAX=8 で、
+ *   上限に達したパートは自パートの最古ボイスを奪う。
+ * ch 9 以降は無視する (ch 10 のドラムは将来課題)。
+ *
+ * 負荷計測: 描画チャンク (512 フレーム) の前後で perf_read
+ * (33、0=サイクル / 1=命令数) を読み、総サイクル・平均
+ * cycles/frame・最悪チャンクと実時間予算の比・同時発音の
+ * ピークを終了時に印字する。perf_read はマシン全体の通算
+ * カウンタなので、サイクル/秒は uptime との差分で較正する。
+ * ============================================================ */
+#define NVOICE 32
+#define NPART 8
+#define PARTMAX 8
+
+char g_mv[2048];   /* MT ボイス 32 x 16 ワード (g_vs と同じ
+                      並び。+12 所属 ch、+13 発音順 seq、
+                      +14/+15 は 4op 用の追加位相) */
+char g_mvp[2048];  /* MT ボイスごとの実効パラメータ
+                      (g_vp と同じ並び、+10 に op モード) */
+char g_part[256];  /* パート 8 x 8 ワード:
+                      +0 preset +1 vol (CC7) +2 pan (CC10) */
+char g_mctl[64];   /* +0 次の seq +1 pool 上限 +2 dbg
+                      +3 同時発音ピーク +4 op 上書き
+                      (0=プリセット通り 1=2op 固定
+                      2=4op スタック固定) */
+char g_mix[32];    /* mt_mix の出力 (ワード 0=L、1=R) */
+
+int64 perf_read(int32 kind)
+{
+    return syscall3(SYS_PERF, kind, 0, 0);
+}
+
+int32 mt_def_preset(int32 p)
+{
+    if (p == 0) {
+        return 0;
+    }
+    if (p == 1) {
+        return 9;
+    }
+    if (p == 2) {
+        return 10;
+    }
+    if (p == 3) {
+        return 1;
+    }
+    if (p == 4) {
+        return 6;
+    }
+    if (p == 5) {
+        return 11;
+    }
+    if (p == 6) {
+        return 12;
+    }
+    return 15;
+}
+
+void print_part_preset(int32 ch, int32 idx)
+{
+    int32 i;
+    out_str("synth: part ");
+    out_num(ch + 1);
+    out_str(" preset ");
+    out_num(idx);
+    putc(32);
+    i = 0;
+    while (i < 16 && g_fnm[idx * 16 + i] != 0) {
+        putc(g_fnm[idx * 16 + i]);
+        i = i + 1;
+    }
+    putc(10);
+}
+
+void mt_init(int32 pool, int32 dbg, int32 opovr)
+{
+    int32 p;
+    int32 v;
+    p = 0;
+    while (p < NPART) {
+        wr32(g_part, p * 8 + 0, mt_def_preset(p));
+        wr32(g_part, p * 8 + 1, 127);
+        wr32(g_part, p * 8 + 2, 64);
+        p = p + 1;
+    }
+    v = 0;
+    while (v < NVOICE) {
+        wr32(g_mv, v * 16 + 0, 0);
+        v = v + 1;
+    }
+    wr32(g_mctl, 0, 0);
+    wr32(g_mctl, 1, pool);
+    wr32(g_mctl, 2, dbg);
+    wr32(g_mctl, 3, 0);
+    wr32(g_mctl, 4, opovr);
+}
+
+/* パート ch のプリセットでボイス vi を発音開始する */
+void mt_trig(int32 vi, int32 ch, int32 note)
+{
+    int32 b;
+    int32 o;
+    int32 inc;
+    int32 opm;
+    b = vi * 16;
+    o = rd32(g_part, ch * 8 + 0) * 20;
+    wr32(g_mvp, b + 0, rd16u(g_pfm, o + 2));
+    wr32(g_mvp, b + 1, rd16u(g_pfm, o + 4));
+    wr32(g_mvp, b + 2, rd16u(g_pfm, o + 6));
+    wr32(g_mvp, b + 3, rd16u(g_pfm, o + 8));
+    wr32(g_mvp, b + 4, rd16u(g_pfm, o + 12));
+    wr32(g_mvp, b + 5, rd16u(g_pfm, o + 14));
+    wr32(g_mvp, b + 6, rd16u(g_pfm, o + 16));
+    wr32(g_mvp, b + 7, 32768);
+    wr32(g_mvp, b + 8, 0);
+    wr32(g_mvp, b + 9, g_pfm[o + 1] & 255);
+    opm = g_pfm[o + 18] & 255;
+    if (rd32(g_mctl, 4) == 1) {
+        opm = 0;
+    } else if (rd32(g_mctl, 4) == 2) {
+        opm = 1;
+    }
+    wr32(g_mvp, b + 10, opm);
+    if (note >= 36 && note <= 96) {
+        inc = rd32(g_ninc, note - 36);
+    } else {
+        inc = 0;
+    }
+    wr32(g_mv, b + 0, 1);
+    wr32(g_mv, b + 1, 0);
+    wr32(g_mv, b + 2, note);
+    wr32(g_mv, b + 3, 0);
+    wr32(g_mv, b + 4, 0);
+    wr32(g_mv, b + 5, 0);
+    wr32(g_mv, b + 6, 0);
+    wr32(g_mv, b + 7, 2000000000);
+    wr32(g_mv, b + 8, 65535);
+    wr32(g_mv, b + 9, 257);
+    wr32(g_mv, b + 10, inc);
+    wr32(g_mv, b + 11, (inc * (g_pfm[o + 10] & 255)) / 2);
+    wr32(g_mv, b + 12, ch);
+    wr32(g_mv, b + 13, rd32(g_mctl, 0));
+    wr32(g_mv, b + 14, 0);
+    wr32(g_mv, b + 15, 0);
+    wr32(g_mctl, 0, rd32(g_mctl, 0) + 1);
+}
+
+void mt_note_on(int32 ch, int32 note)
+{
+    int32 pool;
+    int32 v;
+    int32 pick;
+    int32 cnt;
+    int32 steal;
+    pool = rd32(g_mctl, 1);
+    /* 同じ (ch, note) が鳴っていればそれを再トリガ */
+    v = 0;
+    while (v < pool) {
+        if (rd32(g_mv, v * 16 + 0) != 0 &&
+            rd32(g_mv, v * 16 + 12) == ch &&
+            rd32(g_mv, v * 16 + 2) == note) {
+            mt_trig(v, ch, note);
+            return;
+        }
+        v = v + 1;
+    }
+    /* パートの同時発音数を数える */
+    cnt = 0;
+    v = 0;
+    while (v < pool) {
+        if (rd32(g_mv, v * 16 + 0) != 0 &&
+            rd32(g_mv, v * 16 + 12) == ch) {
+            cnt = cnt + 1;
+        }
+        v = v + 1;
+    }
+    pick = -1;
+    if (cnt >= PARTMAX) {
+        /* パート上限: 自パートの最も古いボイスを奪う */
+        int32 best;
+        best = 2000000000;
+        v = 0;
+        while (v < pool) {
+            if (rd32(g_mv, v * 16 + 0) != 0 &&
+                rd32(g_mv, v * 16 + 12) == ch &&
+                rd32(g_mv, v * 16 + 13) < best) {
+                best = rd32(g_mv, v * 16 + 13);
+                pick = v;
+            }
+            v = v + 1;
+        }
+    } else {
+        v = 0;
+        while (v < pool) {
+            if (rd32(g_mv, v * 16 + 0) == 0) {
+                pick = v;
+                break;
+            }
+            v = v + 1;
+        }
+        if (pick < 0) {
+            /* release 中で最も古いボイスを奪う */
+            int32 best;
+            best = 2000000000;
+            v = 0;
+            while (v < pool) {
+                if (rd32(g_mv, v * 16 + 0) != 0 &&
+                    rd32(g_mv, v * 16 + 6) == 3 &&
+                    rd32(g_mv, v * 16 + 13) < best) {
+                    best = rd32(g_mv, v * 16 + 13);
+                    pick = v;
+                }
+                v = v + 1;
+            }
+        }
+        if (pick < 0) {
+            /* 全体で最も古いボイスを奪う (steal) */
+            int32 best;
+            best = 2000000000;
+            v = 0;
+            while (v < pool) {
+                if (rd32(g_mv, v * 16 + 0) != 0 &&
+                    rd32(g_mv, v * 16 + 13) < best) {
+                    best = rd32(g_mv, v * 16 + 13);
+                    pick = v;
+                }
+                v = v + 1;
+            }
+        }
+    }
+    if (pick < 0) {
+        return;
+    }
+    steal = rd32(g_mv, pick * 16 + 0);
+    mt_trig(pick, ch, note);
+    if (rd32(g_mctl, 2) != 0) {
+        out_str("synth: alloc v=");
+        out_num(pick);
+        out_str(" ch=");
+        out_num(ch + 1);
+        out_str(" note=");
+        out_num(note);
+        if (steal != 0) {
+            out_str(" steal");
+        }
+        putc(10);
+    }
+}
+
+void mt_note_off(int32 ch, int32 note)
+{
+    int32 v;
+    v = 0;
+    while (v < NVOICE) {
+        if (rd32(g_mv, v * 16 + 0) != 0 &&
+            rd32(g_mv, v * 16 + 12) == ch &&
+            rd32(g_mv, v * 16 + 2) == note &&
+            rd32(g_mv, v * 16 + 6) != 3) {
+            wr32(g_mv, v * 16 + 6, 3);
+        }
+        v = v + 1;
+    }
+}
+
+void mt_all_off(int32 ch)
+{
+    int32 v;
+    v = 0;
+    while (v < NVOICE) {
+        if (rd32(g_mv, v * 16 + 0) != 0 &&
+            rd32(g_mv, v * 16 + 12) == ch &&
+            rd32(g_mv, v * 16 + 6) != 3) {
+            wr32(g_mv, v * 16 + 6, 3);
+        }
+        v = v + 1;
+    }
+}
+
+void mt_peak_update()
+{
+    int32 v;
+    int32 cnt;
+    cnt = 0;
+    v = 0;
+    while (v < NVOICE) {
+        if (rd32(g_mv, v * 16 + 0) != 0) {
+            cnt = cnt + 1;
+        }
+        v = v + 1;
+    }
+    if (cnt > rd32(g_mctl, 3)) {
+        wr32(g_mctl, 3, cnt);
+    }
+}
+
+/* 1 フレーム分を描いて g_mix (ワード 0=L、1=R) に置く。
+ * FM の合成そのものは mix_sample の FM 分岐と同じ計算で、
+ * op モード (0=2op / 1=4op スタック / 2=4op ペア) も同じ。
+ * 出力はボイスごとにパートの vol / pan を掛けて L/R へ */
+void mt_mix()
+{
+    int32 sumL;
+    int32 sumR;
+    int32 vi;
+    sumL = 0;
+    sumR = 0;
+    vi = 0;
+    while (vi < NVOICE) {
+        int32 b;
+        b = vi * 16;
+        if (rd32(g_mv, b + 0) != 0) {
+            int32 pc;
+            int32 pm;
+            int32 env;
+            int32 stg;
+            int32 gate;
+            int32 menv;
+            int32 inc_c;
+            int32 inc_m;
+            int32 atk;
+            int32 dec;
+            int32 sus;
+            int32 rel;
+            int32 dep;
+            int32 mrate;
+            int32 mrel;
+            int32 lvl;
+            int32 opm;
+            int32 outv;
+            pc = rd32(g_mv, b + 3);
+            pm = rd32(g_mv, b + 4);
+            env = rd32(g_mv, b + 5);
+            stg = rd32(g_mv, b + 6);
+            gate = rd32(g_mv, b + 7);
+            menv = rd32(g_mv, b + 8);
+            inc_c = rd32(g_mv, b + 10);
+            inc_m = rd32(g_mv, b + 11);
+            atk = rd32(g_mvp, b + 0);
+            dec = rd32(g_mvp, b + 1);
+            sus = rd32(g_mvp, b + 2);
+            rel = rd32(g_mvp, b + 3);
+            dep = rd32(g_mvp, b + 4);
+            mrate = rd32(g_mvp, b + 5);
+            mrel = rd32(g_mvp, b + 6);
+            lvl = rd32(g_mvp, b + 9);
+            opm = rd32(g_mvp, b + 10);
+            outv = 0;
+            if (stg == 0) {
+                env = env + atk;
+                if (env >= 65535) {
+                    env = 65535;
+                    stg = 1;
+                }
+            } else if (stg == 1) {
+                env = env - dec;
+                if (env <= sus) {
+                    env = sus;
+                    stg = 2;
+                }
+            } else if (stg == 3) {
+                env = env - rel;
+                if (env <= 0) {
+                    env = 0;
+                    wr32(g_mv, b + 0, 0);
+                }
+            }
+            if (stg != 3) {
+                gate = gate - 1;
+                if (gate <= 0) {
+                    stg = 3;
+                }
+            }
+            if (menv > 12000) {
+                if (stg == 3) {
+                    menv = menv - mrel;
+                } else {
+                    menv = menv - mrate;
+                }
+            }
+            if (rd32(g_mv, b + 0) != 0) {
+                int32 mod;
+                int32 depth;
+                int32 off;
+                int32 car;
+                int32 t;
+                int32 part;
+                int32 vol;
+                int32 pan;
+                depth = (dep * menv) >> 16;
+                if (opm == 1) {
+                    int32 p1;
+                    int32 p2;
+                    int32 o1;
+                    int32 o2;
+                    p1 = (rd32(g_mv, b + 15) + inc_m) & 65535;
+                    wr32(g_mv, b + 15, p1);
+                    o1 = (sine_at(p1) * (depth >> 2)) >> 15;
+                    p2 = (rd32(g_mv, b + 14) + inc_m + o1) & 65535;
+                    wr32(g_mv, b + 14, p2);
+                    o2 = (sine_at(p2) * (depth >> 1)) >> 15;
+                    pm = (pm + inc_m + o2) & 65535;
+                } else {
+                    pm = (pm + inc_m) & 65535;
+                }
+                mod = sine_at(pm);
+                off = (mod * depth) >> 15;
+                pc = (pc + inc_c) & 65535;
+                car = sine_at((pc + off) & 65535);
+                outv = (car * env) >> 16;
+                if (opm == 2) {
+                    int32 pcb;
+                    int32 pmb;
+                    int32 offb;
+                    int32 carb;
+                    pmb = (rd32(g_mv, b + 15) + inc_m) & 65535;
+                    wr32(g_mv, b + 15, pmb);
+                    offb = (sine_at(pmb) * (depth >> 1)) >> 15;
+                    pcb = (rd32(g_mv, b + 14) + inc_c +
+                           (inc_c >> 8)) & 65535;
+                    wr32(g_mv, b + 14, pcb);
+                    carb = sine_at((pcb + offb) & 65535);
+                    outv = (outv >> 1) + ((carb * env) >> 17);
+                }
+                t = outv >> lvl;
+                part = rd32(g_mv, b + 12);
+                vol = rd32(g_part, part * 8 + 1);
+                pan = rd32(g_part, part * 8 + 2);
+                t = (t * vol) / 127;
+                sumL = sumL + ((t * (127 - pan)) >> 7);
+                sumR = sumR + ((t * pan) >> 7);
+            }
+            wr32(g_mv, b + 3, pc);
+            wr32(g_mv, b + 4, pm);
+            wr32(g_mv, b + 5, env);
+            wr32(g_mv, b + 6, stg);
+            wr32(g_mv, b + 7, gate);
+            wr32(g_mv, b + 8, menv);
+        }
+        vi = vi + 1;
+    }
+    if (sumL > 30000) {
+        sumL = 30000;
+    }
+    if (sumL < 0 - 30000) {
+        sumL = 0 - 30000;
+    }
+    if (sumR > 30000) {
+        sumR = 30000;
+    }
+    if (sumR < 0 - 30000) {
+        sumR = 0 - 30000;
+    }
+    wr32(g_mix, 0, sumL);
+    wr32(g_mix, 1, sumR);
+}
+
+void mt_event(int32 status, int32 d1, int32 d2)
+{
+    int32 hi;
+    int32 ch;
+    hi = status & 240;
+    ch = status & 15;
+    if (ch >= 8) {
+        return;  /* ch 9 以降は無視 (ch 10 ドラムは将来課題) */
+    }
+    if (hi == 128) {
+        mt_note_off(ch, d1);
+    } else if (hi == 144) {
+        if (d2 == 0) {
+            mt_note_off(ch, d1);
+        } else {
+            mt_note_on(ch, d1);
+        }
+    } else if (hi == 176) {
+        if (d1 == 7) {
+            wr32(g_part, ch * 8 + 1, d2);
+        } else if (d1 == 10) {
+            wr32(g_part, ch * 8 + 2, d2);
+        } else if (d1 == 120 || d1 == 123) {
+            mt_all_off(ch);
+        }
+    } else if (hi == 192) {
+        int32 idx;
+        idx = g_gmf[d1 >> 3] & 255;
+        wr32(g_part, ch * 8 + 0, idx);
+        print_part_preset(ch, idx);
+    }
+}
+
+void mt_feed(int32 b)
+{
+    if (rd32(g_mst, 4) != 0) {
+        if (b == 247) {
+            if (rd32(g_mst, 5) == 2) {
+                wr32(g_mst, 8, 1);  /* 終了マーカー確定 */
+            }
+            wr32(g_mst, 4, 0);
+            wr32(g_mst, 5, 0);
+        } else if (rd32(g_mst, 5) == 0) {
+            if (b == 125) {
+                wr32(g_mst, 5, 1);
+            } else {
+                wr32(g_mst, 5, 3);
+            }
+        } else if (rd32(g_mst, 5) == 1) {
+            if (b == 0) {
+                wr32(g_mst, 5, 2);
+            } else {
+                wr32(g_mst, 5, 3);
+            }
+        } else {
+            wr32(g_mst, 5, 3);
+        }
+        return;
+    }
+    if (b >= 248) {
+        return;  /* リアルタイムメッセージは無視 */
+    }
+    if (b == 240) {
+        wr32(g_mst, 4, 1);
+        wr32(g_mst, 5, 0);
+        wr32(g_mst, 0, 0);
+        return;
+    }
+    if (b >= 240) {
+        wr32(g_mst, 0, 0);
+        wr32(g_mst, 2, 0);
+        if (b == 241 || b == 243) {
+            wr32(g_mst, 6, 1);
+        } else if (b == 242) {
+            wr32(g_mst, 6, 2);
+        } else {
+            wr32(g_mst, 6, 0);
+        }
+        return;
+    }
+    if (b >= 128) {
+        int32 hi;
+        hi = b & 240;
+        wr32(g_mst, 0, b);
+        if (hi == 192 || hi == 208) {
+            wr32(g_mst, 1, 1);
+        } else {
+            wr32(g_mst, 1, 2);
+        }
+        wr32(g_mst, 2, 0);
+        return;
+    }
+    if (rd32(g_mst, 6) > 0) {
+        wr32(g_mst, 6, rd32(g_mst, 6) - 1);
+        return;
+    }
+    if (rd32(g_mst, 0) == 0) {
+        return;  /* 行き先のないデータバイトは捨てる */
+    }
+    if (rd32(g_mst, 2) == 0) {
+        wr32(g_mst, 3, b);
+        wr32(g_mst, 2, 1);
+        if (rd32(g_mst, 1) == 1) {
+            mt_event(rd32(g_mst, 0), b, 0);
+            wr32(g_mst, 2, 0);
+        }
+    } else {
+        mt_event(rd32(g_mst, 0), rd32(g_mst, 3), b);
+        wr32(g_mst, 2, 0);
+    }
+}
+
+int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
+{
+    int64 fnv;
+    int64 fnv_prime;
+    int32 total;
+    int64 r;
+    int64 fd;
+    int32 blen;
+    int32 bpos;
+    int32 idle;
+    int32 tail;
+    int32 i;
+    int64 tot_cyc;
+    int64 max_cyc;
+    int64 frames;
+    int64 labs;
+    int64 rabs;
+    int64 cyc_per_ms;
+    int64 ins0;
+    fnv = fnv_init();
+    fnv_prime = ((int64)256 << 32) + 435;
+    total = 0;
+    blen = 0;
+    bpos = 0;
+    idle = 0;
+    tail = -1;
+    tot_cyc = 0;
+    max_cyc = 0;
+    frames = 0;
+    labs = 0;
+    rabs = 0;
+    cyc_per_ms = 0;
+    i = 0;
+    while (i < 16) {
+        wr32(g_mst, i, 0);
+        i = i + 1;
+    }
+    mt_init(pool, dbg, opovr);
+    fd = syscall3(SYS_OPEN, path, 0, 0);
+    if (fd < 0) {
+        out_str("synth: cannot open ");
+        out_str(path);
+        putc(10);
+        return 1;
+    }
+    r = syscall3(SYS_AUDIO_OPEN, RATE, 2, 0);
+    if (r != 0) {
+        out_str("synth: cannot open audio\n");
+        syscall3(SYS_FCLOSE, fd, 0, 0);
+        return 1;
+    }
+    out_str("synth: midi mt mode pool=");
+    out_num(pool);
+    putc(10);
+    i = 0;
+    while (i < 8) {
+        print_part_preset(i, rd32(g_part, i * 8 + 0));
+        i = i + 1;
+    }
+    /* サイクル/秒の較正: perf_read はマシン全体の通算
+     * カウンタなので、100ms の sleep を挟んだ差分と
+     * uptime の差分から 1ms あたりのサイクル数が測れる */
+    {
+        int64 c0;
+        int64 t0;
+        int64 t1;
+        c0 = perf_read(0);
+        t0 = syscall3(SYS_UPTIME, 0, 0, 0);
+        syscall3(SYS_SLEEP, 100, 0, 0);
+        t1 = syscall3(SYS_UPTIME, 0, 0, 0);
+        if (t1 > t0) {
+            cyc_per_ms = (perf_read(0) - c0) / (t1 - t0);
+        }
+    }
+    ins0 = perf_read(1);
+    while (1) {
+        int32 k;
+        if (tail < 0) {
+            if (bpos >= blen) {
+                int64 n;
+                n = syscall3(SYS_READ, fd, g_mbuf, 128);
+                if (n < 0) {
+                    syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+                    syscall3(SYS_FCLOSE, fd, 0, 0);
+                    out_str("synth: read failed\n");
+                    return 1;
+                }
+                if (n == 0) {
+                    idle = idle + 1;
+                    syscall3(SYS_SLEEP, 5, 0, 0);
+                } else {
+                    blen = (int32)n;
+                    bpos = 0;
+                    idle = 0;
+                }
+            }
+            while (bpos < blen) {
+                mt_feed(g_mbuf[bpos] & 255);
+                bpos = bpos + 1;
+                if (rd32(g_mst, 8) != 0) {
+                    tail = 0;
+                    break;
+                }
+            }
+            if (idle > 2600) {
+                tail = 0;
+            }
+            mt_peak_update();
+        }
+        {
+            int64 c0;
+            int64 cost;
+            c0 = perf_read(0);
+            k = 0;
+            while (k < 512) {
+                int32 L;
+                int32 R;
+                mt_mix();
+                L = rd32(g_mix, 0);
+                R = rd32(g_mix, 1);
+                g_buf[k * 4] = (char)(L & 255);
+                g_buf[k * 4 + 1] = (char)((L >> 8) & 255);
+                g_buf[k * 4 + 2] = (char)(R & 255);
+                g_buf[k * 4 + 3] = (char)((R >> 8) & 255);
+                fnv = (fnv ^ (g_buf[k * 4] & 255)) * fnv_prime;
+                fnv = (fnv ^ (g_buf[k * 4 + 1] & 255)) * fnv_prime;
+                fnv = (fnv ^ (g_buf[k * 4 + 2] & 255)) * fnv_prime;
+                fnv = (fnv ^ (g_buf[k * 4 + 3] & 255)) * fnv_prime;
+                if (L < 0) {
+                    labs = labs - L;
+                } else {
+                    labs = labs + L;
+                }
+                if (R < 0) {
+                    rabs = rabs - R;
+                } else {
+                    rabs = rabs + R;
+                }
+                k = k + 1;
+            }
+            cost = perf_read(0) - c0;
+            tot_cyc = tot_cyc + cost;
+            if (cost > max_cyc) {
+                max_cyc = cost;
+            }
+            frames = frames + 512;
+        }
+        if (audio_write_all(1024) != 0) {
+            syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+            syscall3(SYS_FCLOSE, fd, 0, 0);
+            out_str("synth: audio write failed\n");
+            return 1;
+        }
+        total = total + 1024;
+        if (tail >= 0) {
+            tail = tail + 512;
+            if (tail >= 11025) {
+                break;
+            }
+        }
+    }
+    syscall3(SYS_FCLOSE, fd, 0, 0);
+    r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
+    if (r != 0) {
+        out_str("synth: audio close failed\n");
+        return 1;
+    }
+    out_str("synth: samples=");
+    out_num(total);
+    out_str(" fnv=");
+    out_hex64(fnv);
+    putc(10);
+    out_str("synth: lr l=");
+    out_num(labs);
+    out_str(" r=");
+    out_num(rabs);
+    putc(10);
+    out_str("synth: perf cyc=");
+    out_num(tot_cyc);
+    out_str(" ins=");
+    out_num(perf_read(1) - ins0);
+    putc(10);
+    out_str("synth: perf avg=");
+    if (frames > 0) {
+        out_num(tot_cyc / frames);
+    } else {
+        out_num(0);
+    }
+    out_str(" maxchunk=");
+    out_num(max_cyc);
+    out_str(" budget=");
+    if (cyc_per_ms > 0) {
+        out_num(max_cyc * 100 / (cyc_per_ms * 11609 / 1000));
+    } else {
+        out_num(0);
+    }
+    out_str("% peak=");
+    out_num(rd32(g_mctl, 3));
+    out_str(" pool=");
+    out_num(pool);
+    putc(10);
+    out_str("synth: done\n");
+    return 0;
+}
+
 int32 main(int32 argc, char **argv)
 {
     int32 mode;
     int32 engine;
     int32 preset;
+    int32 pool;
+    int32 dbg;
+    int32 opovr;
     mode = 0;
     engine = 0;
     preset = 0;
+    pool = 32;
+    dbg = 0;
+    opovr = 0;
     if (argc >= 2) {
         if (streq(argv[1], "fm") || streq(argv[1], "psg")) {
             mode = 0;
@@ -1631,20 +2467,35 @@ int32 main(int32 argc, char **argv)
                 }
             }
         } else if (streq(argv[1], "midi")) {
+            int32 ai;
             if (argc < 3) {
-                out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
+                out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg]\n");
                 return 2;
             }
             mode = 2;
-            if (argc >= 4) {
-                if (streq(argv[3], "psg")) {
+            ai = 3;
+            while (ai < argc) {
+                if (streq(argv[ai], "psg")) {
                     engine = 1;
-                } else if (streq(argv[3], "fm")) {
+                } else if (streq(argv[ai], "fm")) {
                     engine = 0;
+                } else if (streq(argv[ai], "dbg")) {
+                    dbg = 1;
+                } else if (streq(argv[ai], "2op")) {
+                    opovr = 1;
+                } else if (streq(argv[ai], "4op")) {
+                    opovr = 2;
                 } else {
-                    out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
-                    return 2;
+                    int32 pv;
+                    pv = parse_num(argv[ai]);
+                    if (pv >= 1 && pv <= 32) {
+                        pool = pv;
+                    } else {
+                        out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg]\n");
+                        return 2;
+                    }
                 }
+                ai = ai + 1;
             }
         } else {
             out_str("usage: synth [fm|psg [preset]|play [fm|psg] [preset]|midi <file> [fm|psg]]\n");
@@ -1656,7 +2507,10 @@ int32 main(int32 argc, char **argv)
     fill_song();
     fill_presets();
     if (mode == 2) {
-        return run_midi(argv[2], engine);
+        if (engine == 1) {
+            return run_midi(argv[2], 1);
+        }
+        return run_midi_mt(argv[2], pool, dbg, opovr);
     }
     load_preset(engine, preset);
     if (mode == 0) {

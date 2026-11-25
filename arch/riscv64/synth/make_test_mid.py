@@ -109,6 +109,106 @@ def smf(fmt, tracks):
     return bytes(out)
 
 
+def ch_ev(tick, order, status, *data):
+    return (tick, order, ("ch", bytes([status] + list(data))))
+
+
+def notes_ev(ch, notes):
+    ev = []
+    for start, dur, note, vel in notes:
+        ev.append(ch_ev(start, 3, 0x90 | ch, note, vel))
+        ev.append(ch_ev(start + dur, 2, 0x80 | ch, note, 0))
+    return ev
+
+
+def tempo1(us=500000):
+    return [(0, 0, ("meta", 0x51, struct.pack(">I", us)[1:]))]
+
+
+def build_song2():
+    """マルチティンバー確認曲 (format 1、4 パート、約 4 秒)。
+    ch1 メロディ (prog 0)、ch2 ベース (prog 32)、ch3 和音
+    (prog 48)、ch4 リード (prog 80)。パンと音量もパート別"""
+    mel = [(i * 480, 420, n, 100) for i, n in enumerate(MELODY[:8])]
+    t0 = [ch_ev(0, 1, 0xC0, 0), ch_ev(0, 1, 0xB0, 7, 100),
+          ch_ev(0, 1, 0xB0, 10, 64)] + notes_ev(0, mel)
+    bass = [(0, 900, 48, 95), (960, 900, 53, 95),
+            (1920, 900, 55, 95), (2880, 900, 48, 95)]
+    t1 = [ch_ev(0, 1, 0xC1, 32), ch_ev(0, 1, 0xB1, 7, 110),
+          ch_ev(0, 1, 0xB1, 10, 32)] + notes_ev(1, bass)
+    chords = []
+    for n in (60, 64, 67):
+        chords.append((0, 1700, n, 75))
+    for n in (57, 60, 65):
+        chords.append((1920, 1700, n, 75))
+    t2 = [ch_ev(0, 1, 0xC2, 48), ch_ev(0, 1, 0xB2, 7, 80),
+          ch_ev(0, 1, 0xB2, 10, 96)] + notes_ev(2, chords)
+    lead = [(1920, 900, 84, 85), (2880, 900, 81, 85)]
+    t3 = [ch_ev(0, 1, 0xC3, 80), ch_ev(0, 1, 0xB3, 7, 90),
+          ch_ev(0, 1, 0xB3, 10, 64)] + notes_ev(3, lead)
+    return smf(1, [tempo1(), t0, t1, t2, t3])
+
+
+def build_pan_song(pan):
+    """パン確認曲 (format 0、ch1 のみ)。pan=0 で左のみ、
+    pan=127 で右のみに信号が出るはず"""
+    notes = [(0, 420, 72, 100), (480, 420, 76, 100),
+             (960, 420, 79, 100), (1440, 900, 84, 100)]
+    ev = tempo1() + [ch_ev(0, 1, 0xC0, 0),
+                     ch_ev(0, 1, 0xB0, 7, 100),
+                     ch_ev(0, 1, 0xB0, 10, pan)] + notes_ev(0, notes)
+    return smf(0, [ev])
+
+
+def build_song4():
+    """DVA 確認曲 (format 1)。ch1..5 が同時に 20 音の和音を
+    2 回鳴らす。同時発音の要求 (100) はプール (32) と
+    パート上限 (8) を大きく超え、steal が大量に起きる"""
+    progs = [0, 32, 48, 80, 88]
+    tracks = [tempo1()]
+    for ch in range(5):
+        ev = [ch_ev(0, 1, 0xC0 | ch, progs[ch]),
+              ch_ev(0, 1, 0xB0 | ch, 7, 100)]
+        base = 36 + ch * 3
+        for rnd, start in ((0, 0), (1, 1920)):
+            for i in range(20):
+                ev.append(ch_ev(start, 3, 0x90 | ch, base + i, 90))
+                ev.append(ch_ev(start + 1440, 2, 0x80 | ch,
+                                base + i, 0))
+        tracks.append(ev)
+    return smf(1, tracks)
+
+
+def build_song5():
+    """ストレス曲 (format 1、約 10 秒)。ステージごとに同時
+    発音が 4 -> 8 -> 16 -> 24 -> 32 と増える (各ステージ
+    1920 tick = 2 秒、境界は tick 0/1920/3840/5760/7680)。
+    全 8 パート使用、ステージ境界でプログラムチェンジ、
+    最終ステージでは ch1 に 16 分音符の連打も入る"""
+    tracks = [tempo1()]
+    # (ステージごとの使用パート数, パートあたりの音数)
+    stages = [(4, 1), (4, 2), (8, 2), (8, 3), (8, 4)]
+    for ch in range(8):
+        ev = [ch_ev(0, 1, 0xB0 | ch, 7, 100),
+              ch_ev(0, 1, 0xB0 | ch, 10, 16 + ch * 14)]
+        base = 45 + ch * 3
+        for s, (nparts, per) in enumerate(stages):
+            start = s * 1920
+            ev.append(ch_ev(start, 1, 0xC0 | ch, ((s + ch) % 16) * 8))
+            if ch < nparts:
+                for iv in (0, 4, 7, 12)[:per]:
+                    ev.append(ch_ev(start, 3, 0x90 | ch, base + iv, 90))
+                    ev.append(ch_ev(start + 1800, 2, 0x80 | ch,
+                                    base + iv, 0))
+        if ch == 0:
+            for i in range(16):
+                n = 84 if i % 2 == 0 else 88
+                ev.append(ch_ev(7680 + i * 120, 3, 0x90, n, 100))
+                ev.append(ch_ev(7680 + i * 120 + 100, 2, 0x80, n, 0))
+        tracks.append(ev)
+    return smf(1, tracks)
+
+
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "."
     mel = melody_notes()
@@ -119,7 +219,13 @@ def main():
                     chan_events(mel),
                     chan_events(cb, prog_cc=False)])
 
-    for name, data in (("SONG0.MID", song0), ("SONG1.MID", song1)):
+    songs = (("SONG0.MID", song0), ("SONG1.MID", song1),
+             ("SONG2.MID", build_song2()),
+             ("SONG3L.MID", build_pan_song(0)),
+             ("SONG3R.MID", build_pan_song(127)),
+             ("SONG4.MID", build_song4()),
+             ("SONG5.MID", build_song5()))
+    for name, data in songs:
         path = outdir.rstrip("/") + "/" + name
         with open(path, "wb") as f:
             f.write(data)
