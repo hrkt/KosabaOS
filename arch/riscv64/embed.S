@@ -193,3 +193,25 @@ recv_prog_start:
     .incbin "recv.elf"
 recv_prog_end:
 #endif
+
+/* synth (シンセ音源) の素材。IwaC 製のビルド成果物を
+ * build.sh が写してきたときだけ (-DSYNTH_EMBED) 取り込む
+ * (doc/synth-design.md) */
+#ifdef SYNTH_EMBED
+    .globl synth_prog_start
+    .globl synth_prog_end
+synth_prog_start:
+    .incbin "synth.elf"
+synth_prog_end:
+#endif
+
+/* smfplay (SMF プレーヤー) の素材。synth と同じ流儀で、
+ * build.sh が写してきたときだけ (-DSMFPLAY_EMBED) 取り込む
+ * (doc/synth-design.md) */
+#ifdef SMFPLAY_EMBED
+    .globl smfplay_prog_start
+    .globl smfplay_prog_end
+smfplay_prog_start:
+    .incbin "smfplay.elf"
+smfplay_prog_end:
+#endif
