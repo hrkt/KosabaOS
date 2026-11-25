@@ -140,6 +140,18 @@ if [ -f recv/recv.elf ]; then
     echo "build: recv materials embedded"
 fi
 
+# synth (シンセ音源アプリ、doc/synth-design.md) の素材。
+# IwaC 製で、ビルドは synth/build-synth.sh が担う。
+# nami と同じ流儀で、成果物 (synth/synth.elf) があるとき
+# だけ写して取り込む
+SYNTH_DEFINE=""
+rm -f synth.elf
+if [ -f synth/synth.elf ]; then
+    cp synth/synth.elf synth.elf
+    SYNTH_DEFINE=-DSYNTH_EMBED
+    echo "build: synth materials embedded"
+fi
+
 # スクリーンセーバー (doc/screensaver-design.md) のテスト用
 # 閾値。SAVER_TEST が設定されていれば -DSAVER_TEST を渡し、
 # 段1/段2 の閾値が 4 秒 / 10 秒に差し替わる (シナリオ
@@ -174,7 +186,7 @@ if [ "$BOARD" = virt ]; then
     python3 make_sd_image.py sd.img $SD_FILES
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SYNTH_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes
