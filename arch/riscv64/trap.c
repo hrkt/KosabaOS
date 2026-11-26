@@ -1996,6 +1996,44 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
 
 #endif /* BOARD_FEATURE_AUDIO */
 
+/* 待ちのポーリングで回す周期仕事と、その優先の並び
+ * (doc/realtime-design.md 原則1・原則5)。trap 文脈では
+ * タイマ割り込みが入らないので、sleep や getc の待ちの
+ * 間はこの口が周期仕事の担い手になる。
+ * 何を先に回すかは「目の前の目的」のプロファイルで
+ * 決める。プロファイルは優先順の仕事番号の列で、
+ * 差し替えられる形にしてある (今は装填だけの既定
+ * プロファイルのみ。MIDI 受信 (段4) など、将来の
+ * 周期仕事は同じ列に乗る)。呼び出しは sched_poll()
+ * の前に置く (音の経路が先、画面などの更新は後)。
+ * virt (ダミー) では装填の実体がないので何もしない */
+#define POLL_WORK_AUDIO 0  /* オーディオ装填 */
+#define POLL_WORK_COUNT 1
+
+static const int poll_profile_default[POLL_WORK_COUNT] = {
+    POLL_WORK_AUDIO,
+};
+static const int *poll_profile = poll_profile_default;
+static int poll_profile_len = POLL_WORK_COUNT;
+
+static void trap_poll_priority(void)
+{
+    int i;
+    for (i = 0; i < poll_profile_len; i++) {
+        switch (poll_profile[i]) {
+        case POLL_WORK_AUDIO:
+#if BOARD_FEATURE_AUDIO
+            if (audio_open_flag) {
+                audio_dma_step();
+            }
+#endif
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 /* 16 進 16 桁 (小文字、ゼロ埋め、0x なし) をログへ出す。
  * kput_hex は 0x 接頭辞が付くので fnv の表示には使えない */
 static void kput_hex16(uint64_t x)
@@ -2055,6 +2093,7 @@ static int do_syscall(uint64_t *frame)
                     restore_runner(frame, target);
                     return 1;
                 }
+                trap_poll_priority();
                 sched_poll();
             }
             break;
@@ -2084,10 +2123,34 @@ static int do_syscall(uint64_t *frame)
                 restore_runner(frame, next);
                 return 1;
             }
-            /* 誰も走れない: その場でポーリングしながら待つ
-             * (スケジューラは回るので時計タスクは進む) */
+            /* 誰も走れない: その場でポーリングしながら
+             * 待つ。ただし自分の期限だけを見る待ちには
+             * しない (doc/realtime-design.md 原則1)。
+             * 待ちの間に (a) オーディオの装填を回し、
+             * (b) 他の走者が実行可能になったら (前面の
+             * 起床など) 番を渡して抜ける — 再開時に
+             * sleep が再実行され、残りを寝直す。
+             * 以前は自走者の起床まで回り続けて、装填も
+             * 前面の起床確認も最長で sleep の全期間
+             * (実測約0.45秒) 止まっていた */
             j->state = JOB_SLEEPING;
-            while (r_time() < j->sleep_until) {
+            for (;;) {
+                int next2;
+                if (r_time() >= j->sleep_until) {
+                    break;
+                }
+                if (console_owner != cur_runner &&
+                    runner_runnable(console_owner)) {
+                    next2 = console_owner;
+                } else {
+                    next2 = pick_next_runner();
+                }
+                if (next2 != cur_runner) {
+                    save_runner(frame, r_sepc());
+                    restore_runner(frame, next2);
+                    return 1;
+                }
+                trap_poll_priority();
                 sched_poll();
             }
             j->state = JOB_RUNNING;
@@ -2171,7 +2234,9 @@ static int do_syscall(uint64_t *frame)
              * タイマ割り込みはこの待ちを助けてくれない。
              * 代わりにポーリングの合間に sched_poll() で
              * 番を回す (割り込み状態に触る yield() は
-             * ここでは使えない) */
+             * ここでは使えない)。装填も同じ合間に回す
+             * (realtime-design 原則1、trap_poll_priority) */
+            trap_poll_priority();
             sched_poll();
         }
         break;
