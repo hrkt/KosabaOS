@@ -1626,6 +1626,63 @@ static uint64_t dma_block_frames;
 static int dma_started;        /* 実データを 1 回でも流した */
 static int audio_dma_closing;  /* close の drain 中 */
 
+/* 装填遅れ (late) の計装 (doc/realtime-audio-design.md
+ * 段0、doc/audio-dma-design.md 追補)。張ったブロックが
+ * 再生を終えるはずの時刻 (dma_block_due) に対して、
+ * 完了の観測がどれだけ遅れたかを数える。観測は
+ * audio_dma_step が担うが、syscall の実行中 (SIE 落ち)
+ * は誰も step を回さないので、長い syscall を跨いだ
+ * ブロックは観測が遅れ、その間に I2S FIFO が枯れて
+ * 音が途切れても under には乗らない。その見えない
+ * 途切れを数字にするための計装で、再生の挙動は変えない。
+ * 遅れが FIFO の残量 (約 8 フレーム ≒ 180µs) 以内なら
+ * DAC は飢えないので、それを超えた分だけを数える:
+ *   late     = 閾値を超えて遅れたブロックの数
+ *   late_us  = 超過分の合計 (µs)。DAC が飢えた時間の見積り
+ *   late_max = 1 ブロックの最大の遅れ (µs、閾値引き前) */
+#define AUDIO_LATE_FIFO_US 180
+static uint64_t dma_block_due;     /* 張ったブロックの完了予定 (r_time) */
+static uint64_t audio_late_count;  /* 閾値を超えて遅れたブロック数 */
+static uint64_t audio_late_us;     /* 超過分の合計 (µs) */
+static uint64_t audio_late_max_us; /* 最大の遅れ (µs) */
+
+/* ブロックを張る時に完了予定を立てる。所要時間は
+ * ボードの実効レート (K210 では 44010Hz) で計算する。
+ * 要求レート (44100) で計算すると 1 ブロックあたり
+ * 約 46µs の系統誤差が late に混ざるので、必ず実効
+ * レートを使う (不明な時だけ要求レートで代用) */
+static void dma_arm_set_due(uint64_t frames)
+{
+    uint64_t rate = board_audio_actual_rate();
+    if (rate == 0) {
+        rate = audio_rate;
+    }
+    if (rate == 0) {
+        dma_block_due = 0;
+        return;
+    }
+    dma_block_due = r_time() + frames * TIMER_HZ / rate;
+}
+
+/* ブロックの完了を観測した時に遅れを帳簿へ入れる */
+static void dma_note_late(void)
+{
+    uint64_t now = r_time();
+    uint64_t late_us;
+    if (dma_block_due == 0 || now <= dma_block_due) {
+        return;
+    }
+    late_us = (now - dma_block_due) * 1000000 / TIMER_HZ;
+    if (late_us <= AUDIO_LATE_FIFO_US) {
+        return;
+    }
+    audio_late_count++;
+    audio_late_us += late_us - AUDIO_LATE_FIFO_US;
+    if (late_us > audio_late_max_us) {
+        audio_late_max_us = late_us;
+    }
+}
+
 /* リングに入っているバイト数 (索引の差分) */
 static uint64_t ring_used(void)
 {
@@ -1690,6 +1747,7 @@ static void audio_dma_step(void)
         if (!board_audio_dma_done()) {
             return;
         }
+        dma_note_late();
         if (dma_block_silence) {
             audio_underruns += dma_block_frames;
         } else {
@@ -1722,6 +1780,7 @@ static void audio_dma_step(void)
         dma_block_active = 1;
         dma_block_silence = 0;
         dma_block_frames = frames;
+        dma_arm_set_due(frames);
         dma_started = 1;
     } else if (dma_started && !audio_dma_closing) {
         /* 実データが流れ始めた後の空転は無音でつなぐ
@@ -1732,6 +1791,7 @@ static void audio_dma_step(void)
         dma_block_active = 1;
         dma_block_silence = 1;
         dma_block_frames = AUDIO_SILENCE_FRAMES;
+        dma_arm_set_due(AUDIO_SILENCE_FRAMES);
     }
 }
 
@@ -2694,6 +2754,10 @@ static int do_syscall(uint64_t *frame)
         audio_ring_tail = 0;
         audio_tail_local = 0;
         audio_underruns = 0;
+        audio_late_count = 0;
+        audio_late_us = 0;
+        audio_late_max_us = 0;
+        dma_block_due = 0;
         audio_stream_live = 0;
         audio_dma_active = board_audio_dma_active();
         dma_head = 0;
@@ -2825,6 +2889,12 @@ static int do_syscall(uint64_t *frame)
         }
         kputs("audio: ring under=");
         kput_dec(audio_underruns);
+        kputs(" late=");
+        kput_dec(audio_late_count);
+        kputs(" late_us=");
+        kput_dec(audio_late_us);
+        kputs(" late_max=");
+        kput_dec(audio_late_max_us);
         kputc('\n');
 #endif
         audio_open_flag = 0;

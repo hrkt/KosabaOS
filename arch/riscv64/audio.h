@@ -36,6 +36,14 @@ int board_audio_dma_done(void);
 void board_audio_dma_stop(void);
 void board_audio_dma_note_frames(uint64_t frames);
 
+/* ボードが実際にプログラムした再生レート (Hz)。K210 は
+ * PLL2 の分周の都合で要求レートちょうどにはならず、
+ * 44100 要求で実効 44010Hz になる。装填遅れ (late) の
+ * 計装がブロックの再生所要時間を計算するのに使う
+ * (doc/audio-dma-design.md 追補)。open していない /
+ * 分からない場合は 0 */
+uint64_t board_audio_actual_rate(void);
+
 /* 閉じる。ドライバ側の記録 (K210 では i2s の要約行) は
  * ここでカーネルログへ出す */
 void board_audio_close(void);
