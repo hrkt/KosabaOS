@@ -1646,6 +1646,29 @@ static uint64_t audio_late_count;  /* 閾値を超えて遅れたブロック数
 static uint64_t audio_late_us;     /* 超過分の合計 (µs) */
 static uint64_t audio_late_max_us; /* 最大の遅れ (µs) */
 
+/* 出力側の帳簿 (段0.5、2026-11-26)。under と late は
+ * 「数えられる途切れ」しか見ておらず、リングが空の
+ * 時間に DAC が何を出したか (ブロックとして流れた分
+ * 以外) はどのカウンタにも乗らなかった (synth 実機
+ * 計測: 供給 30 秒分 + under=0 で壁 133 秒)。分けて
+ * 数える:
+ *   out          = 完了したブロック (実データ + 無音)
+ *                  のフレーム総数。ブロックとして実際に
+ *                  クロックアウトされた分の下限
+ *   span_ms      = 最初の装填から close までの壁時間。
+ *                  I2S のクロックは open 中流れ続ける
+ *                  ので、span_ms × 実効レートが「保持や
+ *                  無音も含めクロックアウトされた総
+ *                  フレーム数」の見積りになる。曲の
+ *                  伸び = その総時間 − 楽譜の曲長
+ *   step_gap_max = audio_dma_step の最大呼び出し間隔
+ *                  (µs)。観測がどれだけ止まっていたか
+ *                  (late の量子化の裏取り) */
+static uint64_t audio_out_frames;    /* 完了ブロックのフレーム総数 */
+static uint64_t audio_first_arm;     /* 最初の装填の r_time (0 = まだ) */
+static uint64_t audio_step_last;     /* 前回の step の r_time (0 = まだ) */
+static uint64_t audio_step_gap_max_us; /* step 間隔の最大 (µs) */
+
 /* ブロックを張る時に完了予定を立てる。所要時間は
  * ボードの実効レート (K210 では 44010Hz) で計算する。
  * 要求レート (44100) で計算すると 1 ブロックあたり
@@ -1743,11 +1766,28 @@ static int ring_pop_frame(uint16_t *l, uint16_t *r)
  * 回ることはない */
 static void audio_dma_step(void)
 {
+    /* step 間隔の帳簿 (段0.5): 観測の担い手がどれだけ
+     * 止まっていたかを測る。ブロックが飛んでいる /
+     * リングにデータがある時に限る (何も無い間の間隔は
+     * 遅れにならない) */
+    {
+        uint64_t now = r_time();
+        if (audio_step_last != 0 &&
+            (dma_block_active || ring_used() >= 8)) {
+            uint64_t gap_us =
+                (now - audio_step_last) * 1000000 / TIMER_HZ;
+            if (gap_us > audio_step_gap_max_us) {
+                audio_step_gap_max_us = gap_us;
+            }
+        }
+        audio_step_last = now;
+    }
     if (dma_block_active) {
         if (!board_audio_dma_done()) {
             return;
         }
         dma_note_late();
+        audio_out_frames += dma_block_frames;
         if (dma_block_silence) {
             audio_underruns += dma_block_frames;
         } else {
@@ -1781,6 +1821,9 @@ static void audio_dma_step(void)
         dma_block_silence = 0;
         dma_block_frames = frames;
         dma_arm_set_due(frames);
+        if (audio_first_arm == 0) {
+            audio_first_arm = r_time();
+        }
         dma_started = 1;
     } else if (dma_started && !audio_dma_closing) {
         /* 実データが流れ始めた後の空転は無音でつなぐ
@@ -2758,6 +2801,10 @@ static int do_syscall(uint64_t *frame)
         audio_late_us = 0;
         audio_late_max_us = 0;
         dma_block_due = 0;
+        audio_out_frames = 0;
+        audio_first_arm = 0;
+        audio_step_last = 0;
+        audio_step_gap_max_us = 0;
         audio_stream_live = 0;
         audio_dma_active = board_audio_dma_active();
         dma_head = 0;
@@ -2895,6 +2942,13 @@ static int do_syscall(uint64_t *frame)
         kput_dec(audio_late_us);
         kputs(" late_max=");
         kput_dec(audio_late_max_us);
+        kputs(" out=");
+        kput_dec(audio_out_frames);
+        kputs(" span_ms=");
+        kput_dec(audio_first_arm == 0 ? 0 :
+                 (r_time() - audio_first_arm) * 1000 / TIMER_HZ);
+        kputs(" step_gap_max=");
+        kput_dec(audio_step_gap_max_us);
         kputc('\n');
 #endif
         audio_open_flag = 0;
