@@ -1996,19 +1996,42 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
 
 #endif /* BOARD_FEATURE_AUDIO */
 
-/* 待ちのポーリングから装填を回す口 (doc/realtime-design.md
- * 原則1: カーネルの待ちは周期仕事を止めない)。trap 文脈
- * ではタイマ割り込みが入らないので、sleep や getc の
- * 待ちの間はこの口が装填の担い手になる。呼び出しは
- * sched_poll() の前に置く (原則5: 音の経路が先、
- * 画面などの更新は後)。virt (ダミー) では何もしない */
-static void trap_poll_audio(void)
+/* 待ちのポーリングで回す周期仕事と、その優先の並び
+ * (doc/realtime-design.md 原則1・原則5)。trap 文脈では
+ * タイマ割り込みが入らないので、sleep や getc の待ちの
+ * 間はこの口が周期仕事の担い手になる。
+ * 何を先に回すかは「目の前の目的」のプロファイルで
+ * 決める。プロファイルは優先順の仕事番号の列で、
+ * 差し替えられる形にしてある (今は装填だけの既定
+ * プロファイルのみ。MIDI 受信 (段4) など、将来の
+ * 周期仕事は同じ列に乗る)。呼び出しは sched_poll()
+ * の前に置く (音の経路が先、画面などの更新は後)。
+ * virt (ダミー) では装填の実体がないので何もしない */
+#define POLL_WORK_AUDIO 0  /* オーディオ装填 */
+#define POLL_WORK_COUNT 1
+
+static const int poll_profile_default[POLL_WORK_COUNT] = {
+    POLL_WORK_AUDIO,
+};
+static const int *poll_profile = poll_profile_default;
+static int poll_profile_len = POLL_WORK_COUNT;
+
+static void trap_poll_priority(void)
 {
+    int i;
+    for (i = 0; i < poll_profile_len; i++) {
+        switch (poll_profile[i]) {
+        case POLL_WORK_AUDIO:
 #if BOARD_FEATURE_AUDIO
-    if (audio_open_flag) {
-        audio_dma_step();
-    }
+            if (audio_open_flag) {
+                audio_dma_step();
+            }
 #endif
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 /* 16 進 16 桁 (小文字、ゼロ埋め、0x なし) をログへ出す。
@@ -2070,7 +2093,7 @@ static int do_syscall(uint64_t *frame)
                     restore_runner(frame, target);
                     return 1;
                 }
-                trap_poll_audio();
+                trap_poll_priority();
                 sched_poll();
             }
             break;
@@ -2127,7 +2150,7 @@ static int do_syscall(uint64_t *frame)
                     restore_runner(frame, next2);
                     return 1;
                 }
-                trap_poll_audio();
+                trap_poll_priority();
                 sched_poll();
             }
             j->state = JOB_RUNNING;
@@ -2212,8 +2235,8 @@ static int do_syscall(uint64_t *frame)
              * 代わりにポーリングの合間に sched_poll() で
              * 番を回す (割り込み状態に触る yield() は
              * ここでは使えない)。装填も同じ合間に回す
-             * (realtime-design 原則1、trap_poll_audio) */
-            trap_poll_audio();
+             * (realtime-design 原則1、trap_poll_priority) */
+            trap_poll_priority();
             sched_poll();
         }
         break;
