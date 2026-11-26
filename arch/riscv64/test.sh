@@ -1002,14 +1002,18 @@ echo "== scenario AQ: audio volume (syscall 50 / vol.elf) =="
 { sleep 3; printf 'run vol.elf\n'; sleep 1; \
   printf 'run vol.elf 3\n'; sleep 1; \
   printf 'run vol.elf\n'; sleep 1; \
+  printf 'run vol.elf mute\n'; sleep 1; \
+  printf 'run vol.elf\n'; sleep 1; \
+  printf 'run vol.elf 1\n'; sleep 1; \
   printf 'run vol.elf 9\n'; sleep 1; } \
-    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    | timeout 30 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-aq.log 2>&1 || true
 out=$(strip_ticks < test-aq.log)
 rc=0
 echo "$out" | grep -q "vol: shift=1 (1/2)" || rc=1
 echo "$out" | grep -q "vol: shift=3 (1/8)" || rc=1
-echo "$out" | grep -q "usage: vol \[0-4\]" || rc=1
+echo "$out" | grep -q "vol: shift=5 (mute)" || rc=1
+echo "$out" | grep -q "usage: vol \[0-5\]" || rc=1
 echo "$out" | grep -q "run: exit status 2" || rc=1
 report "AQ audio volume" $rc
 

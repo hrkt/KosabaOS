@@ -1559,6 +1559,9 @@ static uint64_t audio_channels;  /* 1 または 2 */
 static uint64_t audio_fnv;       /* 受けたバイト列の FNV-1a 64bit */
 static uint64_t audio_samples;   /* 受け付けた総サンプル数 */
 static int audio_vol_shift = 1;  /* 音量シフト (syscall 50、既定は半分) */
+#define AUDIO_VOL_MUTE 5  /* シフト値 5 = ミュート (全サンプル 0、
+                           * 2026-11-26 追加。音を出さない実機
+                           * 計測用: 経路と帳簿は通常どおり動く) */
 
 #if BOARD_FEATURE_AUDIO
 /* --- リングバッファと供給 (追補3 + DMA 化) --------------------------
@@ -1953,11 +1956,12 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
 {
     unsigned char pbuf[1024];
     uint64_t j;
+    int mute = (audio_vol_shift == AUDIO_VOL_MUTE);
     if (audio_channels == 1) {
         for (j = 0; j < chunk; j += 2) {
             int16_t s = (int16_t)((uint16_t)buf[j] |
                                   ((uint16_t)buf[j + 1] << 8));
-            s = (int16_t)(s >> audio_vol_shift);
+            s = mute ? 0 : (int16_t)(s >> audio_vol_shift);
             pbuf[j * 4] = (unsigned char)(s & 0xFF);
             pbuf[j * 4 + 1] = (unsigned char)((s >> 8) & 0xFF);
             pbuf[j * 4 + 2] = 0;
@@ -1976,7 +1980,7 @@ static void ring_enqueue_packed(const unsigned char *buf, uint64_t chunk)
         for (j = 0; j < chunk; j += 2) {
             int16_t s = (int16_t)((uint16_t)buf[j] |
                                   ((uint16_t)buf[j + 1] << 8));
-            s = (int16_t)(s >> audio_vol_shift);
+            s = mute ? 0 : (int16_t)(s >> audio_vol_shift);
             pbuf[j * 2] = (unsigned char)(s & 0xFF);
             pbuf[j * 2 + 1] = (unsigned char)((s >> 8) & 0xFF);
             pbuf[j * 2 + 2] = 0;
@@ -2968,14 +2972,14 @@ static int do_syscall(uint64_t *frame)
         break;
     }
     case SYS_AUDIO_SET_VOLUME: {
-        /* a0 = 新しい音量シフト (0〜4、範囲外は 4 に
-         * 丸める)。負なら問い合わせのみ。戻り値は
-         * 設定後のシフト値。仕様は doc/syscalls.md
-         * の 50 番 */
+        /* a0 = 新しい音量シフト (0〜5、5 = ミュート、
+         * 範囲外は 5 に丸める)。負なら問い合わせのみ。
+         * 戻り値は設定後のシフト値。仕様は
+         * doc/syscalls.md の 50 番 */
         int64_t v = (int64_t)frame[FRAME_A0];
         if (v >= 0) {
-            if (v > 4) {
-                v = 4;
+            if (v > AUDIO_VOL_MUTE) {
+                v = AUDIO_VOL_MUTE;
             }
             audio_vol_shift = (int)v;
         }
