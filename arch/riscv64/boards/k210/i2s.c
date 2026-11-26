@@ -100,6 +100,7 @@ static int i2s_dma_mode;   /* この open は DMA 供給か */
 
 static int i2s_ready;        /* クロックと PLL2 の設定済み */
 static int i2s_open_flag;    /* board_audio_open の状態 */
+static uint64_t i2s_actual_rate; /* open で確定した実効レート (Hz) */
 static uint64_t stat_frames; /* 送ったステレオフレーム数 */
 static uint64_t stat_waits;  /* 満杯でポーリングした回数 */
 static uint64_t stat_over;   /* あふれ (txfo) の回数 */
@@ -210,6 +211,7 @@ int board_audio_open(uint64_t rate, uint64_t channels)
     }
     th -= 1;
     actual = PLL2_HZ / ((th + 1) * 128);
+    i2s_actual_rate = actual;
     diff = (actual > rate) ? (actual - rate) : (rate - actual);
     if (diff * 100 > rate) {
         return -1;
@@ -308,6 +310,12 @@ int board_audio_dma_active(void)
 void board_audio_dma_note_frames(uint64_t frames)
 {
     stat_frames += frames;
+}
+
+/* open で確定した実効レート (未 open なら 0) */
+uint64_t board_audio_actual_rate(void)
+{
+    return i2s_actual_rate;
 }
 
 /* buf (1 ワード = 1 チャンネルサンプルの列) を words
