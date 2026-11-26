@@ -1869,17 +1869,43 @@ void midi_feed(int32 b)
     }
 }
 
+/* ライブループの刻み (2026-11-26、doc の「ライブモードの
+ * リアルタイム化」の節):
+ *   LIVE_BLOCK  1 回に描くフレーム数 (128 = 約 2.9ms)。
+ *               入力ポーリングはブロックごとに行うので、
+ *               ノートオンの反映は最大でもこの分遅れる
+ *   LIVE_LEAD   演奏時計に対する先行目標 (256 フレーム =
+ *               約 5.8ms)。リングを満杯まで溜めず、枯ら
+ *               さない最小限だけ先行する (リングの滞留は
+ *               そのまま鍵盤→音の遅延になる)
+ *   LIVE_RATE   演奏時計のレート。K210 の実効レート
+ *               44010 に合わせる。要求レート 44100 で
+ *               時計を作ると消費より 0.2% 速く作り続け、
+ *               先行が膨らんで数分でリングが満ちる。
+ *               将来 OS の段3 (音声時計の公開) が来たら、
+ *               時計の出所はこの定数を差し替える */
+#define LIVE_BLOCK 128
+#define LIVE_LEAD 256
+#define LIVE_RATE 44010
+
 /* MIDI ストリーム再生モード: ファイルをバイト列ストリーム
  * としてポーリング読みし、MIDI を逐次解釈して鳴らす。
  * 自分の読み位置 (fd) を持ち、まだ書かれていない分は
- * read が 0 を返すので、描画を続けながら次の塊で再試行
- * する (書き手が smfplay の同時実行ジョブでも、書き終えた
- * 後から読み始めてもよい)。ストリーム自体に時刻情報は
- * 無いので、タイミングは「届いた時刻」が全て (本物の MIDI
- * と同じ)。終了マーカー F0 7D 00 F7 を読んだら、release の
- * 余韻として 11025 サンプル描いてから閉じる。マーカーが
- * 来ないまま約 30 秒分 (サンプル数換算) 新着が無ければ、
- * 書き手が死んだとみなして同じく閉じる */
+ * read が 0 を返す (書き手が smfplay の同時実行ジョブ
+ * でも、書き終えた後から読み始めてもよい)。ストリーム
+ * 自体に時刻情報は無いので、タイミングは「届いた時刻」
+ * が全て (本物の MIDI と同じ)。
+ * 描画は演奏時計駆動: 起点の uptime から「その時刻まで
+ * に描くべきフレーム数」を毎回計算し、先行目標まで
+ * 128 フレーム単位で描く。スケジューラに CPU を奪われ
+ * ても、戻った時点で時計まで取り戻すので、遅れは PCM
+ * の欠落ではなくジッタになる (旧ループは 512 フレーム
+ * 固定で取り戻す項が無く、実時間の約 1/4 しか作れな
+ * かった。doc の解析参照)。
+ * 終了マーカー F0 7D 00 F7 を読んだら、release の余韻
+ * として 11025 フレーム描いてから閉じる。マーカーが
+ * 来ないまま 30 秒新着が無ければ、書き手が死んだと
+ * みなして同じく閉じる */
 int32 run_midi(char *path, int32 engine)
 {
     int64 fnv;
@@ -1889,16 +1915,20 @@ int32 run_midi(char *path, int32 engine)
     int64 fd;
     int32 blen;
     int32 bpos;
-    int32 idle;
-    int32 tail;
     int32 i;
+    int64 t0;
+    int64 lastdata;
+    int64 rendered;
+    int64 tailend;
+    int64 lastread;
     fnv = fnv_init();
     fnv_prime = ((int64)256 << 32) + 435;
     total = 0;
     blen = 0;
     bpos = 0;
-    idle = 0;
-    tail = -1;
+    rendered = 0;
+    tailend = -1;
+    lastread = -1000000;
     i = 0;
     while (i < 16) {
         g_mst[i] = 0;
@@ -1921,9 +1951,27 @@ int32 run_midi(char *path, int32 engine)
     fx_print_state();
     load_preset(engine, 0);
     print_preset(engine, 0);
+    t0 = syscall3(SYS_UPTIME, 0, 0, 0);
+    lastdata = t0;
     while (1) {
+        int64 now;
+        int64 target;
+        int32 nf;
         int32 k;
-        if (tail < 0) {
+        now = syscall3(SYS_UPTIME, 0, 0, 0);
+        if (tailend >= 0) {
+            target = tailend;
+        } else {
+            target = (now - t0) * LIVE_RATE / 1000 + LIVE_LEAD;
+        }
+        /* 入力ポーリングは、前回の読み取りから LIVE_BLOCK
+         * フレーム描画が進んでからにする。ファイル先行
+         * 書式で全バイトが既にある場合に、読み切りで
+         * イベントが冒頭へ集中するのを防ぎ、消費を描画
+         * ペースに結ぶため。ライブ時はブロックごとに
+         * 描画が進むので、ポーリング間隔はブロックの
+         * 刻みと変わらない */
+        if (tailend < 0 && rendered - lastread >= LIVE_BLOCK) {
             if (bpos >= blen) {
                 int64 n;
                 n = syscall3(SYS_READ, fd, g_mbuf, 128);
@@ -1933,29 +1981,40 @@ int32 run_midi(char *path, int32 engine)
                     out_str("synth: read failed\n");
                     return 1;
                 }
-                if (n == 0) {
-                    idle = idle + 1;
-                    syscall3(SYS_SLEEP, 5, 0, 0);
-                } else {
+                if (n > 0) {
                     blen = (int32)n;
                     bpos = 0;
-                    idle = 0;
+                    lastdata = now;
+                    lastread = rendered;
                 }
             }
             while (bpos < blen) {
                 midi_feed(g_mbuf[bpos] & 255);
                 bpos = bpos + 1;
                 if (g_mst[8] != 0) {
-                    tail = 0;
+                    tailend = rendered + 11025;
+                    target = tailend;
                     break;
                 }
             }
-            if (idle > 2600) {
-                tail = 0;  /* 新着なしが長すぎる: 終わりとみなす */
+            if (tailend < 0 && now - lastdata > 30000) {
+                tailend = rendered + 11025;
+                target = tailend;
             }
         }
+        if (rendered >= target) {
+            if (tailend >= 0) {
+                break;
+            }
+            syscall3(SYS_SLEEP, 1, 0, 0);
+            continue;
+        }
+        nf = LIVE_BLOCK;
+        if (rendered + nf > target) {
+            nf = (int32)(target - rendered);
+        }
         k = 0;
-        while (k < 512) {
+        while (k < nf) {
             int32 smp;
             smp = mix_sample();
             if (g_fxctl[0] != 0) {
@@ -1967,19 +2026,14 @@ int32 run_midi(char *path, int32 engine)
             fnv = (fnv ^ (g_buf[k * 2 + 1] & 255)) * fnv_prime;
             k = k + 1;
         }
-        if (audio_write_all(512) != 0) {
+        if (audio_write_all(nf) != 0) {
             syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
             syscall3(SYS_FCLOSE, fd, 0, 0);
             out_str("synth: audio write failed\n");
             return 1;
         }
-        total = total + 512;
-        if (tail >= 0) {
-            tail = tail + 512;
-            if (tail >= 11025) {
-                break;
-            }
-        }
+        rendered = rendered + nf;
+        total = total + nf;
     }
     syscall3(SYS_FCLOSE, fd, 0, 0);
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
@@ -2009,11 +2063,15 @@ int32 run_midi(char *path, int32 engine)
  *   上限に達したパートは自パートの最古ボイスを奪う。
  * ch 9 以降は無視する (ch 10 のドラムは将来課題)。
  *
- * 負荷計測: 描画チャンク (512 フレーム) の前後で perf_read
+ * 負荷計測: 描画ブロック (128 フレーム) の前後で perf_read
  * (33、0=サイクル / 1=命令数) を読み、総サイクル・平均
- * cycles/frame・最悪チャンクと実時間予算の比・同時発音の
- * ピークを終了時に印字する。perf_read はマシン全体の通算
- * カウンタなので、サイクル/秒は uptime との差分で較正する。
+ * cycles/frame・最悪チャンク (512 フレーム換算) と実時間
+ * 予算の比・同時発音のピークを終了時に印字する。
+ * perf_read はマシン全体の通算カウンタなので、サイクル/秒
+ * は uptime との差分で較正する。
+ * 描画の主ループは演奏時計駆動 (run_midi の上の LIVE_*
+ * のコメントと doc の「ライブモードのリアルタイム化」
+ * の節)。
  * ============================================================ */
 #define NVOICE 32
 #define NPART 8
@@ -2613,33 +2671,39 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     int64 fd;
     int32 blen;
     int32 bpos;
-    int32 idle;
-    int32 tail;
     int32 i;
     int64 tot_cyc;
     int64 max_cyc;
-    int64 frames;
     int64 labs;
     int64 rabs;
     int64 cyc_per_ms;
     int64 ins0;
     int32 peak;
     int32 chunkno;
+    int64 base;
+    int64 lastdata;
+    int64 rendered;
+    int64 tailend;
+    int64 lastread;
+    int64 ceacc;
+    int32 fxp;
     fnv = fnv_init();
     fnv_prime = ((int64)256 << 32) + 435;
     total = 0;
     blen = 0;
     bpos = 0;
-    idle = 0;
-    tail = -1;
     tot_cyc = 0;
     max_cyc = 0;
-    frames = 0;
     labs = 0;
     rabs = 0;
     cyc_per_ms = 0;
     peak = 0;
     chunkno = 0;
+    rendered = 0;
+    tailend = -1;
+    lastread = -1000000;
+    ceacc = 0;
+    fxp = 0;
     i = 0;
     while (i < 16) {
         g_mst[i] = 0;
@@ -2668,6 +2732,10 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
         i = i + 1;
     }
     fx_print_state();
+    /* 演奏時計の起点は較正より前に取る (較正の 100ms も
+     * 曲の時間のうち) */
+    base = syscall3(SYS_UPTIME, 0, 0, 0);
+    lastdata = base;
     /* サイクル/秒の較正: perf_read はマシン全体の通算
      * カウンタなので、100ms の sleep を挟んだ差分と
      * uptime の差分から 1ms あたりのサイクル数が測れる */
@@ -2685,8 +2753,21 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     }
     ins0 = perf_read(1);
     while (1) {
+        int64 now;
+        int64 target;
+        int32 nf;
         int32 k;
-        if (tail < 0) {
+        now = syscall3(SYS_UPTIME, 0, 0, 0);
+        if (tailend >= 0) {
+            target = tailend;
+        } else {
+            target = (now - base) * LIVE_RATE / 1000 + LIVE_LEAD;
+        }
+        /* 入力ポーリングは、前回の読み取りから LIVE_BLOCK
+         * フレーム描画が進んでからにする (run_midi と
+         * 同じ理由: ファイル先行書式でイベントが先頭に
+         * 潰れるのを防ぎ、消費を描画ペースに結ぶ) */
+        if (tailend < 0 && rendered - lastread >= LIVE_BLOCK) {
             if (bpos >= blen) {
                 int64 n;
                 n = syscall3(SYS_READ, fd, g_mbuf, 128);
@@ -2696,36 +2777,48 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                     out_str("synth: read failed\n");
                     return 1;
                 }
-                if (n == 0) {
-                    idle = idle + 1;
-                    syscall3(SYS_SLEEP, 5, 0, 0);
-                } else {
+                if (n > 0) {
                     blen = (int32)n;
                     bpos = 0;
-                    idle = 0;
+                    lastdata = now;
+                    lastread = rendered;
                 }
             }
             while (bpos < blen) {
                 mt_feed(g_mbuf[bpos] & 255);
                 bpos = bpos + 1;
                 if (g_mst[8] != 0) {
-                    tail = 0;
+                    tailend = rendered + 11025;
+                    target = tailend;
                     break;
                 }
             }
-            if (idle > 2600) {
-                tail = 0;
+            if (tailend < 0 && now - lastdata > 30000) {
+                tailend = rendered + 11025;
+                target = tailend;
             }
             mt_peak_update();
+        }
+        if (rendered >= target) {
+            if (tailend >= 0) {
+                break;
+            }
+            syscall3(SYS_SLEEP, 1, 0, 0);
+            continue;
+        }
+        nf = LIVE_BLOCK;
+        if (rendered + nf > target) {
+            nf = (int32)(target - rendered);
         }
         {
             int64 c0;
             int64 cost;
             int64 ce;
+            int64 sc;
             c0 = perf_read(0);
             ce = 0;
             k = 0;
-            while (k < 512) {
+            while (k < nf) {
                 int32 L;
                 int32 R;
                 mt_mix();
@@ -2792,34 +2885,44 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 }
                 k = k + 1;
             }
-            if (g_fxctl[3] != 0) {
-                out_str("synth: fxdbg ");
-                out_num(chunkno);
-                putc(32);
-                out_num(ce);
-                putc(10);
+            ceacc = ceacc + ce;
+            fxp = fxp + nf;
+            if (fxp >= 512) {
+                if (g_fxctl[3] != 0) {
+                    out_str("synth: fxdbg ");
+                    out_num(chunkno);
+                    putc(32);
+                    out_num(ceacc);
+                    putc(10);
+                }
+                chunkno = chunkno + 1;
+                ceacc = 0;
+                fxp = fxp - 512;
             }
-            chunkno = chunkno + 1;
             cost = perf_read(0) - c0;
             tot_cyc = tot_cyc + cost;
-            if (cost > max_cyc) {
-                max_cyc = cost;
+            /* 最悪チャンクは従来と比較できるよう 512
+             * フレーム換算で見る */
+            sc = cost * 512 / nf;
+            if (sc > max_cyc) {
+                max_cyc = sc;
             }
-            frames = frames + 512;
         }
-        if (audio_write_all(1024) != 0) {
+        if (audio_write_all(nf * 2) != 0) {
             syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
             syscall3(SYS_FCLOSE, fd, 0, 0);
             out_str("synth: audio write failed\n");
             return 1;
         }
-        total = total + 1024;
-        if (tail >= 0) {
-            tail = tail + 512;
-            if (tail >= 11025) {
-                break;
-            }
-        }
+        rendered = rendered + nf;
+        total = total + nf * 2;
+    }
+    if (g_fxctl[3] != 0 && fxp > 0) {
+        out_str("synth: fxdbg ");
+        out_num(chunkno);
+        putc(32);
+        out_num(ceacc);
+        putc(10);
     }
     syscall3(SYS_FCLOSE, fd, 0, 0);
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
@@ -2846,8 +2949,8 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     out_num(perf_read(1) - ins0);
     putc(10);
     out_str("synth: perf avg=");
-    if (frames > 0) {
-        out_num(tot_cyc / frames);
+    if (rendered > 0) {
+        out_num(tot_cyc / rendered);
     } else {
         out_num(0);
     }
