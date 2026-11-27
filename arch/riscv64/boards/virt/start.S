@@ -87,7 +87,15 @@ stack_top:                  # その末尾がスタックの出発点
     .align 4
     .globl trapstack_top
 trapstack:
-    .space 4096
+    # 16KB (旧 4KB)。4KB では job_run の syscall 連鎖
+    # (do_syscall → do_job_run → do_exec → elf_load →
+    # fs/fat 読み) が実測で約 4.3KB に達し、床を突き抜けて
+    # 隣のメインスタックの最上位フレーム (start_user_named
+    # の ra / s0) を踏み潰す事故があった (2026-11-27 計測:
+    # trapstack の最低到達点が床に到達 + 約 0xc0 バイト
+    # 超過)。Nish のセッションにジョブがあると exit 時の
+    # 復帰でカーネルが暴走する形で顕在化した
+    .space 16384
 trapstack_top:
 
 # --- hart1 の入口 (SMP 段1、doc/smp-design.md) -------------------
