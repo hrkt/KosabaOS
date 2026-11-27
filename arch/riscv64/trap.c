@@ -2526,9 +2526,11 @@ static int do_syscall(uint64_t *frame)
     case SYS_JOB_LIST:
     case SYS_JOB_WAIT:
     case SYS_JOB_KILL:
-        /* ジョブ管理は根のプログラム (段 0 で動くシェル)
-         * だけの仕事。ジョブの中や exec の子からは使えない */
-        if (cur_runner != 0 || exec_depth != 0) {
+        /* ジョブ管理はコンソールの前面プログラムだけの
+         * 仕事。段4 でシェルは getty の exec の子 (深さ 1)
+         * になったので、深さは問わず前面であることを見る。
+         * ジョブの中からは使えない */
+        if (cur_runner != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
@@ -3183,8 +3185,9 @@ static int do_syscall(uint64_t *frame)
         break;
     case SYS_SAVER_QUERY:
         /* セーバーの起動要求 (doc/screensaver-design.md)。
-         * 起動できるのはルートプログラム (シェル) だけ */
-        if (cur_runner != 0 || exec_depth != 0) {
+         * 起動できるのはコンソールの前面プログラム
+         * (getty 配下のシェルを含む) だけ */
+        if (cur_runner != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
         } else {
             frame[FRAME_A0] = (uint64_t)saver_query();

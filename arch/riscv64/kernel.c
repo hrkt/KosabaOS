@@ -282,14 +282,16 @@ void kmain(void)
     }
 
 #if BOARD_FEATURE_SMODE_PATH
-    /* シェル Nish を最初に起動する (主役化)。
-     * Nish で exit すると下のカーネルコンソールに落ちる */
+    /* 最初のユーザープログラムは番人 getty (段4)。
+     * getty が常駐プログラムを起こし、シェル Nish を
+     * 前面で exec する。Nish で exit すると getty も
+     * 終わり、下のカーネルコンソールに落ちる */
 #if BOARD_FEATURE_LCD
-    splash_block(3, 1);  /* シェルを起こすところまで来た */
+    splash_block(3, 1);  /* getty を起こすところまで来た */
 #endif
-    start_user_named("nish.elf");
+    start_user_named("getty.elf");
     kputs("[kernel] kernel console "
-          "(u: uprog, s: Nish, m: multitask, l: files, "
+          "(u: uprog, s: getty, m: multitask, l: files, "
           "x: fault, p: pages, t: time)\n");
 #endif
 
@@ -311,7 +313,8 @@ void kmain(void)
             continue;
         }
         if (c == 's') {
-            start_user_named("nish.elf");  /* 's' キーで Nish */
+            start_user_named("getty.elf");  /* 's' キーで getty
+                                             * (番人経由で Nish) */
             continue;
         }
         if (c == 'm') {

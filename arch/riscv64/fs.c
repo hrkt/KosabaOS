@@ -52,6 +52,8 @@ extern unsigned char clock_prog_start[];
 extern unsigned char clock_prog_end[];
 extern unsigned char saver_prog_start[];
 extern unsigned char saver_prog_end[];
+extern unsigned char getty_prog_start[];
+extern unsigned char getty_prog_end[];
 extern unsigned char seek_prog_start[];
 extern unsigned char seek_prog_end[];
 extern unsigned char oled_prog_start[];
@@ -575,6 +577,8 @@ void fs_init(void)
            (uint64_t)(clock_prog_end - clock_prog_start));
     fs_add("saver.elf", saver_prog_start,
            (uint64_t)(saver_prog_end - saver_prog_start));
+    fs_add("getty.elf", getty_prog_start,
+           (uint64_t)(getty_prog_end - getty_prog_start));
     fs_add("seek.elf", seek_prog_start,
            (uint64_t)(seek_prog_end - seek_prog_start));
     fs_add("oled.elf", oled_prog_start,
