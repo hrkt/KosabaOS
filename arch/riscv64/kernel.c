@@ -271,21 +271,13 @@ void kmain(void)
 
 #if BOARD_FEATURE_LCD
     lcd_draw_text(28, 180, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
-    /* TICK ラベルは lcd_tick_setup が帯の一部として描く
-     * (セーバーの帯再描画を lcd.c の中で閉じるため) */
-    lcd_tick_setup(118, 216, 3, LCD_CYAN, LCD_RGB(24, 24, 24));
-    lcd_tick_draw(0);
+    /* 帯 (画面下部) は時計 clock.elf の窓なので、カーネルは
+     * ここでは何も描かない (doc/userland-design.md 決定 4) */
 #endif
 
     for (;;) {
         char c;
-        /* トップレベルのキー待ちの間だけ、セーバーの段2
-         * (全面) に入ってよいと申告する。キーを受けたら
-         * すぐに下ろすので、行入力やコマンドの実行中に
-         * 全面で覆われることはない */
-        saver_set_console_prompt(1);
-        c = console_getc();  /* 待ちの間は時計タスクも進む */
-        saver_set_console_prompt(0);
+        c = console_getc();  /* 待ちの間は常駐タスクも進む */
 #if BOARD_FEATURE_SMODE_PATH
         if (c == 'x') {
             vm_fault_demo();   /* 'x' キーでページフォルトのデモ */

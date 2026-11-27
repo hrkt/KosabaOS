@@ -52,6 +52,7 @@
 #define SYS_JOB_LIST 21
 #define SYS_JOB_WAIT 22
 #define SYS_JOB_KILL 23
+#define SYS_SAVER_QUERY 52
 #define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
@@ -69,6 +70,9 @@ static long syscall3(long num, long a0, long a1, long a2)
 
 static void putc_(char c) { syscall3(SYS_PUTC, c, 0, 0); }
 static long getc_(void) { return syscall3(SYS_GETC, 0, 0, 0); }
+static long getc_to_(long ms) { return syscall3(SYS_GETC, 0, ms, 0); }
+
+static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
 
 static void puts_(const char *s)
 {
@@ -148,6 +152,26 @@ static void redraw(const char *buf)
     puts_("\033[K");  /* 行末までの残りを消す */
 }
 
+/* セーバーの合図 (saver_query 52) が来ていたら saver.elf
+ * を起こして前面で待つ (doc/screensaver-design.md)。
+ * 表示は saver.elf の仕事で、シェルは起動係に徹する。
+ * キーが押されると saver.elf が終わり、ここへ戻る */
+static void maybe_start_saver(const char *buf)
+{
+    long no;
+
+    if (syscall3(SYS_SAVER_QUERY, 0, 0, 0) != 1) {
+        return;
+    }
+    no = syscall3(SYS_JOB_RUN, (long)"saver.elf",
+                  (long)"saver.elf", 0);
+    if (no > 0) {
+        syscall3(SYS_JOB_WAIT, no, 0, 0);
+        job_notified_mask &= ~(1 << (int)no);
+    }
+    redraw(buf);
+}
+
 static void readline(char *buf)
 {
     int len = 0;
@@ -158,7 +182,18 @@ static void readline(char *buf)
     buf[0] = '\0';
     saved[0] = '\0';
     for (;;) {
-        long c = getc_();
+        long c;
+
+        if (len == 0) {
+            /* 空行の間は 1 秒で見回り、セーバーの合図を拾う */
+            c = getc_to_(1000);
+            if (c == -1) {
+                maybe_start_saver(buf);
+                continue;
+            }
+        } else {
+            c = getc_();
+        }
 
         if (c == 0x1B) {      /* 矢印キーなどの ESC シーケンス */
             long c2 = getc_();
@@ -416,9 +451,8 @@ static int atoi_(const char *s)
  * カーネル側の job_list (21) が作るテキストは 1 行 1 ジョブで
  *   job N: <名前> running / stopped / done status=S
  * の形。Nish はそれを表示 (jobs)・解釈 (fg の対象選びと
- * Done 通知) に使う。 */
-
-static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
+ * Done 通知) に使う。job_notified_mask の宣言はファイル
+ * 先頭寄りにある (readline のセーバー起動係も使うため) */
 
 /* job_list のテキストから、行 [s, e) が「終わったジョブ」の
  * 行かどうかを見る (状態欄の " done status=" を探す) */
@@ -700,6 +734,10 @@ void _start(void)
     char line[LINE_MAX];
 
     puts_("Nish, the KosabaOS shell. Type 'help'.\n");
+    /* スタートアップ: 常駐プログラムをジョブとして起こす
+     * (doc/userland-design.md 決定 5)。今は時計だけ。
+     * 起動係の仕事は段4 で getty へ移る */
+    syscall3(SYS_JOB_RUN, (long)"clock.elf", (long)"clock.elf", 0);
     for (;;) {
         char *arg;
 

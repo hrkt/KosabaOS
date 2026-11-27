@@ -494,26 +494,23 @@ int proc_list(char *buf, unsigned long max)
     return (int)n;
 }
 
-/* --- 時計タスク (段2: 部分プロセス第 1 号) --------------------------
+/* --- 常駐タスク (旧・時計タスク) ----------------------------------
  *
- * スケジューラ段2 (doc/scheduler-plan.md)。OS の一部 (時刻
- * 表示) を、独立した常駐カーネルタスクとして動かす。
- * 置き時計は最初カーネルの描画経路 (K210 では M シムの
- * 割り込み文脈) で達成したが、その形では「入力待ちで
- * 割り込みが戻らない間は表示が止まる」弱点があった。
- * ここでは表示の更新を、sleep して起きるタスクの仕事に
- * 移す。入力待ちの側 (SYS_GETC とカーネルコンソール) が
- * 待ちの間にスケジューラを回すので、待ちの間も秒が進む。 */
+ * スケジューラ段2 (doc/scheduler-plan.md) で生まれた常駐
+ * カーネルタスク。当初は時刻表示 (帯の描画) が仕事だった
+ * が、表示はユーザープログラム clock.elf へ出た
+ * (doc/userland-design.md 決定 1)。残った仕事はスケジューラ
+ * 生存の証拠になるウォッチドッグの餌やりと、セーバーの
+ * 検出の駆動だけ。席の番号とログの "clock:" の印字は、
+ * ps やテストの物差しとして残してある。 */
 
-#define CLOCK_TASK 3   /* タスク表の時計の席 */
+#define CLOCK_TASK 3   /* タスク表の常駐タスクの席 */
 
 static void clock_body(void)
 {
-    uint64_t start = r_time();
-
     for (;;) {
         task_sleep_ms(1000);
-        /* ウォッチドッグの餌やり: 時計タスクが起き続けている
+        /* ウォッチドッグの餌やり: このタスクが起き続けている
          * ことがスケジューラ生存の証拠になる (段3) */
         board_wdt_feed();
         /* 起きたことはログにだけ残す (コンソールには出さない)。
@@ -522,30 +519,9 @@ static void clock_body(void)
         lkputs("clock: wake ");
         lkput_dec(tasks[current].wakes);
         lkputc('\n');
-        /* 表示する秒数は生の時刻 (time CSR) から数える。
-         * trap.c の tick は入力待ちで割り込みが滞ると一緒に
-         * 滞るが、こちらは滞らない。壁時計が有効な間は
-         * lcd 側が RTC を読んで HH:MM:SS を描くので、この
-         * 秒数は RTC 未設定のときの表示にだけ使われる */
-        {
-            uint64_t sec = (r_time() - start) / BOARD_TIMER_HZ;
-            /* スクリーンセーバー (doc/screensaver-design.md)
-             * の判定も毎秒ここで回す。段2 の間は全面が
-             * セーバーの絵なので、帯の通常描画は抑止する */
-            if (saver_tick(sec)) {
-#if BOARD_FEATURE_LCD
-                /* オーディオ再生中は再描画を後回しにする:
-                 * 再描画の数 ms の間 I2S FIFO (1ms 分も
-                 * 無い) への供給が止まり、毎秒の起床の
-                 * たびに音が欠ける (Ikesu 連携 2026-11-20)。
-                 * 餌やりと起床記録は通常どおり行うので、
-                 * 時計表示が数秒遅れるだけ */
-                if (!audio_is_open()) {
-                    lcd_tick_draw(sec);
-                }
-#endif
-            }
-        }
+        /* スクリーンセーバー (doc/screensaver-design.md) の
+         * 検出も毎秒ここで回す。表示は saver.elf の仕事 */
+        saver_tick();
     }
 }
 
