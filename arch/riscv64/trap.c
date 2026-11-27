@@ -275,6 +275,7 @@ void trap_init(void)
 #define SYS_JOB_RUN 20
 #define SYS_JOB_LIST 21
 #define SYS_JOB_WAIT 22
+#define SYS_JOB_KILL 23
 #define SYS_KLOG_READ 30
 #define SYS_UPTIME 31
 #define SYS_PERF_READ 33
@@ -1525,6 +1526,49 @@ static int do_job_wait(uint64_t *frame)
     return 1;
 }
 
+/* job_kill (23): ジョブを強制終了して回収する
+ * (doc/userland-design.md 決定 5)。呼び手は根のプロ
+ * グラムで、今走っているのは呼び手自身なので、対象
+ * ジョブの文脈は要らない。後始末は jobs_kill_all の
+ * 1 ジョブ分と同じ (ページと fd を返し、窓を閉じる)。
+ * 終わっているジョブ (DONE) は回収だけする。再起動は
+ * kill して job_run し直す形で、カーネルは監督しない */
+static void do_job_kill(uint64_t *frame)
+{
+    uint64_t num = frame[FRAME_A0];
+    struct job_slot *j;
+    int level;
+
+    if (num < 1 || num > JOB_MAX) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return;
+    }
+    j = &jobs[num - 1];
+    if (j->state == JOB_FREE) {
+        frame[FRAME_A0] = (uint64_t)-1;
+        return;
+    }
+    if (j->state == JOB_DONE) {
+        j->state = JOB_FREE;  /* 回収だけ */
+        gfx_window_close((int)num);
+        frame[FRAME_A0] = 0;
+        return;
+    }
+    level = JOB_LEVEL_BASE + (int)(num - 1);
+    clear_fds(fd_tables[level]);
+    vm_pages_release(level);
+    j->state = JOB_FREE;
+    if (console_owner == (int)num) {
+        console_owner = 0;
+    }
+    gfx_window_close((int)num);
+    gfx_set_focus(0);
+    kputs("job: killed ");
+    kputs(j->name);
+    kputc('\n');
+    frame[FRAME_A0] = 0;
+}
+
 /* --- オーディオ (デバイス、40〜42) ----------------------------------
  * 仕様は doc/syscalls.md (Ikesu 段2の確定仕様。Ikesu 側の
  * doc/audio-syscall.md が原案)。カーネルは「サンプルの流れを
@@ -2461,6 +2505,7 @@ static int do_syscall(uint64_t *frame)
     case SYS_JOB_RUN:
     case SYS_JOB_LIST:
     case SYS_JOB_WAIT:
+    case SYS_JOB_KILL:
         /* ジョブ管理は根のプログラム (段 0 で動くシェル)
          * だけの仕事。ジョブの中や exec の子からは使えない */
         if (cur_runner != 0 || exec_depth != 0) {
@@ -2471,6 +2516,8 @@ static int do_syscall(uint64_t *frame)
             do_job_run(frame);
         } else if (num == SYS_JOB_LIST) {
             do_job_list(frame);
+        } else if (num == SYS_JOB_KILL) {
+            do_job_kill(frame);
         } else if (do_job_wait(frame)) {
             return 1;  /* 待ちに入って対象へ切り替え済み */
         }

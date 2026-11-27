@@ -548,8 +548,10 @@ echo "== scenario X: job control (bg jobs) =="
   printf 'echo alive\n'; sleep 1; printf 'fg\n'; sleep 1; \
   printf 'run uprog.elf &\n'; sleep 2; printf 'jobs\n'; sleep 1; \
   printf 'fg\n'; sleep 1; printf 'z'; sleep 1; printf 'q'; sleep 2; \
+  printf 'run slow.elf 30 &\n'; sleep 1; printf 'kill 1\n'; sleep 1; \
+  printf 'jobs\n'; sleep 1; printf 'kill 1\n'; sleep 1; \
   printf 'exit\n'; sleep 1; } \
-    | timeout 34 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-x.log 2>&1 || true
 out=$(strip_ticks < test-x.log)
 check_order "$out" "Nish, the KosabaOS shell" \
@@ -560,8 +562,10 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "job 1: crash.elf done status=-2" "fg: program faulted" \
     "job 1: uprog.elf started" "hello from user mode!" \
     "job 1: uprog.elf stopped" \
+    "job 1: slow.elf started" "killed job 1" "no jobs" \
+    "kill: no such job" \
     "[kernel] back from user program"
-report "X job control (bg / jobs / fg / notice / fault isolation)" $?
+report "X job control (bg / jobs / fg / kill / notice / fault isolation)" $?
 
 echo "== scenario AB: SD exec =="
 # /sd 上の ELF の実行 (doc/sd-exec-design.md)。イメージには
