@@ -537,7 +537,9 @@ echo "== scenario X: job control (bg jobs) =="
 # crash.elf のフォルトはそのジョブだけを終わらせ
 # (status=-2)、Nish は無事で fg が faulted を報告する。
 # uprog.elf は bg では getc で stopped になり、fg して
-# 初めて入力が効く
+# 初めて入力が効く。ジョブ 1 は Nish が起動時に起こす
+# 常駐の時計 (clock.elf) が使うので、利用者のジョブは
+# 2 番から始まる
 { sleep 3; printf 'run slow.elf 12 &\n'; sleep 1; \
   printf 'echo during\n'; sleep 1; printf 'jobs\n'; sleep 1; \
   printf 'fg\n'; sleep 3; \
@@ -548,21 +550,21 @@ echo "== scenario X: job control (bg jobs) =="
   printf 'echo alive\n'; sleep 1; printf 'fg\n'; sleep 1; \
   printf 'run uprog.elf &\n'; sleep 2; printf 'jobs\n'; sleep 1; \
   printf 'fg\n'; sleep 1; printf 'z'; sleep 1; printf 'q'; sleep 2; \
-  printf 'run slow.elf 30 &\n'; sleep 1; printf 'kill 1\n'; sleep 1; \
-  printf 'jobs\n'; sleep 1; printf 'kill 1\n'; sleep 1; \
+  printf 'run slow.elf 30 &\n'; sleep 1; printf 'kill 2\n'; sleep 1; \
+  printf 'jobs\n'; sleep 1; printf 'kill 2\n'; sleep 1; \
   printf 'exit\n'; sleep 1; } \
     | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-x.log 2>&1 || true
 out=$(strip_ticks < test-x.log)
 check_order "$out" "Nish, the KosabaOS shell" \
-    "job 1: slow.elf started" "during" \
-    "job 1: slow.elf running" "slow done" \
-    "job 1: slow.elf done status=5" "no jobs" \
-    "job 1: crash.elf started" "alive" \
-    "job 1: crash.elf done status=-2" "fg: program faulted" \
-    "job 1: uprog.elf started" "hello from user mode!" \
-    "job 1: uprog.elf stopped" \
-    "job 1: slow.elf started" "killed job 1" "no jobs" \
+    "job 2: slow.elf started" "during" \
+    "job 2: slow.elf running" "slow done" \
+    "job 2: slow.elf done status=5" "job 1: clock.elf running" \
+    "job 2: crash.elf started" "alive" \
+    "job 2: crash.elf done status=-2" "fg: program faulted" \
+    "job 2: uprog.elf started" "hello from user mode!" \
+    "job 2: uprog.elf stopped" \
+    "job 2: slow.elf started" "killed job 2" "job 1: clock.elf running" \
     "kill: no such job" \
     "[kernel] back from user program"
 report "X job control (bg / jobs / fg / kill / notice / fault isolation)" $?
@@ -598,8 +600,10 @@ echo "== scenario Y: gfx syscalls (drawing, stage A) =="
 # 目視の担当 (test-k210.py K18 でシリアル側だけ見る)
 { sleep 3; printf 'run gdemo.elf\n'; sleep 3; \
   printf 'dmesg\n'; sleep 2; \
+  printf 'kill 1\n'; sleep 1; \
+  printf 'run gdemo.elf\n'; sleep 3; \
   printf 'exit\n'; sleep 1; } \
-    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    | timeout 26 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-y.log 2>&1 || true
 out=$(strip_ticks < test-y.log)
 check_order "$out" "Nish, the KosabaOS shell" \
@@ -610,16 +614,19 @@ check_order "$out" "Nish, the KosabaOS shell" \
     "gfx: rect r=0 x=30 y=30 w=60 h=30 color=0x07e0" \
     "gfx: text r=0 x=10 y=80 \"GDEMO\" scale=2 color=0xffff" \
     "gfx: line r=0 x0=0 y0=100 x1=200 y1=130 color=0x07ff" \
+    "killed job 1" \
+    "gdemo: screen 320x240 win 318x226" "gdemo: done" \
     "[kernel] back from user program"
 report "Y gfx syscalls (info/clear/rect/text/line via dmesg)" $?
 
 echo "== scenario Z: gfx windows (stage B) =="
 # 画面表示の段B (doc/gfx-design.md): gjob.elf を 2 本 bg で
-# 走らせると、それぞれの窓が開き (open r=1 / r=2)、両方が
-# 自分の窓へ描き続ける (rect r=1 / r=2 が両方出る)。
-# fg (省略時は一番大きい番号 = ジョブ 2) で持ち主が移ると
-# フォーカスが移り (focus r=2)、終わると done → 窓が回収
-# され (close r=2)、フォーカスが前面へ戻る (focus r=0)。
+# 走らせると、それぞれの窓が開き (open r=2 / r=3。r=1 は
+# 常駐の時計)、両方が自分の窓へ描き続ける (rect r=2 /
+# r=3 が両方出る)。
+# fg (省略時は一番大きい番号 = ジョブ 3) で持ち主が移ると
+# フォーカスが移り (focus r=3)、終わると done → 窓が回収
+# され (close r=3)、フォーカスが前面へ戻る (focus r=0)。
 # 照合は dmesg の gfx 要約行。ピクセルの見た目は目視の担当
 { sleep 3; printf 'run gjob.elf 12 &\n'; sleep 1; \
   printf 'run gjob.elf 12 &\n'; sleep 1; \
@@ -631,11 +638,11 @@ echo "== scenario Z: gfx windows (stage B) =="
     > test-z.log 2>&1 || true
 out=$(strip_ticks < test-z.log)
 check_order "$out" "Nish, the KosabaOS shell" \
-    "job 1: gjob.elf started" "job 2: gjob.elf started" "during" \
-    "job 1: gjob.elf running" "job 2: gjob.elf running" \
-    "gfx: open r=1 \"gjob.elf\"" "gfx: open r=2 \"gjob.elf\"" \
-    "gfx: rect r=1" "gfx: rect r=2" \
-    "gfx: focus r=2" "gfx: done r=2" "gfx: close r=2" \
+    "job 2: gjob.elf started" "job 3: gjob.elf started" "during" \
+    "job 2: gjob.elf running" "job 3: gjob.elf running" \
+    "gfx: open r=2 \"gjob.elf\"" "gfx: open r=3 \"gjob.elf\"" \
+    "gfx: rect r=2" "gfx: rect r=3" \
+    "gfx: focus r=3" "gfx: done r=3" "gfx: close r=3" \
     "gfx: focus r=0" \
     "[kernel] back from user program"
 report "Z gfx windows (open/draw/focus/done/close via dmesg)" $?
@@ -724,25 +731,29 @@ print(len(data) // 2, "%016x" % h)')
     report "AC nami player (wav playback fnv + error statuses)" $?
 fi
 
-echo "== scenario AD: screensaver (two-stage) =="
+echo "== scenario AD: screensaver (user program) =="
 # スクリーンセーバー (doc/screensaver-design.md) の検証。
-# 閾値を差し替えたビルド (SAVER_TEST: 段1 = 4 秒 /
-# 段2 = 10 秒) が要るので、このシナリオ専用にビルドし
-# 直して 2 つのセッションで見る (通常ビルドは最後に
-# 戻す)。virt には LCD が無いので、照合は遷移の klog 行
+# 閾値を差し替えたビルド (SAVER_TEST: 4 秒) が要るので、
+# このシナリオ専用にビルドし直して 2 つのセッションで
+# 見る (通常ビルドは最後に戻す)。OS は検出と合図だけで、
+# 表示は saver.elf。virt には LCD が無いので、照合は
+# コンソールの "saver: start" と遷移の klog 行
 # (両環境で同じ形) の順序と有無で行う:
 #   セッション 1: Nish の入力待ちで無入力を続けると
-#     "saver: stage1 on" → "saver: stage2 on" の順に出て、
-#     キー入力 (dmesg の 'd') で "saver: off" になる
-#   セッション 2: bg ジョブが走っている間は段1 には
-#     入るが段2 には入らない (dmesg を実行中に読んで、
-#     stage2 on が 1 件も無いことを数える)
+#     シェルが saver.elf を起こし ("saver: start")、
+#     dmesg に "saver: on" → "saver: off" の順で残る。
+#     復帰のキーは saver.elf が消費するので、捨てキーを
+#     1 つ送ってから dmesg を打つ
+#   セッション 2: bg ジョブが走っている間は合図が出ない
+#     (dmesg を実行中に読んで、"saver: on" が 1 件も
+#     無いことを数える)
 if ! (cd ../.. && SAVER_TEST=1 BUILD_NO_RUN=1 ./build.sh) \
         > build-test-ad.log 2>&1; then
     echo "FAIL: build for AD (see build-test-ad.log)"
-    report "AD screensaver (two-stage, dmesg order)" 1
+    report "AD screensaver (user program, dmesg order)" 1
 else
-    { sleep 3; sleep 13; \
+    { sleep 3; sleep 10; \
+      printf 'x'; sleep 2; \
       printf 'dmesg\n'; sleep 2; \
       printf 'exit\n'; sleep 1; } \
         | timeout 26 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
@@ -750,7 +761,7 @@ else
     out=$(strip_ticks < test-ad1.log)
     rc=0
     check_order "$out" "Nish, the KosabaOS shell" \
-        "saver: stage1 on" "saver: stage2 on" "saver: off" || rc=1
+        "saver: start" "saver: on" "saver: off" || rc=1
     { sleep 3; printf 'run slow.elf 80 &\n'; sleep 1; \
       sleep 13; \
       printf 'dmesg\n'; sleep 2; \
@@ -759,15 +770,13 @@ else
         | timeout 48 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
         > test-ad2.log 2>&1 || true
     out=$(strip_ticks < test-ad2.log)
-    n_stage1=$(printf '%s' "$out" | grep -ac 'saver: stage1 on' || true)
-    n_stage2=$(printf '%s' "$out" | grep -ac 'saver: stage2 on' || true)
-    check_order "$out" "job 1: slow.elf started" "slow done" || rc=1
-    if [ "$n_stage1" -lt 1 ] || [ "$n_stage2" -ne 0 ]; then
-        echo "  during job: stage1 x$n_stage1 / stage2 x$n_stage2" \
-             "(want stage1 >= 1, stage2 = 0)"
+    n_on=$(printf '%s' "$out" | grep -ac 'saver: on' || true)
+    check_order "$out" "job 2: slow.elf started" "slow done" || rc=1
+    if [ "$n_on" -ne 0 ]; then
+        echo "  during job: saver on x$n_on (want 0)"
         rc=1
     fi
-    report "AD screensaver (two-stage, dmesg order)" $rc
+    report "AD screensaver (user program, dmesg order)" $rc
     # 通常ビルドに戻す (以後の利用にテスト閾値を残さない)
     (cd ../.. && BUILD_NO_RUN=1 ./build.sh) > build-test.log 2>&1 || true
 fi
@@ -957,7 +966,7 @@ out=$(strip_ticks < test-an.log)
 rc=0
 echo "$out" | grep -Eq "task 3: (sleeping|ready) wakes=[0-9]+ cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "run 0: nish (running|input) cpu=[0-9]+" || rc=1
-echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 2: slow\.elf running cpu=[0-9]+" || rc=1
 report "AN task/runner cpu accounting (ps)" $rc
 
 echo "== scenario AO: sleep_ms + getc timeout (top stage 2) =="
@@ -973,7 +982,7 @@ echo "== scenario AO: sleep_ms + getc timeout (top stage 2) =="
     > test-ao.log 2>&1 || true
 out=$(strip_ticks < test-ao.log)
 rc=0
-echo "$out" | grep -Eq "run 1: nap\.elf sleeping cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 2: nap\.elf sleeping cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "nap: elapsed (19|20|21)[0-9][0-9]" || rc=1
 echo "$out" | grep -Eq "nap: elapsed [45][0-9][0-9]" || rc=1
 echo "$out" | grep -q "nap done" || rc=1
@@ -994,7 +1003,7 @@ out=$(strip_ticks < test-ap.log)
 rc=0
 frames=$(echo "$out" | grep -c "top - up")
 [ "$frames" -ge 3 ] || rc=1
-echo "$out" | grep -Eq "run 1: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
+echo "$out" | grep -Eq "run 2: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
 echo "$out" | grep -q "top-done" || rc=1
 report "AP top.elf monitor" $rc
 
