@@ -291,6 +291,8 @@ void trap_init(void)
 #define SYS_OLED_TEXT 48
 #define SYS_OLED_CLEAR 49
 #define SYS_AUDIO_SET_VOLUME 50
+#define SYS_GFX_LAYOUT 51
+#define SYS_SAVER_QUERY 52
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -1124,6 +1126,23 @@ static int jobs_any_active(void)
     return 0;
 }
 
+/* 指定した走者を除いて、生きているジョブがあるか。
+ * セーバーの環境判定用: 帯の窓の持ち主 (時計) は常駐
+ * ジョブなので、数に入れるとセーバーが永遠に起きない */
+static int jobs_any_active_except(int excl_runner)
+{
+    int i;
+    for (i = 0; i < JOB_MAX; i++) {
+        if (excl_runner >= 1 && i == excl_runner - 1) {
+            continue;
+        }
+        if (jobs[i].state != JOB_FREE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* スクリーンセーバー (saver.c) への走者状態の公開
  * (doc/screensaver-design.md の段2 の定義)。前面が
  * シェルの入力待ちとは「持ち主が前面で、前面の段が
@@ -1132,7 +1151,7 @@ static int jobs_any_active(void)
 int trap_saver_env(void)
 {
     int env = 0;
-    if (jobs_any_active()) {
+    if (jobs_any_active_except(gfx_strip_runner())) {
         env |= TRAP_SAVER_JOBS_PRESENT;
     }
     if (console_owner == 0 && cur_runner == 0 && exec_depth == 0 &&
@@ -3154,6 +3173,21 @@ static int do_syscall(uint64_t *frame)
                  (int)(frame[FRAME_A1] >> 16),
                  (uint32_t)frame[FRAME_A2]);
         frame[FRAME_A0] = 0;
+        break;
+    case SYS_GFX_LAYOUT:
+        /* a0 = 要求 (0 = 解放、1 = 帯の窓、2 = 全画面)。
+         * 仕様は doc/syscalls.md の 51 番 */
+        frame[FRAME_A0] = (uint64_t)gfx_layout(cur_runner,
+                                               (int)frame[FRAME_A0]);
+        break;
+    case SYS_SAVER_QUERY:
+        /* セーバーの起動要求 (doc/screensaver-design.md)。
+         * 起動できるのはルートプログラム (シェル) だけ */
+        if (cur_runner != 0 || exec_depth != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            frame[FRAME_A0] = (uint64_t)saver_query();
+        }
         break;
     case SYS_OLED_TEXT: {
         /* a0 = 文字列。消去してから描いて転送する

@@ -37,23 +37,45 @@
 #define PANEL_H 240
 #endif
 
-#define TICK_STRIP_H 24                 /* 時計帯 (下部) */
-#define CLIENT_H (PANEL_H - TICK_STRIP_H)
+#define STRIP_H 24                      /* 帯の窓の高さ (下部) */
 #define TITLE_H 13                      /* タイトルバーの高さ */
 #define BORDER 1                        /* 枠の太さ */
 #define DESKTOP_COLOR 0x18c3            /* RGB(24,24,24) 相当 */
 
+/* レイアウト要求の持ち主 (走者番号、-1 = 無し)。
+ * 帯はカーネルの予約ではなく、要求したジョブの窓である
+ * (doc/userland-design.md 決定 4)。全画面の要求がある間、
+ * 帯の窓の描画は抑止される (帯の持ち主が我慢する側) */
+static int strip_runner = -1;
+static int full_runner = -1;
+
+/* 帯を除いた高さ (帯の持ち主が居なければ全面) */
+static int client_h(void)
+{
+    return strip_runner >= 0 ? PANEL_H - STRIP_H : PANEL_H;
+}
+
 /* 窓の矩形 (枠とタイトルバーを含む) を走者番号から決める */
 static void window_rect(int runner, int *x, int *y, int *w, int *h)
 {
-    if (runner <= 0) {
+    if (runner == full_runner && full_runner >= 0) {
         *x = 0;
         *y = 0;
         *w = PANEL_W;
-        *h = CLIENT_H;
+        *h = PANEL_H;
+    } else if (runner == strip_runner && strip_runner >= 1) {
+        *x = 0;
+        *y = PANEL_H - STRIP_H;
+        *w = PANEL_W;
+        *h = STRIP_H;
+    } else if (runner <= 0) {
+        *x = 0;
+        *y = 0;
+        *w = PANEL_W;
+        *h = client_h();
     } else {
         int cell_w = PANEL_W / 2;
-        int cell_h = CLIENT_H / 2;
+        int cell_h = client_h() / 2;
         int idx = (runner - 1) % JOB_MAX;
         *x = (idx % 2) * cell_w;
         *y = (idx / 2) * cell_h;
@@ -66,7 +88,24 @@ static void window_rect(int runner, int *x, int *y, int *w, int *h)
 static void content_rect(int runner, int *x, int *y, int *w, int *h)
 {
     int wx, wy, ww, wh;
+    /* 全画面の持ち主が居る間、帯の窓は描けない (空を返す) */
+    if (runner == strip_runner && strip_runner >= 1 &&
+        full_runner >= 0 && full_runner != runner) {
+        *x = 0;
+        *y = 0;
+        *w = 0;
+        *h = 0;
+        return;
+    }
     window_rect(runner, &wx, &wy, &ww, &wh);
+    if (runner == strip_runner && strip_runner >= 1) {
+        /* 帯の窓はタイトルバーを持たず、枠だけ */
+        *x = wx + BORDER;
+        *y = wy + BORDER;
+        *w = ww - BORDER * 2;
+        *h = wh - BORDER * 2;
+        return;
+    }
     *x = wx + BORDER;
     *y = wy + TITLE_H;
     *w = ww - BORDER * 2;
@@ -305,6 +344,9 @@ static void draw_frame(int runner)
     draw_fill(x, y + h - BORDER, w, BORDER, frame);
     draw_fill(x, y, BORDER, h, frame);
     draw_fill(x + w - BORDER, y, BORDER, h, frame);
+    if (runner == strip_runner && strip_runner >= 1) {
+        return;   /* 帯の窓はタイトルバーを持たない */
+    }
     draw_fill(x + BORDER, y + BORDER, w - BORDER * 2,
               TITLE_H - BORDER, tbg);
     /* タイトルは大文字に寄せて描く (字形表の都合) */
@@ -378,6 +420,7 @@ void gfx_window_done(int runner)
 void gfx_window_close(int runner)
 {
     int x, y, w, h;
+    int held;
     if (runner < 1 || runner > JOB_MAX || !win_state[runner].used) {
         return;
     }
@@ -388,6 +431,18 @@ void gfx_window_close(int runner)
     /* 枠ごとデスクトップ色に戻す */
     window_rect(runner, &x, &y, &w, &h);
     draw_fill(x, y, w, h, DESKTOP_COLOR);
+    /* レイアウト要求を持っていたら解放し、残りの窓の
+     * 並びが変わるので全面を描き直す */
+    held = (runner == strip_runner || runner == full_runner);
+    if (runner == strip_runner) {
+        strip_runner = -1;
+    }
+    if (runner == full_runner) {
+        full_runner = -1;
+    }
+    if (held) {
+        gfx_desktop_repaint();
+    }
 }
 
 void gfx_set_focus(int runner)
@@ -410,13 +465,55 @@ void gfx_fg_title(const char *title)
     draw_frame(0);
 }
 
+/* レイアウト要求 (syscall 51)。mode: 0 = 自分の要求を解放、
+ * 1 = 帯の窓、2 = 全画面。要求が通ると並びが変わるので
+ * 全面を描き直す (窓の中身は戻せない。他の窓の持ち主は
+ * 自分の cadence で描き直すのが前提で、時計は毎秒描く) */
+int gfx_layout(int runner, int mode)
+{
+    if (mode == 1) {
+        if (runner < 1) {
+            return -1;   /* 帯はジョブだけが持てる */
+        }
+        if (strip_runner >= 0 && strip_runner != runner) {
+            return -1;
+        }
+        strip_runner = runner;
+    } else if (mode == 2) {
+        if (full_runner >= 0 && full_runner != runner) {
+            return -1;
+        }
+        full_runner = runner;
+    } else if (mode == 0) {
+        if (runner == strip_runner) {
+            strip_runner = -1;
+        }
+        if (runner == full_runner) {
+            full_runner = -1;
+        }
+    } else {
+        return -1;
+    }
+    log_event("layout", runner);
+    lkputs(" mode=");
+    lkput_dec((uint64_t)mode);
+    lkputc('\n');
+    gfx_desktop_repaint();
+    return 0;
+}
+
+int gfx_strip_runner(void)
+{
+    return strip_runner;
+}
+
 void gfx_desktop_repaint(void)
 {
     int r;
-    /* クライアント領域ごとデスクトップ色に戻してから、
-     * 使用中の窓の枠・タイトルだけを描き直す。未使用の
-     * ジョブのマスはデスクトップ色のままが正しい姿 */
-    draw_fill(0, 0, PANEL_W, CLIENT_H, DESKTOP_COLOR);
+    /* 全面をデスクトップ色に戻してから、使用中の窓の
+     * 枠・タイトルだけを描き直す。未使用のジョブのマスは
+     * デスクトップ色のままが正しい姿 */
+    draw_fill(0, 0, PANEL_W, PANEL_H, DESKTOP_COLOR);
     for (r = 0; r <= JOB_MAX; r++) {
         if (win_state[r].used) {
             draw_frame(r);
