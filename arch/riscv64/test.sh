@@ -169,9 +169,11 @@ check_order "$out" "Nish, the KosabaOS shell" "wrote memo.txt" "memo.txt" \
 report "G shell write (create / write / cat)" $?
 
 echo "== scenario H: Nish line editing + history =="
-{ sleep 3; printf 'lx\x7fs\n'; sleep 2; \
+# DEL は \177 と書く (POSIX printf の 8 進形)。\x7f は dash の
+# printf が解釈せず文字列のまま送るため、起動シェルで結果が変わる
+{ sleep 3; printf 'lx\177s\n'; sleep 2; \
   printf 'cat hello.txt\n'; sleep 2; printf '\033[A\n'; sleep 2; \
-  printf 'lxs\033[D\x7f\n'; sleep 2; printf 'exit\n'; sleep 1; } \
+  printf 'lxs\033[D\177\n'; sleep 2; printf 'exit\n'; sleep 1; } \
     | timeout 18 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-h.log 2>&1 || true
 out=$(strip_ticks < test-h.log)
@@ -965,7 +967,7 @@ echo "== scenario AN: task/runner cpu accounting (ps) =="
 out=$(strip_ticks < test-an.log)
 rc=0
 echo "$out" | grep -Eq "task 3: (sleeping|ready) wakes=[0-9]+ cpu=[0-9]+" || rc=1
-echo "$out" | grep -Eq "run 0: nish (running|input) cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 0: nish.elf (running|input) cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "run 2: slow\.elf running cpu=[0-9]+" || rc=1
 report "AN task/runner cpu accounting (ps)" $rc
 

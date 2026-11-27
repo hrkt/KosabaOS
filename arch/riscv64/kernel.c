@@ -83,6 +83,7 @@ static void start_user_named(const char *name)
             return;
         }
         vm_apply_pages(0);  /* 台帳をページ表へ反映してから降りる */
+        trap_fg_root_name(name);  /* ps の run 0 行の表示名 */
         user_launch(entry, sp, 1, argv_va);
     }
     vm_pages_release(0);  /* 終わったらページをプールへ返す */

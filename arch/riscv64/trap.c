@@ -883,7 +883,10 @@ static int fg_getc_wait;
  * 段ごとに名前と CPU を持つ (段 0 = 根のプログラム)。
  * 前面が getc の待ちに入っている間と、止まっている
  * ジョブの分は数えない (待機は CPU 使用ではない) */
-static char fg_name[EXEC_MAX_DEPTH + 1][32] = { "nish" };
+/* 前面の段ごとの表示名。根 (段 0) は起動したプログラムの
+ * 名前を trap_fg_root_name で受け取る (旧実装は "nish"
+ * 決め打ちで、段4 で getty が根になってから実態とずれた) */
+static char fg_name[EXEC_MAX_DEPTH + 1][32];
 static uint64_t fg_cpu[EXEC_MAX_DEPTH + 1];
 static uint64_t runner_charge_last;
 static int runner_charge_started;
@@ -922,6 +925,14 @@ static const char *base_name(const char *path)
         }
     }
     return b;
+}
+
+/* 根のプログラム (カーネルが直接起動する前面) の表示名を
+ * 記録する。kernel.c の start_user_named が user_launch の
+ * 直前に呼ぶ (ps の run 0 行が実態の名前で出るように) */
+void trap_fg_root_name(const char *name)
+{
+    copy_str(fg_name[0], base_name(name), sizeof(fg_name[0]));
 }
 
 /* バッファへの追記ヘルパ (SYS_TASKS の走者行用) */
@@ -1265,7 +1276,6 @@ static void jobs_kill_all(void)
         fg_cpu[i] = 0;
         fg_name[i][0] = '\0';
     }
-    copy_str(fg_name[0], "nish", sizeof(fg_name[0]));
     runner_charge_started = 0;
 }
 
