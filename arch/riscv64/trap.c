@@ -30,6 +30,7 @@
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
 #include "ssd1315.h" /* OLED 表示 (syscall 48 / 49) */
 #include "traplog.h" /* M シムのトラップ記録の drain (k210) */
+#include "panic.h"   /* カーネル例外で止まるときの画面表示 */
 #include "smp.h"     /* hart1 再生係との受け渡し (SMP 段2) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
@@ -3382,6 +3383,9 @@ void trap_handler(uint64_t *frame, int from_user)
     kputs(" stval=");
     put_hex(r_stval());
     kputc('\n');
+    /* 画面のあるボードでは、止まる前にクラッシュ表示も出す
+     * (panic.h、doc/userland-design.md 決定 3 の例外) */
+    board_panic_display(scause, r_sepc(), r_stval());
     for (;;) {
         asm volatile("wfi");
     }

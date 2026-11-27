@@ -183,17 +183,38 @@ static void console_wall_clock(void)
     print_wall_clock();  /* 読み戻して確かめる */
 }
 
+#if BOARD_FEATURE_LCD
+/* スプラッシュの進行ブロック (doc/userland-design.md 決定 2:
+ * 生存・進行の表示はピクセル操作で)。枠でなく薄い塗りで
+ * 5 つ並べ、初期化が進むたびに 1 つずつ緑に点ける。
+ * 対応: 0=ボード初期化、1=トラップ/VM/スケジューラ、
+ * 2=ファイルシステム、3=シェル起動、4=カーネルコンソール */
+static void splash_block(uint32_t i, int lit)
+{
+    lcd_fill_rect(28 + i * 32, 116, 24, 12,
+                  lit ? LCD_RGB(140, 240, 140) : LCD_RGB(70, 70, 70));
+}
+
+static void splash_blocks_draw(void)
+{
+    uint32_t i;
+    for (i = 0; i < 5; i++) {
+        splash_block(i, 0);
+    }
+}
+#endif
+
 void kmain(void)
 {
     uart_init();
 #if BOARD_FEATURE_LCD
-    /* LCD にタイトルと最初のステージを出す。以後のステージは
-     * 各初期化が終わるたびに 1 行ずつ足す。最後に tick 表示を
-     * 有効化すると、時計タスクが毎秒数字を描き直す
-     * (スケジューラ段2) */
+    /* LCD にロゴと状態表示を出す。ロゴはビットマップ、
+     * 進行はブロックの点灯で示す (doc/userland-design.md
+     * 決定 2)。残りの行は実測値 (クロック・ファイル数) を
+     * 含む読み出しで、当面はテキストのまま */
     lcd_init();
     lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, LCD_RGB(24, 24, 24));
-    lcd_draw_text(64, 12, "KOSABAOS", 4, LCD_WHITE);
+    lcd_draw_logo(64, 12, LCD_WHITE);
     /* ボード名 + 実測クロック (board_cpu_freq は sysctl 読み戻し) */
     lcd_draw_text(88, 48, "BOARD K210", 2, LCD_RGB(150, 150, 150));
     {
@@ -204,7 +225,8 @@ void kmain(void)
     /* プロジェクトのゴールと現在地 */
     lcd_draw_text(22, 74, "GOAL: HELLO WORLD ON HW", 2, LCD_RGB(140, 240, 140));
     lcd_draw_text(28, 94, LCD_NOW_TEXT, 2, LCD_RGB(255, 210, 110));
-    lcd_draw_text(28, 116, "STEP2 BOARD OK", 2, LCD_RGB(200, 200, 200));
+    splash_blocks_draw();
+    splash_block(0, 1);  /* ボード初期化まで来た */
 #endif
 #if BOARD_FEATURE_SMODE_PATH
     trap_init();  /* タイマ割り込みを開始 (1 秒ごとに tick と表示) */
@@ -229,12 +251,11 @@ void kmain(void)
     mtrap_init(); /* M モードのタイマ割り込み (CLINT 直叩き、k210) */
 #endif
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 132, "STEP3 TRAP TIMER OK", 2, LCD_RGB(200, 200, 200));
+    splash_block(1, 1);  /* トラップ・VM・スケジューラまで来た */
 #endif
     fs_init();    /* RAM ファイルシステム (ステップ 6) */
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 148, "STEP4 USER MODE OK", 2, LCD_RGB(200, 200, 200));
-    lcd_draw_text(28, 164, "FS READY", 2, LCD_RGB(200, 200, 200));
+    splash_block(2, 1);  /* ファイルシステムまで来た */
     /* 機械の状態: hart1 は SMP 段1で起こす、FS のファイル数 */
     lcd_draw_text(28, 198, "HART1 SMP FS", 2, LCD_RGB(150, 150, 150));
     {
@@ -263,6 +284,9 @@ void kmain(void)
 #if BOARD_FEATURE_SMODE_PATH
     /* シェル Nish を最初に起動する (主役化)。
      * Nish で exit すると下のカーネルコンソールに落ちる */
+#if BOARD_FEATURE_LCD
+    splash_block(3, 1);  /* シェルを起こすところまで来た */
+#endif
     start_user_named("nish.elf");
     kputs("[kernel] kernel console "
           "(u: uprog, s: Nish, m: multitask, l: files, "
@@ -270,7 +294,7 @@ void kmain(void)
 #endif
 
 #if BOARD_FEATURE_LCD
-    lcd_draw_text(28, 180, "CONSOLE READY", 2, LCD_RGB(200, 200, 200));
+    splash_block(4, 1);  /* カーネルコンソールが受け付けられる */
     /* 帯 (画面下部) は時計 clock.elf の窓なので、カーネルは
      * ここでは何も描かない (doc/userland-design.md 決定 4) */
 #endif
