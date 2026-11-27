@@ -1032,6 +1032,26 @@ echo "$out" | grep -q "usage: vol \[0-5\]" || rc=1
 echo "$out" | grep -q "run: exit status 2" || rc=1
 report "AQ audio volume" $rc
 
+echo "== scenario AR: console output destination (syscall 54) =="
+# `vt lcd` の後は putc が LCD キューへ行き、シリアルには
+# 出ない。`vt serial` で戻すと再び出る。LCD 行きの文字は
+# 55 の drain でしか回収できないので、ここでは「シリアルに
+# 出ないこと」と「戻した後に出ること」だけを見る (vtcon.elf
+# が来たら drain 側も足す)
+{ sleep 3; printf 'vt lcd\n'; sleep 1; \
+  printf 'echo lcd-hidden\n'; sleep 1; \
+  printf 'vt serial\n'; sleep 1; \
+  printf 'echo serial-shown\n'; sleep 1; \
+  printf 'vt\n'; sleep 1; printf 'exit\n'; sleep 1; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-ar.log 2>&1 || true
+out=$(strip_ticks < test-ar.log)
+rc=0
+echo "$out" | grep -q "lcd-hidden" && rc=1
+echo "$out" | grep -q "serial-shown" || rc=1
+echo "$out" | grep -q "vt: serial" || rc=1
+report "AR console output destination" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

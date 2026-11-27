@@ -53,6 +53,8 @@
 #define SYS_JOB_WAIT 22
 #define SYS_JOB_KILL 23
 #define SYS_SAVER_QUERY 52
+#define SYS_CONSOLE_SET_OUT 54
+#define SYS_CONSOLE_READ 55
 #define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
@@ -736,6 +738,34 @@ static void cmd_dmesg(void)
     }
 }
 
+/* 出力の行き先 (VT 週末版 W1)。引数なしなら現在の行き先を
+ * 表示、lcd / serial / both で切り替える */
+static void cmd_vt(char *arg)
+{
+    long mode;
+    if (arg[0] == '\0') {
+        mode = syscall3(SYS_CONSOLE_SET_OUT, -1, 0, 0);
+    } else if (streq(arg, "lcd")) {
+        mode = syscall3(SYS_CONSOLE_SET_OUT, 1, 0, 0);
+    } else if (streq(arg, "serial")) {
+        mode = syscall3(SYS_CONSOLE_SET_OUT, 0, 0, 0);
+    } else if (streq(arg, "both")) {
+        mode = syscall3(SYS_CONSOLE_SET_OUT, 2, 0, 0);
+    } else {
+        puts_("usage: vt [lcd|serial|both]\n");
+        return;
+    }
+    if (mode < 0) {
+        puts_("vt: unavailable\n");
+    } else if (mode == 0) {
+        puts_("vt: serial\n");
+    } else if (mode == 1) {
+        puts_("vt: lcd\n");
+    } else {
+        puts_("vt: both\n");
+    }
+}
+
 static void cmd_ps(void)
 {
     char buf[1024];
@@ -798,6 +828,7 @@ void _start(void)
             puts_("fg [n]          wait for a background job in front\n");
             puts_("kill <n>        stop a background job\n");
             puts_("echo <text>     print text\n");
+            puts_("vt [lcd|serial|both]  output destination\n");
             puts_("ps              kernel tasks\n");
             puts_("dmesg           show the kernel log\n");
             puts_("clear           clear the screen\n");
@@ -829,6 +860,8 @@ void _start(void)
         } else if (streq(line, "echo")) {
             puts_(arg);
             putc_('\n');
+        } else if (streq(line, "vt")) {
+            cmd_vt(arg);
         } else if (streq(line, "ps")) {
             cmd_ps();
         } else if (streq(line, "dmesg")) {
