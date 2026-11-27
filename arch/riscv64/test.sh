@@ -559,12 +559,12 @@ out=$(strip_ticks < test-x.log)
 check_order "$out" "Nish, the KosabaOS shell" \
     "job 2: slow.elf started" "during" \
     "job 2: slow.elf running" "slow done" \
-    "job 2: slow.elf done status=5" "job 1: clock.elf running" \
+    "job 2: slow.elf done status=5" "job 1: clock.elf sleeping" \
     "job 2: crash.elf started" "alive" \
     "job 2: crash.elf done status=-2" "fg: program faulted" \
     "job 2: uprog.elf started" "hello from user mode!" \
     "job 2: uprog.elf stopped" \
-    "job 2: slow.elf started" "killed job 2" "job 1: clock.elf running" \
+    "job 2: slow.elf started" "killed job 2" "job 1: clock.elf sleeping" \
     "kill: no such job" \
     "[kernel] back from user program"
 report "X job control (bg / jobs / fg / kill / notice / fault isolation)" $?
