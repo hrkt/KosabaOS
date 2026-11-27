@@ -510,16 +510,16 @@ def main():
     report("K22 nami player (wavgen -> nami, fnv via dmesg, "
            "error statuses)", ok)
 
-    print("== scenario K23: screensaver (two-stage) ==")
+    print("== scenario K23: screensaver (user program) ==")
     # スクリーンセーバー (doc/screensaver-design.md) の実機
-    # 確認。閾値を差し替えたビルド (SAVER_TEST: 段1 = 4 秒 /
-    # 段2 = 10 秒) が要るので、このシナリオ専用にビルドし
-    # 直して SRAM ブートからやり直す。照合は virt の AD と
-    # 同じく、Nish の入力待ちで無入力を続けた後に dmesg を
-    # 読み、遷移行が "saver: stage1 on" → "saver: stage2
-    # on" → "saver: off" (dmesg の 'd' の入力で復帰) の
-    # 順で並ぶこと。LCD で時刻表示が実際に動いて見えるか
-    # はシリアルから確認できないので目視の担当
+    # 確認。閾値を差し替えたビルド (SAVER_TEST: 4 秒) が
+    # 要るので、このシナリオ専用にビルドし直して SRAM
+    # ブートからやり直す。照合は virt の AD と同じく、
+    # Nish の入力待ちで無入力を続けるとシェルが saver.elf
+    # を起こし (コンソールに "saver: start")、捨てキーで
+    # 復帰した後の dmesg に "saver: on" → "saver: off" の
+    # 順で遷移行が並ぶこと。LCD でブロックが実際に漂って
+    # 見えるかはシリアルから確認できないので目視の担当
     r = subprocess.run(["./build.sh"], cwd=HERE,
                        env={**os.environ, "BUILD_NO_RUN": "1",
                             "BOARD": "k210", "SAVER_TEST": "1"},
@@ -540,21 +540,22 @@ def main():
             time.sleep(3)
             ok = expect("nish>", 20000, cursor=boot_cursor)
         if ok:
-            time.sleep(18)  # 無入力で段1 (4 秒) → 段2 (10 秒)
+            time.sleep(18)  # 無入力で閾値 (4 秒) を超える
+            r = call_tool("serial_read", {"cursor": boot_cursor})
+            ok = "saver: start" in r.get("text", "") and ok
             cur = log_total()
+            send_chunked("x")   # 復帰キー (saver.elf が消費)
+            time.sleep(2)
             send_chunked("dmesg")
             call_tool("serial_send", {"text": "", "newline": True})
             ok = expect("saver: off", 20000, cursor=cur) and ok
             r = call_tool("serial_read", {"cursor": cur})
             text = r.get("text", "")
-            i1 = text.find("saver: stage1 on")
-            i2 = text.find("saver: stage2 on")
+            i1 = text.find("saver: on")
             i3 = text.find("saver: off")
-            print(f"   saver lines: stage1@{i1} stage2@{i2} "
-                  f"off@{i3}")
-            ok = ok and 0 <= i1 < i2 < i3
-    report("K23 screensaver (stage1 -> stage2 -> off via dmesg)",
-           ok)
+            print(f"   saver lines: on@{i1} off@{i3}")
+            ok = ok and 0 <= i1 < i3
+    report("K23 screensaver (on -> off via dmesg)", ok)
 
     print("== scenario K24: perf counters ==")
     # perf.elf が syscall 33 (性能カウンタ読み) を呼んで、

@@ -52,6 +52,7 @@
 #define SYS_JOB_LIST 21
 #define SYS_JOB_WAIT 22
 #define SYS_JOB_KILL 23
+#define SYS_SAVER_QUERY 52
 #define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
@@ -69,6 +70,12 @@ static long syscall3(long num, long a0, long a1, long a2)
 
 static void putc_(char c) { syscall3(SYS_PUTC, c, 0, 0); }
 static long getc_(void) { return syscall3(SYS_GETC, 0, 0, 0); }
+static long getc_to_(long ms) { return syscall3(SYS_GETC, 0, ms, 0); }
+
+static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
+static long resident_job;      /* スタートアップで起こした常駐
+                                * ジョブの番号 (0 = 無し)。
+                                * 素の fg の対象から外すため */
 
 static void puts_(const char *s)
 {
@@ -148,6 +155,26 @@ static void redraw(const char *buf)
     puts_("\033[K");  /* 行末までの残りを消す */
 }
 
+/* セーバーの合図 (saver_query 52) が来ていたら saver.elf
+ * を起こして前面で待つ (doc/screensaver-design.md)。
+ * 表示は saver.elf の仕事で、シェルは起動係に徹する。
+ * キーが押されると saver.elf が終わり、ここへ戻る */
+static void maybe_start_saver(const char *buf)
+{
+    long no;
+
+    if (syscall3(SYS_SAVER_QUERY, 0, 0, 0) != 1) {
+        return;
+    }
+    no = syscall3(SYS_JOB_RUN, (long)"saver.elf",
+                  (long)"saver.elf", 0);
+    if (no > 0) {
+        syscall3(SYS_JOB_WAIT, no, 0, 0);
+        job_notified_mask &= ~(1 << (int)no);
+    }
+    redraw(buf);
+}
+
 static void readline(char *buf)
 {
     int len = 0;
@@ -158,7 +185,18 @@ static void readline(char *buf)
     buf[0] = '\0';
     saved[0] = '\0';
     for (;;) {
-        long c = getc_();
+        long c;
+
+        if (len == 0) {
+            /* 空行の間は 1 秒で見回り、セーバーの合図を拾う */
+            c = getc_to_(1000);
+            if (c == -1) {
+                maybe_start_saver(buf);
+                continue;
+            }
+        } else {
+            c = getc_();
+        }
 
         if (c == 0x1B) {      /* 矢印キーなどの ESC シーケンス */
             long c2 = getc_();
@@ -416,9 +454,8 @@ static int atoi_(const char *s)
  * カーネル側の job_list (21) が作るテキストは 1 行 1 ジョブで
  *   job N: <名前> running / stopped / done status=S
  * の形。Nish はそれを表示 (jobs)・解釈 (fg の対象選びと
- * Done 通知) に使う。 */
-
-static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
+ * Done 通知) に使う。job_notified_mask の宣言はファイル
+ * 先頭寄りにある (readline のセーバー起動係も使うため) */
 
 /* job_list のテキストから、行 [s, e) が「終わったジョブ」の
  * 行かどうかを見る (状態欄の " done status=" を探す) */
@@ -440,9 +477,34 @@ static int job_line_done(const char *buf, long s, long e)
     return 0;
 }
 
+/* 行 [s, e) が常駐ジョブ (スタートアップで起こした時計) の
+ * 行かどうか。番号が resident_job と一致し、名前も clock.elf
+ * のときだけ真 (kill されて別のプログラムが同じ番号を
+ * 使っていたら常駐ではない) */
+static int job_line_is_resident(const char *buf, long s, long e,
+                                long no)
+{
+    const char *name = "clock.elf";
+    long k = s + 7;  /* "job N: " の次が名前 */
+    long m = 0;
+
+    if (no != resident_job) {
+        return 0;
+    }
+    while (name[m] != '\0') {
+        if (k + m >= e || buf[k + m] != name[m]) {
+            return 0;
+        }
+        m++;
+    }
+    return k + m >= e || buf[k + m] == ' ';
+}
+
 /* fg の対象の既定: 一番大きい番号の、終わっていないジョブ。
  * 終わったものしか無ければ、その中で一番大きい番号
- * (fg で回収して結果を報告できる)。どちらも無ければ -1 */
+ * (fg で回収して結果を報告できる)。どちらも無ければ -1。
+ * 常駐ジョブは終わらないので、素の fg の対象から外す
+ * (選ぶと fg が永久に待つ)。番号を明示した fg は従来どおり */
 static long job_pick_fg(void)
 {
     char buf[256];
@@ -463,7 +525,9 @@ static long job_pick_fg(void)
         if (i - s >= 6 && buf[s] == 'j' && buf[s + 4] >= '1' &&
             buf[s + 4] <= '9') {
             long no = buf[s + 4] - '0';
-            if (job_line_done(buf, s, i)) {
+            if (job_line_is_resident(buf, s, i, no)) {
+                /* 常駐は対象にしない */
+            } else if (job_line_done(buf, s, i)) {
                 if (no > pick_done) {
                     pick_done = no;
                 }
@@ -700,6 +764,15 @@ void _start(void)
     char line[LINE_MAX];
 
     puts_("Nish, the KosabaOS shell. Type 'help'.\n");
+    /* スタートアップ: 常駐プログラムをジョブとして起こす
+     * (doc/userland-design.md 決定 5)。今は時計だけ。
+     * 起動係の仕事は段4 で getty へ移る。番号は素の fg の
+     * 対象から外すために覚える (失敗したら 0 = 無し) */
+    resident_job = syscall3(SYS_JOB_RUN, (long)"clock.elf",
+                            (long)"clock.elf", 0);
+    if (resident_job < 0) {
+        resident_job = 0;
+    }
     for (;;) {
         char *arg;
 

@@ -49,6 +49,18 @@ ima_prog_start:
     .incbin "ima.elf"
 ima_prog_end:
 
+    .globl clock_prog_start
+    .globl clock_prog_end
+clock_prog_start:
+    .incbin "clock.elf"
+clock_prog_end:
+
+    .globl saver_prog_start
+    .globl saver_prog_end
+saver_prog_start:
+    .incbin "saver.elf"
+saver_prog_end:
+
     .globl seek_prog_start
     .globl seek_prog_end
 seek_prog_start:

@@ -54,6 +54,8 @@ echo "build: BOARD=$BOARD"
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o uptime.elf uptime.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o perf.elf perf.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o ima.elf ima.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o clock.elf clock.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o saver.elf saverprog.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o seek.elf seek.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o oled.elf oled.c
 "$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none -T user.ld -o vol.elf vol.c
@@ -165,13 +167,13 @@ fi
 
 # スクリーンセーバー (doc/screensaver-design.md) のテスト用
 # 閾値。SAVER_TEST が設定されていれば -DSAVER_TEST を渡し、
-# 段1/段2 の閾値が 4 秒 / 10 秒に差し替わる (シナリオ
-# AD と K23 がこのビルドで別途ビルドし直して使う。
-# 通常ビルドの閾値は変わらない)
+# 無入力の閾値が 4 秒に差し替わる (シナリオ AD と K23 が
+# このビルドで別途ビルドし直して使う。通常ビルドの
+# 閾値は変わらない)
 SAVER_DEFINE=""
 if [ -n "${SAVER_TEST:-}" ]; then
     SAVER_DEFINE=-DSAVER_TEST
-    echo "build: screensaver TEST thresholds (4s/10s)"
+    echo "build: screensaver TEST threshold (4s)"
 fi
 
 # ウォッチドッグ (doc/trap-recovery-design.md 段3) のテスト用

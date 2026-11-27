@@ -7,9 +7,12 @@
  * 設計は doc/gfx-design.md、仕様は doc/syscalls.md の 43〜47。
  *
  * 窓は走者 (runner) ごとに 1 つで、geometry は走者番号から
- * 決まる固定レイアウト。描画 syscall の座標は「自分の窓の
+ * 決まるレイアウト + レイアウト要求 (帯の窓・全画面、
+ * syscall 51) で決まる。描画 syscall の座標は「自分の窓の
  * 内容領域の中の相対座標」で、原点の加算とクリップは
- * ここが担う。時計帯 (画面下部 24px) には一切触らない。
+ * ここが担う。画面下部 24px の帯はカーネルの予約ではなく、
+ * 要求したジョブ (時計) の窓である (doc/userland-design.md
+ * 決定 4)。
  *
  * LCD の無い環境 (virt) では実描画をせず、呼び出しと窓の
  * 出来事を klog への要約行だけで残す (オーディオダミーと
@@ -26,6 +29,8 @@ int gfx_screen_h(void);
 /* syscall の実体 (trap.c の do_syscall から呼ばれる)。
  * runner は呼び出し元の走者番号 (0 = 前面、1〜 = ジョブ) */
 int gfx_info(int runner, uint32_t out[4]);  /* out: 画面 w/h, 窓の内容 w/h */
+int gfx_layout(int runner, int mode);  /* 51: 0 = 解放、1 = 帯、2 = 全画面 */
+int gfx_strip_runner(void);  /* 帯の窓の持ち主 (無ければ -1) */
 void gfx_clear(int runner, uint32_t color);
 void gfx_rect(int runner, int x, int y, int w, int h, uint32_t color);
 void gfx_text(int runner, int x, int y, const char *s, int scale,
@@ -41,12 +46,11 @@ void gfx_window_close(int runner);                    /* 回収・破棄 */
 void gfx_set_focus(int runner);  /* コンソールの持ち主の変更 */
 void gfx_fg_title(const char *title);  /* 前面の窓のタイトル更新 */
 
-/* スクリーンセーバーの段2 (全面) からの復帰用
- * (doc/screensaver-design.md): クライアント領域を
- * デスクトップ色で消し、使用中の窓すべての枠・タイトル
- * を描き直す。窓の中身は戻せない (カーネルは保持して
- * いない) ので、復帰範囲はここまで。出来事ではないので
- * klog には残さない */
+/* 画面全体の描き直し: 全面をデスクトップ色で消し、
+ * 使用中の窓すべての枠・タイトルを描き直す。窓の中身は
+ * 戻せない (カーネルは保持していない) ので、復帰範囲は
+ * ここまで。レイアウト要求の変更や窓の回収で使う。
+ * 出来事ではないので klog には残さない */
 void gfx_desktop_repaint(void);
 
 #endif
