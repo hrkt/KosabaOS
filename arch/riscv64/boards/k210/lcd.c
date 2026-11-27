@@ -16,6 +16,8 @@
 #include "lcd.h"
 #include "time.h"
 #include "klog.h"
+#include "panic.h"
+#include "splash_logo.h"
 
 #define REG32(addr) (*(volatile uint32_t *)(addr))
 
@@ -357,3 +359,128 @@ uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
     return (uint32_t)n * 6 * scale;
 }
 
+
+/* ---- スプラッシュのロゴ (ビットマップ) ----
+ * 固定内容はフォントで描かず、生成済みビットマップ
+ * (splash_logo.h、gen_splash_logo.py が作る) を blit する
+ * (doc/userland-design.md 決定 2)。横方向のランごとに
+ * 1 回の fill で送る */
+void lcd_draw_logo(uint32_t x, uint32_t y, uint16_t color)
+{
+    uint32_t row, col;
+    for (row = 0; row < SPLASH_LOGO_H; row++) {
+        col = 0;
+        while (col < SPLASH_LOGO_W) {
+            uint32_t start;
+            while (col < SPLASH_LOGO_W &&
+                   !((splash_logo_bits[row * (SPLASH_LOGO_W / 8) +
+                                       col / 8] >>
+                      (7 - col % 8)) & 1)) {
+                col++;
+            }
+            if (col >= SPLASH_LOGO_W) {
+                break;
+            }
+            start = col;
+            while (col < SPLASH_LOGO_W &&
+                   ((splash_logo_bits[row * (SPLASH_LOGO_W / 8) +
+                                      col / 8] >>
+                     (7 - col % 8)) & 1)) {
+                col++;
+            }
+            lcd_fill_rect(x + start, y + row, col - start, 1, color);
+        }
+    }
+}
+
+/* ---- クラッシュ表示専用の最小フォント ----
+ * doc/userland-design.md 決定 3 の例外: 通常表示のフォントは
+ * カーネルに置かないが、クラッシュ表示のためだけに、数字と
+ * 大文字の一部 (PANIC / SCAUSE / SEPC / STVAL のラベルと
+ * 16 進表示に要る字) だけの小さな表を 1 つ持つ。通常表示や
+ * スプラッシュには使わない。字形は上の 5x7 表と同じ値 */
+static const uint8_t *panic_glyph(char c)
+{
+    static const char chars[] = "0123456789ABCDEFILNPSTUV";
+    static const uint8_t tab[][5] = {
+        {0x3E, 0x45, 0x49, 0x51, 0x3E},  /* 0 */
+        {0x00, 0x21, 0x7F, 0x01, 0x00},  /* 1 */
+        {0x21, 0x43, 0x45, 0x49, 0x31},  /* 2 */
+        {0x22, 0x41, 0x49, 0x49, 0x36},  /* 3 */
+        {0x0C, 0x14, 0x24, 0x7F, 0x04},  /* 4 */
+        {0x72, 0x51, 0x51, 0x51, 0x4E},  /* 5 */
+        {0x3E, 0x49, 0x49, 0x49, 0x06},  /* 6 */
+        {0x40, 0x40, 0x4F, 0x50, 0x60},  /* 7 */
+        {0x36, 0x49, 0x49, 0x49, 0x36},  /* 8 */
+        {0x30, 0x49, 0x49, 0x49, 0x3E},  /* 9 */
+        {0x3F, 0x48, 0x48, 0x48, 0x3F},  /* A */
+        {0x7F, 0x49, 0x49, 0x49, 0x36},  /* B */
+        {0x3E, 0x41, 0x41, 0x41, 0x22},  /* C */
+        {0x7F, 0x41, 0x41, 0x41, 0x3E},  /* D */
+        {0x7F, 0x49, 0x49, 0x49, 0x41},  /* E */
+        {0x7F, 0x48, 0x48, 0x48, 0x40},  /* F */
+        {0x00, 0x41, 0x7F, 0x41, 0x00},  /* I */
+        {0x7F, 0x01, 0x01, 0x01, 0x01},  /* L */
+        {0x7F, 0x30, 0x08, 0x06, 0x7F},  /* N */
+        {0x7F, 0x48, 0x48, 0x48, 0x30},  /* P */
+        {0x31, 0x49, 0x49, 0x49, 0x46},  /* S */
+        {0x40, 0x40, 0x7F, 0x40, 0x40},  /* T */
+        {0x7E, 0x01, 0x01, 0x01, 0x7E},  /* U */
+        {0x7C, 0x02, 0x01, 0x02, 0x7C},  /* V */
+    };
+    static const uint8_t blank[5] = {0, 0, 0, 0, 0};
+    int i;
+    for (i = 0; chars[i] != '\0'; i++) {
+        if (chars[i] == c) {
+            return tab[i];
+        }
+    }
+    return blank;
+}
+
+static void panic_text(uint32_t x, uint32_t y, const char *s,
+                       uint32_t scale, uint16_t color)
+{
+    for (; *s; s++, x += 6 * scale) {
+        const uint8_t *g = panic_glyph(*s);
+        int col, row;
+        for (col = 0; col < 5; col++) {
+            for (row = 0; row < 7; row++) {
+                if (g[col] & (1u << (6 - row))) {
+                    lcd_fill_rect(x + col * scale, y + row * scale,
+                                  scale, scale, color);
+                }
+            }
+        }
+    }
+}
+
+static void panic_hex64(uint32_t x, uint32_t y, uint64_t v,
+                        uint32_t scale, uint16_t color)
+{
+    char buf[17];
+    int i;
+    for (i = 0; i < 16; i++) {
+        int d = (int)((v >> ((15 - i) * 4)) & 0xF);
+        buf[i] = (char)(d < 10 ? '0' + d : 'A' + d - 10);
+    }
+    buf[16] = '\0';
+    panic_text(x, y, buf, scale, color);
+}
+
+/* カーネルが例外で止まるときの画面 (panic.h の実体)。
+ * シリアルの "trap: exception" 行と同じ 3 つの値を、
+ * 暗赤色の画面に最小フォントで出す */
+void board_panic_display(uint64_t scause, uint64_t sepc,
+                         uint64_t stval)
+{
+    uint16_t fg = LCD_RGB(255, 150, 150);
+    lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, LCD_RGB(72, 10, 10));
+    panic_text(28, 24, "PANIC", 5, fg);
+    panic_text(28, 92, "SCAUSE", 2, fg);
+    panic_hex64(28, 112, scause, 2, fg);
+    panic_text(28, 142, "SEPC", 2, fg);
+    panic_hex64(28, 162, sepc, 2, fg);
+    panic_text(28, 192, "STVAL", 2, fg);
+    panic_hex64(28, 212, stval, 2, fg);
+}

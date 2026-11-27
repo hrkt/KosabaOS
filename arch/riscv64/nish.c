@@ -73,9 +73,6 @@ static long getc_(void) { return syscall3(SYS_GETC, 0, 0, 0); }
 static long getc_to_(long ms) { return syscall3(SYS_GETC, 0, ms, 0); }
 
 static int job_notified_mask;  /* Done 通知済みのジョブ番号のビット */
-static long resident_job;      /* スタートアップで起こした常駐
-                                * ジョブの番号 (0 = 無し)。
-                                * 素の fg の対象から外すため */
 
 static void puts_(const char *s)
 {
@@ -477,20 +474,16 @@ static int job_line_done(const char *buf, long s, long e)
     return 0;
 }
 
-/* 行 [s, e) が常駐ジョブ (スタートアップで起こした時計) の
- * 行かどうか。番号が resident_job と一致し、名前も clock.elf
- * のときだけ真 (kill されて別のプログラムが同じ番号を
- * 使っていたら常駐ではない) */
-static int job_line_is_resident(const char *buf, long s, long e,
-                                long no)
+/* 行 [s, e) が常駐の時計 (clock.elf) の行かどうか。
+ * 起動は段4 から getty の仕事になったので、Nish は番号を
+ * 知らない。名前で見分ける (時計は終わらないので、素の
+ * fg の対象から外すのが目的) */
+static int job_line_is_clock(const char *buf, long s, long e)
 {
     const char *name = "clock.elf";
     long k = s + 7;  /* "job N: " の次が名前 */
     long m = 0;
 
-    if (no != resident_job) {
-        return 0;
-    }
     while (name[m] != '\0') {
         if (k + m >= e || buf[k + m] != name[m]) {
             return 0;
@@ -525,8 +518,8 @@ static long job_pick_fg(void)
         if (i - s >= 6 && buf[s] == 'j' && buf[s + 4] >= '1' &&
             buf[s + 4] <= '9') {
             long no = buf[s + 4] - '0';
-            if (job_line_is_resident(buf, s, i, no)) {
-                /* 常駐は対象にしない */
+            if (job_line_is_clock(buf, s, i)) {
+                /* 常駐の時計は対象にしない */
             } else if (job_line_done(buf, s, i)) {
                 if (no > pick_done) {
                     pick_done = no;
@@ -764,15 +757,9 @@ void _start(void)
     char line[LINE_MAX];
 
     puts_("Nish, the KosabaOS shell. Type 'help'.\n");
-    /* スタートアップ: 常駐プログラムをジョブとして起こす
-     * (doc/userland-design.md 決定 5)。今は時計だけ。
-     * 起動係の仕事は段4 で getty へ移る。番号は素の fg の
-     * 対象から外すために覚える (失敗したら 0 = 無し) */
-    resident_job = syscall3(SYS_JOB_RUN, (long)"clock.elf",
-                            (long)"clock.elf", 0);
-    if (resident_job < 0) {
-        resident_job = 0;
-    }
+    /* スタートアップ (常駐プログラムの起動) は段4 から
+     * 番人 getty の仕事。Nish はシェルに専念する
+     * (doc/userland-design.md 決定 7) */
     for (;;) {
         char *arg;
 

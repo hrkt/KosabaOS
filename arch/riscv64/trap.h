@@ -16,4 +16,8 @@ uint64_t trap_uptime_ms(void);   /* 起動以来のミリ秒 (uptime 用、r_tim
 #define TRAP_SAVER_FG_SHELL_WAIT 2  /* 前面がシェル (根の段) の入力待ち */
 int trap_saver_env(void);
 
+/* 根のプログラムの表示名 (ps の run 0 行用) を記録する。
+ * kernel.c の start_user_named が起動直前に呼ぶ */
+void trap_fg_root_name(const char *name);
+
 #endif

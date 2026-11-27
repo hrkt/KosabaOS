@@ -53,4 +53,9 @@ void lcd_draw_text_clip(uint32_t x, uint32_t y, const char *s,
 uint32_t lcd_draw_u32(uint32_t x, uint32_t y, uint64_t v, uint32_t scale,
                       uint16_t color);
 
+/* スプラッシュのロゴ (KOSABAOS) をビットマップで描く。
+ * 字形でなく生成済みビットマップ (splash_logo.h) を blit
+ * する (doc/userland-design.md 決定 2) */
+void lcd_draw_logo(uint32_t x, uint32_t y, uint16_t color);
+
 #endif

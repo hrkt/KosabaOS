@@ -30,6 +30,7 @@
 #include "saver.h"   /* 入力活動の記録 (SYS_GETC の成功) */
 #include "ssd1315.h" /* OLED 表示 (syscall 48 / 49) */
 #include "traplog.h" /* M シムのトラップ記録の drain (k210) */
+#include "panic.h"   /* カーネル例外で止まるときの画面表示 */
 #include "smp.h"     /* hart1 再生係との受け渡し (SMP 段2) */
 
 #define TIMER_HZ        BOARD_TIMER_HZ  /* CLINT mtime の周波数 (ボード依存) */
@@ -882,7 +883,10 @@ static int fg_getc_wait;
  * 段ごとに名前と CPU を持つ (段 0 = 根のプログラム)。
  * 前面が getc の待ちに入っている間と、止まっている
  * ジョブの分は数えない (待機は CPU 使用ではない) */
-static char fg_name[EXEC_MAX_DEPTH + 1][32] = { "nish" };
+/* 前面の段ごとの表示名。根 (段 0) は起動したプログラムの
+ * 名前を trap_fg_root_name で受け取る (旧実装は "nish"
+ * 決め打ちで、段4 で getty が根になってから実態とずれた) */
+static char fg_name[EXEC_MAX_DEPTH + 1][32];
 static uint64_t fg_cpu[EXEC_MAX_DEPTH + 1];
 static uint64_t runner_charge_last;
 static int runner_charge_started;
@@ -921,6 +925,14 @@ static const char *base_name(const char *path)
         }
     }
     return b;
+}
+
+/* 根のプログラム (カーネルが直接起動する前面) の表示名を
+ * 記録する。kernel.c の start_user_named が user_launch の
+ * 直前に呼ぶ (ps の run 0 行が実態の名前で出るように) */
+void trap_fg_root_name(const char *name)
+{
+    copy_str(fg_name[0], base_name(name), sizeof(fg_name[0]));
 }
 
 /* バッファへの追記ヘルパ (SYS_TASKS の走者行用) */
@@ -1264,7 +1276,6 @@ static void jobs_kill_all(void)
         fg_cpu[i] = 0;
         fg_name[i][0] = '\0';
     }
-    copy_str(fg_name[0], "nish", sizeof(fg_name[0]));
     runner_charge_started = 0;
 }
 
@@ -2525,9 +2536,11 @@ static int do_syscall(uint64_t *frame)
     case SYS_JOB_LIST:
     case SYS_JOB_WAIT:
     case SYS_JOB_KILL:
-        /* ジョブ管理は根のプログラム (段 0 で動くシェル)
-         * だけの仕事。ジョブの中や exec の子からは使えない */
-        if (cur_runner != 0 || exec_depth != 0) {
+        /* ジョブ管理はコンソールの前面プログラムだけの
+         * 仕事。段4 でシェルは getty の exec の子 (深さ 1)
+         * になったので、深さは問わず前面であることを見る。
+         * ジョブの中からは使えない */
+        if (cur_runner != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
             break;
         }
@@ -3182,8 +3195,9 @@ static int do_syscall(uint64_t *frame)
         break;
     case SYS_SAVER_QUERY:
         /* セーバーの起動要求 (doc/screensaver-design.md)。
-         * 起動できるのはルートプログラム (シェル) だけ */
-        if (cur_runner != 0 || exec_depth != 0) {
+         * 起動できるのはコンソールの前面プログラム
+         * (getty 配下のシェルを含む) だけ */
+        if (cur_runner != 0) {
             frame[FRAME_A0] = (uint64_t)-1;
         } else {
             frame[FRAME_A0] = (uint64_t)saver_query();
@@ -3382,6 +3396,9 @@ void trap_handler(uint64_t *frame, int from_user)
     kputs(" stval=");
     put_hex(r_stval());
     kputc('\n');
+    /* 画面のあるボードでは、止まる前にクラッシュ表示も出す
+     * (panic.h、doc/userland-design.md 決定 3 の例外) */
+    board_panic_display(scause, r_sepc(), r_stval());
     for (;;) {
         asm volatile("wfi");
     }

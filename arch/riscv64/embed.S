@@ -61,6 +61,12 @@ saver_prog_start:
     .incbin "saver.elf"
 saver_prog_end:
 
+    .globl getty_prog_start
+    .globl getty_prog_end
+getty_prog_start:
+    .incbin "getty.elf"
+getty_prog_end:
+
     .globl seek_prog_start
     .globl seek_prog_end
 seek_prog_start:
