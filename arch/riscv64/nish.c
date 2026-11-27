@@ -21,6 +21,7 @@
  *   run <名前> &    プログラムをバックグラウンドで実行
  *   jobs            バックグラウンドジョブの一覧
  *   fg [番号]       ジョブを前面にして終わるまで待つ
+ *   kill <番号>     ジョブを強制終了する
  *   echo <本文>     本文をそのまま表示
  *   ps              カーネルタスクの一覧
  *   dmesg           カーネルログを表示
@@ -50,6 +51,7 @@
 #define SYS_JOB_RUN 20
 #define SYS_JOB_LIST 21
 #define SYS_JOB_WAIT 22
+#define SYS_JOB_KILL 23
 #define SYS_KLOG_READ 30
 
 static long syscall3(long num, long a0, long a1, long a2)
@@ -565,6 +567,34 @@ static void cmd_fg(char *arg)
     }
 }
 
+/* kill <番号>: ジョブを強制終了する (job_kill 23、
+ * doc/userland-design.md 決定 5)。常駐プログラムの
+ * 停止・再起動 (kill して run し直す) のための口 */
+static void cmd_kill(char *arg)
+{
+    long no;
+    long r;
+
+    if (*arg == '\0') {
+        puts_("usage: kill <job number>\n");
+        return;
+    }
+    no = atoi_(arg);
+    if (no <= 0) {
+        puts_("usage: kill <job number>\n");
+        return;
+    }
+    r = syscall3(SYS_JOB_KILL, no, 0, 0);
+    job_notified_mask &= ~(1 << (int)no);  /* 回収したので通知不要 */
+    if (r == -1) {
+        puts_("kill: no such job\n");
+    } else {
+        puts_("killed job ");
+        put_dec_(no);
+        putc_('\n');
+    }
+}
+
 /* run の引数は「プログラム名＋渡したい引数」の並び全体。
  * 名前だけを切り出して a0 に、並び全体を a1 に渡すと、
  * 子は argv として受け取る (入口の約束、doc/syscalls.md)。
@@ -706,6 +736,7 @@ void _start(void)
             puts_("run <name> [..] &  run in background\n");
             puts_("jobs            list background jobs\n");
             puts_("fg [n]          wait for a background job in front\n");
+            puts_("kill <n>        stop a background job\n");
             puts_("echo <text>     print text\n");
             puts_("ps              kernel tasks\n");
             puts_("dmesg           show the kernel log\n");
@@ -733,6 +764,8 @@ void _start(void)
             cmd_jobs();
         } else if (streq(line, "fg")) {
             cmd_fg(arg);
+        } else if (streq(line, "kill")) {
+            cmd_kill(arg);
         } else if (streq(line, "echo")) {
             puts_(arg);
             putc_('\n');
