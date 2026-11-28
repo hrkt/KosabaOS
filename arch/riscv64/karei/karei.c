@@ -1,15 +1,15 @@
-/* synth.c -- KosabaOS のシンセ音源アプリ (doc/synth-design.md 段1)
+/* karei.c -- KosabaOS のシンセ音源アプリ (doc/karei-design.md 段1)
  *
- *   run synth          FM デモ曲 (引数なしの既定)
- *   run synth fm       FM デモ曲
- *   run synth psg      PSG デモ曲 (同じ曲)
- *   run synth play fm  シリアル鍵盤で FM を弾く
- *   run synth play psg シリアル鍵盤で PSG を弾く
- *   run synth fm <n>   プリセット n でデモ曲
+ *   run karei          FM デモ曲 (引数なしの既定)
+ *   run karei fm       FM デモ曲
+ *   run karei psg      PSG デモ曲 (同じ曲)
+ *   run karei play fm  シリアル鍵盤で FM を弾く
+ *   run karei play psg シリアル鍵盤で PSG を弾く
+ *   run karei fm <n>   プリセット n でデモ曲
  *                      (FM 0..21 / PSG 0..15。play でも
  *                      第 3 引数で指定可。対話中は
  *                      [ / ] キーで切り替え)
- *   run synth midi <p> [fm|psg] MIDI バイト列ストリームを
+ *   run karei midi <p> [fm|psg] MIDI バイト列ストリームを
  *                      読んで鳴らす (エンジン既定は fm。
  *                      fm はマルチティンバー版: [pool 1-32]
  *                      [2op|4op] [dbg] も指定可)
@@ -170,7 +170,7 @@ char g_mel[32];
 char g_bas[32];
 int32 g_vs[128];    /* ボイス状態 (ワード単位で直接アクセス) */
 
-/* プリセット (doc/synth-design.md のプリセットの節)。
+/* プリセット (doc/karei-design.md のプリセットの節)。
  * 1 件 20 バイトのバイトパックで、FM 22 件 / PSG 16 件:
  *   +0 波形 (FM=0, PSG=1 矩形 / 2 ノイズ)  +1 レベルシフト
  *   +2 atk  +4 dec  +6 sus  +8 rel (各 2 バイト LE)
@@ -1014,11 +1014,11 @@ void peg_block_demo()
     }
 }
 
-/* "synth: preset <番号> <名前>" を印字する */
+/* "karei: preset <番号> <名前>" を印字する */
 void print_preset(int32 eng, int32 idx)
 {
     int32 i;
-    out_str("synth: preset ");
+    out_str("karei: preset ");
     out_num(idx);
     putc(32);
     i = 0;
@@ -1495,7 +1495,7 @@ int64 fnv_init()
  * ラック側 (fx_frame) は登録表を回してセンドバスの受け渡しと
  * 処理呼び出しをする。新エフェクトの追加は「処理関数を 1 つ
  * 書いて fx_init の登録表に 1 行足し、fx_proc の振り分けに
- * 1 行足す」で済む (doc/synth-design.md のエフェクトラック
+ * 1 行足す」で済む (doc/karei-design.md のエフェクトラック
  * の節に手順)。
  *
  * 登録表の並び順がそのままチェーンモードの直列順になる:
@@ -1507,7 +1507,7 @@ int64 fnv_init()
  * (センドは各段への注入量として働く。割り切りは doc 参照)。
  *
  * 処理関数は入力フレーム (g_fxin) とパラメータと自分の状態
- * だけで動き、synth 本体の状態 (ボイス等) には触れない。
+ * だけで動き、karei 本体の状態 (ボイス等) には触れない。
  * 将来ミキサー側へ同じモジュールを持っていくための形。
  *
  * 状態置き場はファイルスコープの int32 配列 (直接アクセス)。
@@ -1695,7 +1695,7 @@ void fx_print_state()
 {
     int32 m;
     int32 i;
-    out_str("synth: fx");
+    out_str("karei: fx");
     m = 0;
     while (m < FX_N) {
         putc(32);
@@ -2007,13 +2007,13 @@ int32 run_demo(int32 engine)
     rr = 0;
     r = syscall3(SYS_AUDIO_OPEN, RATE, 1, 0);
     if (r != 0) {
-        out_str("synth: cannot open audio\n");
+        out_str("karei: cannot open audio\n");
         return 1;
     }
     if (engine == 0) {
-        out_str("synth: fm demo\n");
+        out_str("karei: fm demo\n");
     } else {
-        out_str("synth: psg demo\n");
+        out_str("karei: psg demo\n");
     }
     print_preset(engine, g_cur[1]);
     fx_print_state();
@@ -2055,7 +2055,7 @@ int32 run_demo(int32 engine)
             }
             if (audio_write_all(n) != 0) {
                 syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
-                out_str("synth: audio write failed\n");
+                out_str("karei: audio write failed\n");
                 return 1;
             }
             total = total + n;
@@ -2065,15 +2065,15 @@ int32 run_demo(int32 engine)
     }
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
     if (r != 0) {
-        out_str("synth: audio close failed\n");
+        out_str("karei: audio close failed\n");
         return 1;
     }
-    out_str("synth: samples=");
+    out_str("karei: samples=");
     out_num(total);
     out_str(" fnv=");
     out_hex64(fnv);
     putc(10);
-    out_str("synth: done\n");
+    out_str("karei: done\n");
     return 0;
 }
 
@@ -2094,10 +2094,10 @@ int32 run_play(int32 engine)
     done = 0;
     r = syscall3(SYS_AUDIO_OPEN, RATE, 1, 0);
     if (r != 0) {
-        out_str("synth: cannot open audio\n");
+        out_str("karei: cannot open audio\n");
         return 1;
     }
-    out_str("synth: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, R/D/C=fx toggle, X=chain, ESC=end\n");
+    out_str("karei: play mode. keys=z..m/q..i, o/p=octave, [/]=preset, R/D/C=fx toggle, X=chain, ESC=end\n");
     print_preset(engine, g_cur[1]);
     fx_print_state();
     while (done == 0) {
@@ -2169,22 +2169,22 @@ int32 run_play(int32 engine)
         }
         if (audio_write_all(512) != 0) {
             syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
-            out_str("synth: audio write failed\n");
+            out_str("karei: audio write failed\n");
             return 1;
         }
         total = total + 512;
     }
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
     if (r != 0) {
-        out_str("synth: audio close failed\n");
+        out_str("karei: audio close failed\n");
         return 1;
     }
-    out_str("synth: samples=");
+    out_str("karei: samples=");
     out_num(total);
     out_str(" fnv=");
     out_hex64(fnv);
     putc(10);
-    out_str("synth: done\n");
+    out_str("karei: done\n");
     return 0;
 }
 
@@ -2437,18 +2437,18 @@ int32 run_midi(char *path, int32 engine)
     }
     fd = syscall3(SYS_OPEN, path, 0, 0);
     if (fd < 0) {
-        out_str("synth: cannot open ");
+        out_str("karei: cannot open ");
         out_str(path);
         putc(10);
         return 1;
     }
     r = syscall3(SYS_AUDIO_OPEN, RATE, 1, 0);
     if (r != 0) {
-        out_str("synth: cannot open audio\n");
+        out_str("karei: cannot open audio\n");
         syscall3(SYS_FCLOSE, fd, 0, 0);
         return 1;
     }
-    out_str("synth: midi mode\n");
+    out_str("karei: midi mode\n");
     fx_print_state();
     load_preset(engine, 0);
     print_preset(engine, 0);
@@ -2479,7 +2479,7 @@ int32 run_midi(char *path, int32 engine)
                 if (n < 0) {
                     syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
                     syscall3(SYS_FCLOSE, fd, 0, 0);
-                    out_str("synth: read failed\n");
+                    out_str("karei: read failed\n");
                     return 1;
                 }
                 if (n > 0) {
@@ -2530,7 +2530,7 @@ int32 run_midi(char *path, int32 engine)
         if (audio_write_all(nf) != 0) {
             syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
             syscall3(SYS_FCLOSE, fd, 0, 0);
-            out_str("synth: audio write failed\n");
+            out_str("karei: audio write failed\n");
             return 1;
         }
         rendered = rendered + nf;
@@ -2539,15 +2539,15 @@ int32 run_midi(char *path, int32 engine)
     syscall3(SYS_FCLOSE, fd, 0, 0);
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
     if (r != 0) {
-        out_str("synth: audio close failed\n");
+        out_str("karei: audio close failed\n");
         return 1;
     }
-    out_str("synth: samples=");
+    out_str("karei: samples=");
     out_num(total);
     out_str(" fnv=");
     out_hex64(fnv);
     putc(10);
-    out_str("synth: done\n");
+    out_str("karei: done\n");
     return 0;
 }
 
@@ -2627,7 +2627,7 @@ int32 mt_def_preset(int32 p)
 void print_part_preset(int32 ch, int32 idx)
 {
     int32 i;
-    out_str("synth: part ");
+    out_str("karei: part ");
     out_num(ch + 1);
     out_str(" preset ");
     out_num(idx);
@@ -2819,7 +2819,7 @@ void mt_note_on(int32 ch, int32 note)
     steal = g_mv[pick * 16 + 0];
     mt_trig(pick, ch, note);
     if (g_mctl[2] != 0) {
-        out_str("synth: alloc v=");
+        out_str("karei: alloc v=");
         out_num(pick);
         out_str(" ch=");
         out_num(ch + 1);
@@ -3291,18 +3291,18 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     mt_init(pool, dbg, opovr);
     fd = syscall3(SYS_OPEN, path, 0, 0);
     if (fd < 0) {
-        out_str("synth: cannot open ");
+        out_str("karei: cannot open ");
         out_str(path);
         putc(10);
         return 1;
     }
     r = syscall3(SYS_AUDIO_OPEN, RATE, 2, 0);
     if (r != 0) {
-        out_str("synth: cannot open audio\n");
+        out_str("karei: cannot open audio\n");
         syscall3(SYS_FCLOSE, fd, 0, 0);
         return 1;
     }
-    out_str("synth: midi mt mode pool=");
+    out_str("karei: midi mt mode pool=");
     out_num(pool);
     putc(10);
     i = 0;
@@ -3353,7 +3353,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
                 if (n < 0) {
                     syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
                     syscall3(SYS_FCLOSE, fd, 0, 0);
-                    out_str("synth: read failed\n");
+                    out_str("karei: read failed\n");
                     return 1;
                 }
                 if (n > 0) {
@@ -3468,7 +3468,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
             fxp = fxp + nf;
             if (fxp >= 512) {
                 if (g_fxctl[3] != 0) {
-                    out_str("synth: fxdbg ");
+                    out_str("karei: fxdbg ");
                     out_num(chunkno);
                     putc(32);
                     out_num(ceacc);
@@ -3490,14 +3490,14 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
         if (audio_write_all(nf * 2) != 0) {
             syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
             syscall3(SYS_FCLOSE, fd, 0, 0);
-            out_str("synth: audio write failed\n");
+            out_str("karei: audio write failed\n");
             return 1;
         }
         rendered = rendered + nf;
         total = total + nf * 2;
     }
     if (g_fxctl[3] != 0 && fxp > 0) {
-        out_str("synth: fxdbg ");
+        out_str("karei: fxdbg ");
         out_num(chunkno);
         putc(32);
         out_num(ceacc);
@@ -3506,28 +3506,28 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     syscall3(SYS_FCLOSE, fd, 0, 0);
     r = syscall3(SYS_AUDIO_CLOSE, 0, 0, 0);
     if (r != 0) {
-        out_str("synth: audio close failed\n");
+        out_str("karei: audio close failed\n");
         return 1;
     }
-    out_str("synth: samples=");
+    out_str("karei: samples=");
     out_num(total);
     out_str(" fnv=");
     out_hex64(fnv);
     putc(10);
-    out_str("synth: lr l=");
+    out_str("karei: lr l=");
     out_num(labs);
     out_str(" r=");
     out_num(rabs);
     putc(10);
-    out_str("synth: peak=");
+    out_str("karei: peak=");
     out_num(peak);
     putc(10);
-    out_str("synth: perf cyc=");
+    out_str("karei: perf cyc=");
     out_num(tot_cyc);
     out_str(" ins=");
     out_num(perf_read(1) - ins0);
     putc(10);
-    out_str("synth: perf avg=");
+    out_str("karei: perf avg=");
     if (rendered > 0) {
         out_num(tot_cyc / rendered);
     } else {
@@ -3546,7 +3546,7 @@ int32 run_midi_mt(char *path, int32 pool, int32 dbg, int32 opovr)
     out_str(" pool=");
     out_num(pool);
     putc(10);
-    out_str("synth: done\n");
+    out_str("karei: done\n");
     return 0;
 }
 
@@ -3579,7 +3579,7 @@ int32 main(int32 argc, char **argv)
                     preset = parse_num(argv[ai]);
                     if (preset < 0 || (engine == 0 && preset > 21) ||
                         (engine == 1 && preset > 15)) {
-                        out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
+                        out_str("usage: karei [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
                         return 2;
                     }
                 }
@@ -3599,7 +3599,7 @@ int32 main(int32 argc, char **argv)
                     preset = parse_num(argv[ai]);
                     if (preset < 0 || (engine == 0 && preset > 21) ||
                         (engine == 1 && preset > 15)) {
-                        out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
+                        out_str("usage: karei [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
                         return 2;
                     }
                 }
@@ -3607,7 +3607,7 @@ int32 main(int32 argc, char **argv)
             }
         } else if (streq(argv[1], "midi")) {
             if (argc < 3) {
-                out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
+                out_str("usage: karei midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
                 return 2;
             }
             mode = 2;
@@ -3630,14 +3630,14 @@ int32 main(int32 argc, char **argv)
                     if (pv >= 1 && pv <= 32) {
                         pool = pv;
                     } else {
-                        out_str("usage: synth midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
+                        out_str("usage: karei midi <file> [fm|psg] [pool] [2op|4op] [dbg] [nofx|rev|dly|cho] [fxchain] [fxdbg]\n");
                         return 2;
                     }
                 }
                 ai = ai + 1;
             }
         } else {
-            out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
+            out_str("usage: karei [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
             return 2;
         }
     }

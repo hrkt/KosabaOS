@@ -4,7 +4,7 @@
 
 使い方:
   python3 make_waves.py          倍音構成の照合表を表示
-  python3 make_waves.py --emit   synth.c へ入れる fill_waves()
+  python3 make_waves.py --emit   karei.c へ入れる fill_waves()
                                  の C コードを標準出力へ出す
 
 波形の定義 (位相 theta、s = sin(theta)):
@@ -17,7 +17,7 @@
   W7 折り返し          前半 s、後半 |cos(theta)|
   W8 半波全波 2 倍音   前半 |sin(2 theta)|、後半 0
 
-出典と確度は doc/synth-design.md の波形節に書いた。
+出典と確度は doc/karei-design.md の波形節に書いた。
 W1 は確定、W2/W5 は公開資料とよく整合するが、W4/W7/W8 は
 マニュアル (TX81Z オーナーズマニュアル p.50 の倍音構成) と
 矛盾しない候補を選んだ推定である。本スクリプトは生成した

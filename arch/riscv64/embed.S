@@ -212,20 +212,20 @@ recv_prog_start:
 recv_prog_end:
 #endif
 
-/* synth (シンセ音源) の素材。IwaC 製のビルド成果物を
- * build.sh が写してきたときだけ (-DSYNTH_EMBED) 取り込む
- * (doc/synth-design.md) */
-#ifdef SYNTH_EMBED
-    .globl synth_prog_start
-    .globl synth_prog_end
-synth_prog_start:
-    .incbin "synth.elf"
-synth_prog_end:
+/* karei (シンセ音源) の素材。IwaC 製のビルド成果物を
+ * build.sh が写してきたときだけ (-DKAREI_EMBED) 取り込む
+ * (doc/karei-design.md) */
+#ifdef KAREI_EMBED
+    .globl karei_prog_start
+    .globl karei_prog_end
+karei_prog_start:
+    .incbin "karei.elf"
+karei_prog_end:
 #endif
 
-/* smfplay (SMF プレーヤー) の素材。synth と同じ流儀で、
+/* smfplay (SMF プレーヤー) の素材。karei と同じ流儀で、
  * build.sh が写してきたときだけ (-DSMFPLAY_EMBED) 取り込む
- * (doc/synth-design.md) */
+ * (doc/karei-design.md) */
 #ifdef SMFPLAY_EMBED
     .globl smfplay_prog_start
     .globl smfplay_prog_end

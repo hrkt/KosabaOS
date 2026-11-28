@@ -91,10 +91,10 @@ extern unsigned char gjob_prog_end[];
 extern unsigned char recv_prog_start[];
 extern unsigned char recv_prog_end[];
 #endif
-#ifdef SYNTH_EMBED
-/* synth の素材 (IwaC 製、build.sh が写してきたときだけ) */
-extern unsigned char synth_prog_start[];
-extern unsigned char synth_prog_end[];
+#ifdef KAREI_EMBED
+/* karei の素材 (IwaC 製、build.sh が写してきたときだけ) */
+extern unsigned char karei_prog_start[];
+extern unsigned char karei_prog_end[];
 #endif
 #ifdef SMFPLAY_EMBED
 /* smfplay の素材 (IwaC 製、build.sh が写してきたときだけ) */
@@ -615,14 +615,14 @@ void fs_init(void)
     fs_add("recv.elf", recv_prog_start,
            (uint64_t)(recv_prog_end - recv_prog_start));
 #endif
-#ifdef SYNTH_EMBED
-    /* synth はコマンド名そのもの (nami と同じ流儀):
-     * `run synth fm` で起動できるよう拡張子なしで登録 */
-    fs_add("synth", synth_prog_start,
-           (uint64_t)(synth_prog_end - synth_prog_start));
+#ifdef KAREI_EMBED
+    /* karei はコマンド名そのもの (nami と同じ流儀):
+     * `run karei fm` で起動できるよう拡張子なしで登録 */
+    fs_add("karei", karei_prog_start,
+           (uint64_t)(karei_prog_end - karei_prog_start));
 #endif
 #ifdef SMFPLAY_EMBED
-    /* smfplay もコマンド名そのもので登録 (synth と同じ流儀) */
+    /* smfplay もコマンド名そのもので登録 (karei と同じ流儀) */
     fs_add("smfplay", smfplay_prog_start,
            (uint64_t)(smfplay_prog_end - smfplay_prog_start));
 #endif

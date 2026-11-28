@@ -1,16 +1,16 @@
 #!/bin/sh
-# build-synth.sh -- synth と smfplay を IwaC でビルドする
+# build-karei.sh -- karei と smfplay を IwaC でビルドする
 #
-#   sh build-synth.sh     → synth.elf / smfplay.elf (このディレクトリ)
+#   sh build-karei.sh     → karei.elf / smfplay.elf (このディレクトリ)
 #
 # 経路は iwac --kosaba --elf (ELF オブジェクト .eo) →
 # nori (リンク)。nami/build-nami.sh と同じ流儀。
 # ツールチェーンの場所は IWAC_DIR で差し替え可能
 # (既定は ~/workspace/iwac/iwac)。
 #
-# 出来た synth.elf が OS 側の「素材」で、build.sh が
-# あるときだけ -DSYNTH_EMBED で取り込む
-# (doc/synth-design.md)。
+# 出来た karei.elf が OS 側の「素材」で、build.sh が
+# あるときだけ -DKAREI_EMBED で取り込む
+# (doc/karei-design.md)。
 set -e
 cd "$(dirname "$0")"
 
@@ -22,10 +22,10 @@ if [ ! -x "$IWAC_DIR/nori/nori" ]; then
     (cd "$IWAC_DIR/nori" && ./build.sh)
 fi
 
-"$IWAC_DIR/iwac" --kosaba --elf synth.c > synth.eo
-"$IWAC_DIR/nori/nori" synth.eo > synth.elf
-rm -f synth.eo
+"$IWAC_DIR/iwac" --kosaba --elf karei.c > karei.eo
+"$IWAC_DIR/nori/nori" karei.eo > karei.elf
+rm -f karei.eo
 "$IWAC_DIR/iwac" --kosaba --elf smfplay.c > smfplay.eo
 "$IWAC_DIR/nori/nori" smfplay.eo > smfplay.elf
 rm -f smfplay.eo
-ls -l synth.elf smfplay.elf
+ls -l karei.elf smfplay.elf

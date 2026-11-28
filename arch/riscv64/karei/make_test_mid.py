@@ -338,7 +338,7 @@ def build_song10():
       B (4-8 秒)     8 ボイス同時ノートオンのバースト x 4
                      (1 秒間隔、長さ 0.8 秒)
       C (8-10 秒)    別の 8 ボイス持続和音
-    計測は synth midi <file> 8 4op nofx (プール 8、4op
+    計測は karei midi <file> 8 4op nofx (プール 8、4op
     スタック固定) で行い、perf の avg / 最悪チャンクと
     ins/frame を実時間予算と比べる"""
     a1 = [(0, 3840, n, 90) for n in (48, 52, 55, 59)]

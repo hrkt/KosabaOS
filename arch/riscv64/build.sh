@@ -143,25 +143,25 @@ if [ -f recv/recv.elf ]; then
     echo "build: recv materials embedded"
 fi
 
-# synth (シンセ音源アプリ、doc/synth-design.md) の素材。
-# IwaC 製で、ビルドは synth/build-synth.sh が担う。
-# nami と同じ流儀で、成果物 (synth/synth.elf) があるとき
+# karei (シンセ音源アプリ、doc/karei-design.md) の素材。
+# IwaC 製で、ビルドは karei/build-karei.sh が担う。
+# nami と同じ流儀で、成果物 (karei/karei.elf) があるとき
 # だけ写して取り込む
-SYNTH_DEFINE=""
-rm -f synth.elf
-if [ -f synth/synth.elf ]; then
-    cp synth/synth.elf synth.elf
-    SYNTH_DEFINE=-DSYNTH_EMBED
-    echo "build: synth materials embedded"
+KAREI_DEFINE=""
+rm -f karei.elf
+if [ -f karei/karei.elf ]; then
+    cp karei/karei.elf karei.elf
+    KAREI_DEFINE=-DKAREI_EMBED
+    echo "build: karei materials embedded"
 fi
 
-# smfplay (SMF プレーヤー、doc/synth-design.md) の素材。
-# synth と同じ流儀で、成果物 (synth/smfplay.elf) があるとき
+# smfplay (SMF プレーヤー、doc/karei-design.md) の素材。
+# karei と同じ流儀で、成果物 (karei/smfplay.elf) があるとき
 # だけ写して取り込む
 SMFPLAY_DEFINE=""
 rm -f smfplay.elf
-if [ -f synth/smfplay.elf ]; then
-    cp synth/smfplay.elf smfplay.elf
+if [ -f karei/smfplay.elf ]; then
+    cp karei/smfplay.elf smfplay.elf
     SMFPLAY_DEFINE=-DSMFPLAY_EMBED
     echo "build: smfplay materials embedded"
 fi
@@ -197,27 +197,27 @@ if [ "$BOARD" = virt ]; then
     if [ -f st44.mp3 ]; then
         SD_FILES="$SD_FILES ST44.MP3=st44.mp3"
     fi
-    # smfplay の検証素材 (synth/make_test_mid.py の生成物が
+    # smfplay の検証素材 (karei/make_test_mid.py の生成物が
     # あるときだけ。st44 と同じ扱い)
-    if [ -f synth/SONG0.MID ] && [ -f synth/SONG1.MID ]; then
-        SD_FILES="$SD_FILES SONG0.MID=synth/SONG0.MID SONG1.MID=synth/SONG1.MID"
+    if [ -f karei/SONG0.MID ] && [ -f karei/SONG1.MID ]; then
+        SD_FILES="$SD_FILES SONG0.MID=karei/SONG0.MID SONG1.MID=karei/SONG1.MID"
         echo "build: smfplay test songs embedded in sd image"
     fi
     for f in SONG2.MID SONG3L.MID SONG3R.MID SONG4.MID SONG5.MID SONG6.MID SONG6B.MID SONG7.MID SONG7Z.MID SONG7B.MID SONG7BZ.MID SONG8.MID SONG9B.MID SONG10.MID SONG11.MID; do
-        if [ -f synth/$f ]; then
-            SD_FILES="$SD_FILES $f=synth/$f"
+        if [ -f karei/$f ]; then
+            SD_FILES="$SD_FILES $f=karei/$f"
         fi
     done
-    # レパートリー (synth/music/make_repertoire.py の生成物があれば)
+    # レパートリー (karei/music/make_repertoire.py の生成物があれば)
     for f in MOZ545.MID MOZ331.MID; do
-        if [ -f synth/music/$f ]; then
-            SD_FILES="$SD_FILES $f=synth/music/$f"
+        if [ -f karei/music/$f ]; then
+            SD_FILES="$SD_FILES $f=karei/music/$f"
         fi
     done
     python3 make_sd_image.py sd.img $SD_FILES
 fi
 
-"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $SYNTH_DEFINE $SMFPLAY_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c
+"$CC" -march=rv64gc -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -no-pie -Wl,--build-id=none $IKESU_DEFINE $NAMI_DEFINE $RECV_DEFINE $KAREI_DEFINE $SMFPLAY_DEFINE $SAVER_DEFINE $WDT_DEFINE -I. -I"boards/$BOARD" -T "boards/$BOARD/kernel.ld" -o kernel.elf boards/"$BOARD"/*.S kernel.c boards/"$BOARD"/*.c trap.S trap.c vm.c page.c klog.c time.c user.S embed.S proc.c switch.S elf.c fs.c fat.c gfx.c saver.c ssd1315.c smp.c
 "$OBJCOPY" -O binary kernel.elf kernel.bin
 # Boot check can be skipped with BUILD_NO_RUN=1 (test.sh does this:
 # its scenarios cover the boot, and QEMU's raw terminal mode makes
