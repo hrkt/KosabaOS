@@ -476,13 +476,12 @@ static int job_line_done(const char *buf, long s, long e)
     return 0;
 }
 
-/* 行 [s, e) が常駐の時計 (clock.elf) の行かどうか。
- * 起動は段4 から getty の仕事になったので、Nish は番号を
- * 知らない。名前で見分ける (時計は終わらないので、素の
- * fg の対象から外すのが目的) */
-static int job_line_is_clock(const char *buf, long s, long e)
+/* 行 [s, e) が指定の名前のジョブの行かどうか。
+ * 常駐ジョブの起動は段4 から getty の仕事になったので、
+ * Nish は番号を知らない。名前で見分ける */
+static int job_line_named(const char *buf, long s, long e,
+    const char *name)
 {
-    const char *name = "clock.elf";
     long k = s + 7;  /* "job N: " の次が名前 */
     long m = 0;
 
@@ -493,6 +492,15 @@ static int job_line_is_clock(const char *buf, long s, long e)
         m++;
     }
     return k + m >= e || buf[k + m] == ' ';
+}
+
+/* 行 [s, e) が常駐の基盤ジョブ (clock.elf と vtcon.elf)
+ * の行かどうか。どちらも終わらないので、素の fg の対象
+ * から外すのが目的。基盤が増えたらここに足す */
+static int job_line_is_resident(const char *buf, long s, long e)
+{
+    return job_line_named(buf, s, e, "clock.elf") ||
+        job_line_named(buf, s, e, "vtcon.elf");
 }
 
 /* fg の対象の既定: 一番大きい番号の、終わっていないジョブ。
@@ -520,8 +528,8 @@ static long job_pick_fg(void)
         if (i - s >= 6 && buf[s] == 'j' && buf[s + 4] >= '1' &&
             buf[s + 4] <= '9') {
             long no = buf[s + 4] - '0';
-            if (job_line_is_clock(buf, s, i)) {
-                /* 常駐の時計は対象にしない */
+            if (job_line_is_resident(buf, s, i)) {
+                /* 常駐の基盤ジョブは対象にしない */
             } else if (job_line_done(buf, s, i)) {
                 if (no > pick_done) {
                     pick_done = no;
