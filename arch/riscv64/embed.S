@@ -67,6 +67,12 @@ getty_prog_start:
     .incbin "getty.elf"
 getty_prog_end:
 
+    .globl vtcon_prog_start
+    .globl vtcon_prog_end
+vtcon_prog_start:
+    .incbin "vtcon.elf"
+vtcon_prog_end:
+
     .globl seek_prog_start
     .globl seek_prog_end
 seek_prog_start:

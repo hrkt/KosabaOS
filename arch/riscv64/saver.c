@@ -80,8 +80,9 @@ int saver_query(void)
         return 0;
     }
     /* 環境: 通常のジョブが走っている間は起こさない
-     * (帯の窓の持ち主 = 時計は trap_saver_env の側で
-     * 数から外れている) */
+     * (常駐の基盤ジョブ = 帯の窓の持ち主の時計と
+     * vtcon.elf は trap_saver_env の側で数から
+     * 外れている) */
     if (trap_saver_env() & TRAP_SAVER_JOBS_PRESENT) {
         return 0;
     }
