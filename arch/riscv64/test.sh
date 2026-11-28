@@ -539,9 +539,9 @@ echo "== scenario X: job control (bg jobs) =="
 # crash.elf のフォルトはそのジョブだけを終わらせ
 # (status=-2)、Nish は無事で fg が faulted を報告する。
 # uprog.elf は bg では getc で stopped になり、fg して
-# 初めて入力が効く。ジョブ 1 は Nish が起動時に起こす
-# 常駐の時計 (clock.elf) が使うので、利用者のジョブは
-# 2 番から始まる
+# 初めて入力が効く。ジョブ 1 と 2 は getty が起動時に
+# 起こす常駐 (clock.elf と vtcon.elf) が使うので、
+# 利用者のジョブは 3 番から始まる
 { sleep 3; printf 'run slow.elf 12 &\n'; sleep 1; \
   printf 'echo during\n'; sleep 1; printf 'jobs\n'; sleep 1; \
   printf 'fg\n'; sleep 3; \
@@ -552,21 +552,21 @@ echo "== scenario X: job control (bg jobs) =="
   printf 'echo alive\n'; sleep 1; printf 'fg\n'; sleep 1; \
   printf 'run uprog.elf &\n'; sleep 2; printf 'jobs\n'; sleep 1; \
   printf 'fg\n'; sleep 1; printf 'z'; sleep 1; printf 'q'; sleep 2; \
-  printf 'run slow.elf 30 &\n'; sleep 1; printf 'kill 2\n'; sleep 1; \
-  printf 'jobs\n'; sleep 1; printf 'kill 2\n'; sleep 1; \
+  printf 'run slow.elf 30 &\n'; sleep 1; printf 'kill 3\n'; sleep 1; \
+  printf 'jobs\n'; sleep 1; printf 'kill 3\n'; sleep 1; \
   printf 'exit\n'; sleep 1; } \
     | timeout 40 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
     > test-x.log 2>&1 || true
 out=$(strip_ticks < test-x.log)
 check_order "$out" "Nish, the KosabaOS shell" \
-    "job 2: slow.elf started" "during" \
-    "job 2: slow.elf running" "slow done" \
-    "job 2: slow.elf done status=5" "job 1: clock.elf sleeping" \
-    "job 2: crash.elf started" "alive" \
-    "job 2: crash.elf done status=-2" "fg: program faulted" \
-    "job 2: uprog.elf started" "hello from user mode!" \
-    "job 2: uprog.elf stopped" \
-    "job 2: slow.elf started" "killed job 2" "job 1: clock.elf sleeping" \
+    "job 3: slow.elf started" "during" \
+    "job 3: slow.elf running" "slow done" \
+    "job 3: slow.elf done status=5" "job 1: clock.elf sleeping" \
+    "job 3: crash.elf started" "alive" \
+    "job 3: crash.elf done status=-2" "fg: program faulted" \
+    "job 3: uprog.elf started" "hello from user mode!" \
+    "job 3: uprog.elf stopped" \
+    "job 3: slow.elf started" "killed job 3" "job 1: clock.elf sleeping" \
     "kill: no such job" \
     "[kernel] back from user program"
 report "X job control (bg / jobs / fg / kill / notice / fault isolation)" $?
@@ -623,12 +623,12 @@ report "Y gfx syscalls (info/clear/rect/text/line via dmesg)" $?
 
 echo "== scenario Z: gfx windows (stage B) =="
 # 画面表示の段B (doc/gfx-design.md): gjob.elf を 2 本 bg で
-# 走らせると、それぞれの窓が開き (open r=2 / r=3。r=1 は
-# 常駐の時計)、両方が自分の窓へ描き続ける (rect r=2 /
-# r=3 が両方出る)。
-# fg (省略時は一番大きい番号 = ジョブ 3) で持ち主が移ると
-# フォーカスが移り (focus r=3)、終わると done → 窓が回収
-# され (close r=3)、フォーカスが前面へ戻る (focus r=0)。
+# 走らせると、それぞれの窓が開き (open r=3 / r=4。r=1 は
+# 常駐の時計、r=2 は vtcon)、両方が自分の窓へ描き続ける
+# (rect r=3 / r=4 が両方出る)。
+# fg (省略時は一番大きい番号 = ジョブ 4) で持ち主が移ると
+# フォーカスが移り (focus r=4)、終わると done → 窓が回収
+# され (close r=4)、フォーカスが前面へ戻る (focus r=0)。
 # 照合は dmesg の gfx 要約行。ピクセルの見た目は目視の担当
 { sleep 3; printf 'run gjob.elf 12 &\n'; sleep 1; \
   printf 'run gjob.elf 12 &\n'; sleep 1; \
@@ -640,11 +640,11 @@ echo "== scenario Z: gfx windows (stage B) =="
     > test-z.log 2>&1 || true
 out=$(strip_ticks < test-z.log)
 check_order "$out" "Nish, the KosabaOS shell" \
-    "job 2: gjob.elf started" "job 3: gjob.elf started" "during" \
-    "job 2: gjob.elf running" "job 3: gjob.elf running" \
-    "gfx: open r=2 \"gjob.elf\"" "gfx: open r=3 \"gjob.elf\"" \
-    "gfx: rect r=2" "gfx: rect r=3" \
-    "gfx: focus r=3" "gfx: done r=3" "gfx: close r=3" \
+    "job 3: gjob.elf started" "job 4: gjob.elf started" "during" \
+    "job 3: gjob.elf running" "job 4: gjob.elf running" \
+    "gfx: open r=3 \"gjob.elf\"" "gfx: open r=4 \"gjob.elf\"" \
+    "gfx: rect r=3" "gfx: rect r=4" \
+    "gfx: focus r=4" "gfx: done r=4" "gfx: close r=4" \
     "gfx: focus r=0" \
     "[kernel] back from user program"
 report "Z gfx windows (open/draw/focus/done/close via dmesg)" $?
@@ -773,7 +773,7 @@ else
         > test-ad2.log 2>&1 || true
     out=$(strip_ticks < test-ad2.log)
     n_on=$(printf '%s' "$out" | grep -ac 'saver: on' || true)
-    check_order "$out" "job 2: slow.elf started" "slow done" || rc=1
+    check_order "$out" "job 3: slow.elf started" "slow done" || rc=1
     if [ "$n_on" -ne 0 ]; then
         echo "  during job: saver on x$n_on (want 0)"
         rc=1
@@ -968,7 +968,7 @@ out=$(strip_ticks < test-an.log)
 rc=0
 echo "$out" | grep -Eq "task 3: (sleeping|ready) wakes=[0-9]+ cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "run 0: nish.elf (running|input) cpu=[0-9]+" || rc=1
-echo "$out" | grep -Eq "run 2: slow\.elf running cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 3: slow\.elf running cpu=[0-9]+" || rc=1
 report "AN task/runner cpu accounting (ps)" $rc
 
 echo "== scenario AO: sleep_ms + getc timeout (top stage 2) =="
@@ -984,7 +984,7 @@ echo "== scenario AO: sleep_ms + getc timeout (top stage 2) =="
     > test-ao.log 2>&1 || true
 out=$(strip_ticks < test-ao.log)
 rc=0
-echo "$out" | grep -Eq "run 2: nap\.elf sleeping cpu=[0-9]+" || rc=1
+echo "$out" | grep -Eq "run 3: nap\.elf sleeping cpu=[0-9]+" || rc=1
 echo "$out" | grep -Eq "nap: elapsed (19|20|21)[0-9][0-9]" || rc=1
 echo "$out" | grep -Eq "nap: elapsed [45][0-9][0-9]" || rc=1
 echo "$out" | grep -q "nap done" || rc=1
@@ -1005,7 +1005,7 @@ out=$(strip_ticks < test-ap.log)
 rc=0
 frames=$(echo "$out" | grep -c "top - up")
 [ "$frames" -ge 3 ] || rc=1
-echo "$out" | grep -Eq "run 2: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
+echo "$out" | grep -Eq "run 3: slow\.elf running cpu=[0-9]+ +[0-9]+\.[0-9]%" || rc=1
 echo "$out" | grep -q "top-done" || rc=1
 report "AP top.elf monitor" $rc
 

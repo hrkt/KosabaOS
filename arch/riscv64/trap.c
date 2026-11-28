@@ -1172,16 +1172,26 @@ static int jobs_any_active(void)
 /* 指定した走者を除いて、生きているジョブがあるか。
  * セーバーの環境判定用: 帯の窓の持ち主 (時計) は常駐
  * ジョブなので、数に入れるとセーバーが永遠に起きない */
-static int jobs_any_active_except(int excl_runner)
+/* セーバーの判定用: 常駐の基盤ジョブを除いて、通常の
+ * ジョブが 1 つでも居るか。基盤ジョブは getty が Nish
+ * より先に起こすもの (帯の窓の持ち主 = 時計と、LCD 側の
+ * 端末エミュレータ vtcon.elf) で、居ること自体は「人が
+ * 使っている」合図にならない。基盤が増えたらここに足す */
+static int jobs_any_active_except_residents(void)
 {
     int i;
+    int strip = gfx_strip_runner();
     for (i = 0; i < JOB_MAX; i++) {
-        if (excl_runner >= 1 && i == excl_runner - 1) {
+        if (jobs[i].state == JOB_FREE) {
             continue;
         }
-        if (jobs[i].state != JOB_FREE) {
-            return 1;
+        if (strip >= 1 && i == strip - 1) {
+            continue;
         }
+        if (str_eq(jobs[i].name, "vtcon.elf")) {
+            continue;
+        }
+        return 1;
     }
     return 0;
 }
@@ -1194,7 +1204,7 @@ static int jobs_any_active_except(int excl_runner)
 int trap_saver_env(void)
 {
     int env = 0;
-    if (jobs_any_active_except(gfx_strip_runner())) {
+    if (jobs_any_active_except_residents()) {
         env |= TRAP_SAVER_JOBS_PRESENT;
     }
     if (console_owner == 0 && cur_runner == 0 && exec_depth == 0 &&
