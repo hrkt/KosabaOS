@@ -294,6 +294,9 @@ void trap_init(void)
 #define SYS_AUDIO_SET_VOLUME 50
 #define SYS_GFX_LAYOUT 51
 #define SYS_SAVER_QUERY 52
+/* 53 は音声時計用に予約 (doc/syscalls.md) */
+#define SYS_CONSOLE_SET_OUT 54
+#define SYS_CONSOLE_READ 55
 
 extern void user_exit_jump(void);  /* user.S: カーネルの文脈へ戻る */
 
@@ -868,6 +871,34 @@ static struct {
 
 static int cur_runner = 0;     /* 今走っている走者 (0 = 前面) */
 static int console_owner = 0;  /* コンソールの持ち主 (0 = 前面) */
+
+/* セッションの putc の行き先 (VT 週末版 W1)。
+ * 0 = UART、1 = LCD キュー、2 = 両方。既定 0。
+ * カーネル自身の kputs は従来どおり UART 固定 */
+static int session_out_mode = 0;
+
+/* LCD 行きの putc を溜めるリング (vtcon.elf が 55 で
+ * drain する)。作り手を止めないため、満杯なら捨てて
+ * 数えるだけにする (realtime 原則 1) */
+#define LCD_CON_RING_SIZE 4096
+static char lcd_con_ring[LCD_CON_RING_SIZE];
+static int lcd_con_head = 0;  /* 次に書く位置 */
+static int lcd_con_tail = 0;  /* 次に読む位置 */
+static uint64_t lcd_con_dropped = 0;
+
+static void lcd_con_put(char c)
+{
+    int next = lcd_con_head + 1;
+    if (next >= LCD_CON_RING_SIZE) {
+        next = 0;
+    }
+    if (next == lcd_con_tail) {
+        lcd_con_dropped++;  /* 満杯: 捨てる */
+        return;
+    }
+    lcd_con_ring[lcd_con_head] = c;
+    lcd_con_head = next;
+}
 
 /* 前面の持ち主が SYS_GETC の待ちの中にいるか
  * (スクリーンセーバーの段2 判定用、doc/screensaver-
@@ -2124,10 +2155,20 @@ static int do_syscall(uint64_t *frame)
     uint64_t num = frame[FRAME_A7];
 
     switch (num) {
-    case SYS_PUTC:
-        uart_putc((char)frame[FRAME_A0]);
+    case SYS_PUTC: {
+        /* セッションの出力の行き先で振り分ける
+         * (VT 週末版 W1、doc/syscalls.md 54 番)。
+         * カーネル自身の出力はここを通らない */
+        char c = (char)frame[FRAME_A0];
+        if (session_out_mode != 1) {
+            uart_putc(c);
+        }
+        if (session_out_mode != 0) {
+            lcd_con_put(c);
+        }
         frame[FRAME_A0] = 0;
         break;
+    }
     case SYS_SLEEP_MS: {
         /* 走者を寝かせる (doc/top-design.md 段2)。前面は
          * getc 待ちと同じ作法 (文脈は ecall の位置で保存
@@ -3203,6 +3244,53 @@ static int do_syscall(uint64_t *frame)
             frame[FRAME_A0] = (uint64_t)saver_query();
         }
         break;
+    case SYS_CONSOLE_SET_OUT: {
+        /* セッションの putc の行き先 (VT 週末版 W1)。
+         * a0 = 0/1/2 で設定、負なら問い合わせのみ。
+         * 仕様は doc/syscalls.md の 54 番 */
+        int64_t v = (int64_t)frame[FRAME_A0];
+        if (cur_runner != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else if (v < 0) {
+            frame[FRAME_A0] = (uint64_t)session_out_mode;
+        } else if (v > 2) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            session_out_mode = (int)v;
+            frame[FRAME_A0] = (uint64_t)session_out_mode;
+        }
+        break;
+    }
+    case SYS_CONSOLE_READ: {
+        /* LCD キューに溜まった putc 出力の読み出し
+         * (VT 週末版 W1)。a0 = バッファ、a1 = 最大
+         * バイト数 (256 まで)。仕様は doc/syscalls.md
+         * の 55 番。どの走者からでも呼べる */
+        int max = (int)frame[FRAME_A1];
+        int n = 0;
+        char buf[256];
+        if (max < 0 || max > 256) {
+            frame[FRAME_A0] = (uint64_t)-1;
+            break;
+        }
+        while (n < max && lcd_con_tail != lcd_con_head) {
+            buf[n] = lcd_con_ring[lcd_con_tail];
+            lcd_con_tail++;
+            if (lcd_con_tail >= LCD_CON_RING_SIZE) {
+                lcd_con_tail = 0;
+            }
+            n++;
+        }
+        if (n == 0) {
+            frame[FRAME_A0] = 0;
+        } else if (copy_to_user(frame[FRAME_A0],
+                                (const unsigned char *)buf, n) != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
+        } else {
+            frame[FRAME_A0] = (uint64_t)n;
+        }
+        break;
+    }
     case SYS_OLED_TEXT: {
         /* a0 = 文字列。消去してから描いて転送する
          * (doc/oled-design.md)。最大 175 文字 (8 行 x 21 文字
