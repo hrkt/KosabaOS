@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """レパートリー SMF の生成: Mutopia Project の PD/CC 素材を
-smfplay + synth 用の format 1 SMF に変換する。
+smfplay + karei 用の format 1 SMF に変換する。
 
   python3 make_repertoire.py [出力ディレクトリ]
 
@@ -12,7 +12,7 @@ smfplay + synth 用の format 1 SMF に変換する。
 
 変換内容:
   - 右手トラック -> ch 1 (ch 番号 0)、左手 -> ch 2 (番号 1)。
-    synth のマルチティンバーでパート 1/2 に載る
+    karei のマルチティンバーでパート 1/2 に載る
   - 冒頭に program 0 (GM Grand Piano) を両 ch へ追加
   - ノートとベロシティはそのまま。CC は落とす (K.545 の
     CC7 は LilyPond がヘアピンを描いたもので、パート音量が

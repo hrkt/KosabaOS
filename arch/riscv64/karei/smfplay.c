@@ -1,5 +1,5 @@
 /* smfplay.c -- Standard MIDI File (SMF) プレーヤー
- * (doc/synth-design.md の SMF プレーヤーの節)
+ * (doc/karei-design.md の SMF プレーヤーの節)
  *
  *   run smfplay <file.mid>            イベントを時刻つきログに出す
  *   run smfplay <file.mid> file <p>   生 MIDI バイト列を時刻どおり
@@ -11,7 +11,7 @@
  * デルタタイムは SMF 形式そのものなので当然使うが、送り先へ
  * デルタを渡して受け手に数えさせることはしない (本物の MIDI
  * の線にタイムスタンプは無く、バイト列が演奏時刻に届くのが
- * 実物。受け手の synth は届いたバイト列をそのまま解釈する)。
+ * 実物。受け手の karei は届いたバイト列をそのまま解釈する)。
  *
  * 送り先は send_event() の関数境界の向こうにあり、本命の
  * 受け口 (OS 側 realtime-prep 段4 の L2 入力キュー + 注入
@@ -27,7 +27,7 @@
  * 同一 tick なら小さいトラック番号を優先する (コンダクター
  * トラック優先の通常の解釈)。
  *
- * IwaC の C サブセットで書く (synth.c と同じ作法): #include /
+ * IwaC の C サブセットで書く (karei.c と同じ作法): #include /
  * switch / 文字リテラルなし、整数のみ、ファイルスコープは
  * char 配列だけ (状態は rd32 / wr32 のバイト合成で読み書き)。
  * ファイルは丸ごと g_file に読む (上限 32768 バイト)。
@@ -99,7 +99,7 @@ int32 streq(char *a, char *b)
 }
 
 /* 状態と表は全部ファイルスコープの char 配列に置く
- * (synth.c と同じ作法。スカラは rd32 / wr32 で読み書き)。
+ * (karei.c と同じ作法。スカラは rd32 / wr32 で読み書き)。
  * g_st のワード割り当て:
  *   0 = ファイル長   1 = イベント数   2 = テンポ数
  *   3 = division     4 = トラック数   5 = 出力 fd
