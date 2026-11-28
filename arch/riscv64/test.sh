@@ -1052,6 +1052,26 @@ echo "$out" | grep -q "serial-shown" || rc=1
 echo "$out" | grep -q "vt: serial" || rc=1
 report "AR console output destination" $rc
 
+echo "== scenario AS: vtcon drains the LCD queue (vtcon.elf) =="
+# getty が vtcon.elf をスタートアップで起こし、LCD 期間に
+# キューへ入った出力を drain すること。virt では LCD の絵が
+# 見えないので、serial に戻ったときの "vtcon: drained <n>"
+# (n > 0) を観測の口にする。絵そのものの確認は実機 (W5)
+{ sleep 3; printf 'jobs\n'; sleep 1; \
+  printf 'vt lcd\n'; sleep 1; \
+  printf 'echo vtcon-check\n'; sleep 2; \
+  printf 'vt serial\n'; sleep 1; \
+  printf 'exit\n'; sleep 1; } \
+    | timeout 20 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-as.log 2>&1 || true
+out=$(strip_ticks < test-as.log)
+rc=0
+echo "$out" | grep -q "vtcon: start" || rc=1
+echo "$out" | grep -q "vtcon.elf" || rc=1
+echo "$out" | grep -q "vtcon-check" && rc=1
+echo "$out" | grep -Eq "vtcon: drained [1-9][0-9]*" || rc=1
+report "AS vtcon drains the LCD queue" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"

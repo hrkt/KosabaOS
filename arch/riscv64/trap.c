@@ -3249,10 +3249,12 @@ static int do_syscall(uint64_t *frame)
          * a0 = 0/1/2 で設定、負なら問い合わせのみ。
          * 仕様は doc/syscalls.md の 54 番 */
         int64_t v = (int64_t)frame[FRAME_A0];
-        if (cur_runner != 0) {
-            frame[FRAME_A0] = (uint64_t)-1;
-        } else if (v < 0) {
+        if (v < 0) {
+            /* 問い合わせはどの走者からでも呼べる (vtcon.elf
+             * が行き先を知るための口)。設定だけ前面限定 */
             frame[FRAME_A0] = (uint64_t)session_out_mode;
+        } else if (cur_runner != 0) {
+            frame[FRAME_A0] = (uint64_t)-1;
         } else if (v > 2) {
             frame[FRAME_A0] = (uint64_t)-1;
         } else {

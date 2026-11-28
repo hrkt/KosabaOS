@@ -59,8 +59,9 @@ void _start(void)
     int faults = 0;
 
     puts_("getty: start\n");
-    /* スタートアップ (決定 5)。今は時計だけ */
+    /* スタートアップ (決定 5)。時計と LCD 側の端末エミュレータ */
     syscall3(SYS_JOB_RUN, (long)"clock.elf", (long)"clock.elf", 0);
+    syscall3(SYS_JOB_RUN, (long)"vtcon.elf", (long)"vtcon.elf", 0);
     for (;;) {
         long r = syscall3(SYS_EXEC, (long)"nish.elf",
                           (long)"nish.elf", 0);
