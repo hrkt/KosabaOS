@@ -155,6 +155,59 @@ static const uint8_t *oled_glyph(char c) {
     static const uint8_t gColon[5] = {0x00, 0x36, 0x36, 0x00, 0x00};  /* : */
     static const uint8_t gSlash[5] = {0x03, 0x04, 0x08, 0x10, 0x60};  /* / */
     static const uint8_t gGt[5] = {0x41, 0x22, 0x14, 0x08, 0x00};  /* > */
+    /* 小文字と記号は lcd.c の表とバイト同一に保つ
+     * (VT 週末版のフォント拡張) */
+    static const uint8_t ga[5] = {0x02, 0x15, 0x15, 0x15, 0x0F};  /* a */
+    static const uint8_t gb[5] = {0x7F, 0x11, 0x11, 0x11, 0x0E};  /* b */
+    static const uint8_t gc[5] = {0x0E, 0x11, 0x11, 0x11, 0x0A};  /* c */
+    static const uint8_t gd[5] = {0x0E, 0x11, 0x11, 0x11, 0x7F};  /* d */
+    static const uint8_t ge[5] = {0x0E, 0x15, 0x15, 0x15, 0x0C};  /* e */
+    static const uint8_t gf[5] = {0x08, 0x3F, 0x48, 0x40, 0x20};  /* f */
+    static const uint8_t gg[5] = {0x18, 0x25, 0x25, 0x25, 0x3E};  /* g */
+    static const uint8_t gh[5] = {0x7F, 0x08, 0x08, 0x08, 0x07};  /* h */
+    static const uint8_t gi[5] = {0x00, 0x09, 0x2F, 0x01, 0x00};  /* i */
+    static const uint8_t gj[5] = {0x02, 0x01, 0x11, 0x1E, 0x40};  /* j */
+    static const uint8_t gk[5] = {0x7F, 0x04, 0x0A, 0x11, 0x00};  /* k */
+    static const uint8_t gl[5] = {0x00, 0x41, 0x7F, 0x01, 0x00};  /* l */
+    static const uint8_t gm[5] = {0x1F, 0x10, 0x0F, 0x10, 0x0F};  /* m */
+    static const uint8_t gn[5] = {0x1F, 0x10, 0x10, 0x10, 0x0F};  /* n */
+    static const uint8_t go[5] = {0x0E, 0x11, 0x11, 0x11, 0x0E};  /* o */
+    static const uint8_t gp[5] = {0x1F, 0x12, 0x12, 0x12, 0x0C};  /* p */
+    static const uint8_t gq[5] = {0x0C, 0x12, 0x12, 0x12, 0x1F};  /* q */
+    static const uint8_t gr[5] = {0x1F, 0x08, 0x10, 0x10, 0x08};  /* r */
+    static const uint8_t gs[5] = {0x09, 0x15, 0x15, 0x15, 0x12};  /* s */
+    static const uint8_t gt[5] = {0x08, 0x3E, 0x09, 0x01, 0x02};  /* t */
+    static const uint8_t gu[5] = {0x1E, 0x01, 0x01, 0x01, 0x1F};  /* u */
+    static const uint8_t gv[5] = {0x1C, 0x02, 0x01, 0x02, 0x1C};  /* v */
+    static const uint8_t gw[5] = {0x1E, 0x01, 0x0E, 0x01, 0x1E};  /* w */
+    static const uint8_t gx[5] = {0x11, 0x0A, 0x04, 0x0A, 0x11};  /* x */
+    static const uint8_t gy[5] = {0x1C, 0x03, 0x03, 0x02, 0x1E};  /* y */
+    static const uint8_t gz[5] = {0x11, 0x13, 0x15, 0x19, 0x11};  /* z */
+    static const uint8_t gComma[5] = {0x00, 0x07, 0x06, 0x00, 0x00};  /* , */
+    static const uint8_t gSemi[5] = {0x00, 0x1B, 0x1A, 0x00, 0x00};  /* ; */
+    static const uint8_t gDQuote[5] = {0x00, 0x70, 0x00, 0x70, 0x00};  /* " */
+    static const uint8_t gSQuote[5] = {0x00, 0x10, 0x60, 0x00, 0x00};  /* ' */
+    static const uint8_t gEqual[5] = {0x14, 0x14, 0x14, 0x14, 0x14};  /* = */
+    static const uint8_t gStar[5] = {0x28, 0x10, 0x38, 0x10, 0x28};  /* * */
+    static const uint8_t gUnder[5] = {0x01, 0x01, 0x01, 0x01, 0x01};  /* _ */
+    static const uint8_t gHash[5] = {0x14, 0x7F, 0x14, 0x7F, 0x14};  /* # */
+    static const uint8_t gLt[5] = {0x00, 0x08, 0x14, 0x22, 0x41};  /* < */
+    static const uint8_t gPercent[5] = {0x32, 0x34, 0x08, 0x16, 0x26};  /* % */
+    static const uint8_t gLParen[5] = {0x00, 0x00, 0x1C, 0x22, 0x41};  /* ( */
+    static const uint8_t gRParen[5] = {0x41, 0x22, 0x1C, 0x00, 0x00};  /* ) */
+    static const uint8_t gLBrack[5] = {0x00, 0x00, 0x7F, 0x41, 0x41};  /* [ */
+    static const uint8_t gRBrack[5] = {0x41, 0x41, 0x7F, 0x00, 0x00};  /* ] */
+    static const uint8_t gLBrace[5] = {0x08, 0x08, 0x36, 0x41, 0x41};  /* { */
+    static const uint8_t gRBrace[5] = {0x41, 0x41, 0x36, 0x08, 0x08};  /* } */
+    static const uint8_t gAmp[5] = {0x16, 0x29, 0x25, 0x12, 0x05};  /* & */
+    static const uint8_t gBar[5] = {0x00, 0x00, 0x7F, 0x00, 0x00};  /* | */
+    static const uint8_t gCaret[5] = {0x00, 0x20, 0x40, 0x20, 0x00};  /* ^ */
+    static const uint8_t gTilde[5] = {0x08, 0x10, 0x10, 0x08, 0x10};  /* ~ */
+    static const uint8_t gDollar[5] = {0x12, 0x2A, 0x7F, 0x2A, 0x24};  /* $ */
+    static const uint8_t gAt[5] = {0x1E, 0x21, 0x2D, 0x29, 0x1C};  /* @ */
+    static const uint8_t gBacktick[5] = {0x00, 0x40, 0x20, 0x00, 0x00};  /* ` */
+    static const uint8_t gBackslash[5] = {0x60, 0x10, 0x08, 0x04, 0x03};  /* \ */
+    static const uint8_t gQuestion[5] = {0x20, 0x40, 0x45, 0x48, 0x30};  /* ? */
     switch (c) {
         case 'A': return gA;
         case 'B': return gB;
@@ -199,6 +252,57 @@ static const uint8_t *oled_glyph(char c) {
         case ':': return gColon;
         case '/': return gSlash;
         case '>': return gGt;
+        case 'a': return ga;
+        case 'b': return gb;
+        case 'c': return gc;
+        case 'd': return gd;
+        case 'e': return ge;
+        case 'f': return gf;
+        case 'g': return gg;
+        case 'h': return gh;
+        case 'i': return gi;
+        case 'j': return gj;
+        case 'k': return gk;
+        case 'l': return gl;
+        case 'm': return gm;
+        case 'n': return gn;
+        case 'o': return go;
+        case 'p': return gp;
+        case 'q': return gq;
+        case 'r': return gr;
+        case 's': return gs;
+        case 't': return gt;
+        case 'u': return gu;
+        case 'v': return gv;
+        case 'w': return gw;
+        case 'x': return gx;
+        case 'y': return gy;
+        case 'z': return gz;
+        case ',': return gComma;
+        case ';': return gSemi;
+        case '\"': return gDQuote;
+        case '\'': return gSQuote;
+        case '=': return gEqual;
+        case '*': return gStar;
+        case '_': return gUnder;
+        case '#': return gHash;
+        case '<': return gLt;
+        case '%': return gPercent;
+        case '(': return gLParen;
+        case ')': return gRParen;
+        case '[': return gLBrack;
+        case ']': return gRBrack;
+        case '{': return gLBrace;
+        case '}': return gRBrace;
+        case '&': return gAmp;
+        case '|': return gBar;
+        case '^': return gCaret;
+        case '~': return gTilde;
+        case '$': return gDollar;
+        case '@': return gAt;
+        case '`': return gBacktick;
+        case '\\': return gBackslash;
+        case '?': return gQuestion;
         default: return blank;
     }
 }
