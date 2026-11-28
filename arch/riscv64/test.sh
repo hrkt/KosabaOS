@@ -1072,6 +1072,27 @@ echo "$out" | grep -q "vtcon-check" && rc=1
 echo "$out" | grep -Eq "vtcon: drained [1-9][0-9]*" || rc=1
 report "AS vtcon drains the LCD queue" $rc
 
+echo "== scenario AT: getty brings the session up lcd-front (W3) =="
+# /sd/VTFRONT があると、getty が行き先を両方 (2) にしてから
+# Nish を起こす。流れ: マーカー作成 → exit でカーネル
+# コンソールへ → 's' で getty 再起動。シリアルにも出続ける
+# こと (保守路) と、LCD 側へも届くこと (vtcon の drained)
+# と、lcd front の印字が再起動時の 1 回だけなことを見る
+{ sleep 3; printf 'write /sd/VTFRONT x\n'; sleep 1; \
+  printf 'exit\n'; sleep 2; \
+  printf 's'; sleep 3; \
+  printf 'echo at-front-check\n'; sleep 2; \
+  printf 'vt serial\n'; sleep 1; \
+  printf 'exit\n'; sleep 1; } \
+    | timeout 25 "$QEMU" -machine virt -bios default -kernel kernel.bin -m 128M -nographic \
+    > test-at.log 2>&1 || true
+out=$(strip_ticks < test-at.log)
+rc=0
+[ "$(echo "$out" | grep -c "getty: lcd front")" -eq 1 ] || rc=1
+echo "$out" | grep -q "at-front-check" || rc=1
+echo "$out" | grep -Eq "vtcon: drained [1-9][0-9]*" || rc=1
+report "AT getty lcd front" $rc
+
 echo "== summary =="
 if [ "$fails" -eq 0 ]; then
     echo "ALL PASS"
