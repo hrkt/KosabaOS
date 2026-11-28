@@ -314,6 +314,53 @@ def build_song8():
     return smf(0, [ev])
 
 
+def build_song11():
+    """持続負荷専用曲 (format 1)。8 ボイス分のノートオン
+    だけでノートオフを送らない。MT のボイスはゲートが
+    無限なので、ファイル先行書式では全イベントが冒頭に
+    届いた後、終了マーカーまでの尾部 11025 フレームが
+    8 ボイスのサステイン持続そのものになる。perf の
+    avg / ins/frame が持続負荷の物差しとして読める
+    (SONG10 のバースト側の数字と対で使う)"""
+    t0 = [ch_ev(0, 1, 0xC0, 0), ch_ev(0, 1, 0xB0, 7, 100)]
+    for n in (48, 52, 55, 59):
+        t0.append(ch_ev(0, 1, 0x90, n, 90))
+    t1 = [ch_ev(0, 1, 0xC1, 0), ch_ev(0, 1, 0xB1, 7, 100)]
+    for n in (62, 65, 69, 72):
+        t1.append(ch_ev(0, 1, 0x91, n, 90))
+    return smf(1, [tempo1(), t0, t1])
+
+
+def build_song10():
+    """4op 8 ボイス負荷確認曲 (format 1、約 10 秒)。
+    ch1 + ch2 で常に最大 8 ボイス (パート上限 8 の内側):
+      A (0-4 秒)     8 ボイスの持続和音
+      B (4-8 秒)     8 ボイス同時ノートオンのバースト x 4
+                     (1 秒間隔、長さ 0.8 秒)
+      C (8-10 秒)    別の 8 ボイス持続和音
+    計測は synth midi <file> 8 4op nofx (プール 8、4op
+    スタック固定) で行い、perf の avg / 最悪チャンクと
+    ins/frame を実時間予算と比べる"""
+    a1 = [(0, 3840, n, 90) for n in (48, 52, 55, 59)]
+    a2 = [(0, 3840, n, 90) for n in (62, 65, 69, 72)]
+    b1 = []
+    b2 = []
+    for start in (3840, 4800, 5760, 6720):
+        for n in (48, 52, 55, 59):
+            b1.append((start, 768, n, 100))
+        for n in (62, 65, 69, 72):
+            b2.append((start, 768, n, 100))
+    c1 = [(7680, 1920, n, 90) for n in (45, 48, 52, 57)]
+    c2 = [(7680, 1920, n, 90) for n in (60, 64, 67, 71)]
+    t0 = [ch_ev(0, 1, 0xC0, 0), ch_ev(0, 1, 0xB0, 7, 100)]
+    t0 += notes_ev(0, a1 + b1 + c1)
+    t0.append(ch_ev(9700, 1, 0xB0, 123, 0))
+    t1 = [ch_ev(0, 1, 0xC1, 0), ch_ev(0, 1, 0xB1, 7, 100)]
+    t1 += notes_ev(1, a2 + b2 + c2)
+    t1.append(ch_ev(9700, 1, 0xB1, 123, 0))
+    return smf(1, [tempo1(), t0, t1])
+
+
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "."
     mel = melody_notes()
@@ -337,7 +384,9 @@ def main():
              ("SONG7B.MID", build_song7b(127)),
              ("SONG7BZ.MID", build_song7b(0)),
              ("SONG9B.MID", build_song9b()),
-             ("SONG8.MID", build_song8()))
+             ("SONG8.MID", build_song8()),
+             ("SONG10.MID", build_song10()),
+             ("SONG11.MID", build_song11()))
     for name, data in songs:
         path = outdir.rstrip("/") + "/" + name
         with open(path, "wb") as f:

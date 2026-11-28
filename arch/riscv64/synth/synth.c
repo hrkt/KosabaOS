@@ -5,8 +5,9 @@
  *   run synth psg      PSG デモ曲 (同じ曲)
  *   run synth play fm  シリアル鍵盤で FM を弾く
  *   run synth play psg シリアル鍵盤で PSG を弾く
- *   run synth fm <n>   プリセット n (0..15) でデモ曲
- *                      (play でも第 3 引数で指定可。対話中は
+ *   run synth fm <n>   プリセット n でデモ曲
+ *                      (FM 0..21 / PSG 0..15。play でも
+ *                      第 3 引数で指定可。対話中は
  *                      [ / ] キーで切り替え)
  *   run synth midi <p> [fm|psg] MIDI バイト列ストリームを
  *                      読んで鳴らす (エンジン既定は fm。
@@ -36,6 +37,18 @@
  *         正弦波は 256 点テーブル + 線形補間。変調の深さは
  *         専用エンベロープ (menv) で減衰するので、ベル /
  *         エレピ寄りの立ち上がりになる
+ *   FM 波形 (段2): オペレータごとに TX81Z 風 8 波形
+ *         (サイン / 二乗 / 全波整流 / 半波二乗 / 半波
+ *         2 倍音 / 同二乗 / 折り返し / 半波全波 2 倍音)
+ *         を選べる。波形は make_waves.py が生成する
+ *         256 点 Q15 テーブルで、参照先が変わるだけ
+ *         なので描画コストは増えない。4op は段1 の
+ *         スタック / 2+2 の両形態が対象
+ *   ピッチ EG (段2.5): DX11 風の R1..R4 / L1..L4 +
+ *         レンジ。ボイスごとに 1 本で全オペレータの
+ *         音程をまとめて動かす。64 サンプル単位で進め、
+ *         実効増分 = 基本増分 x 2^(ずらし / 12)。
+ *         レンジ 0 = オフ (既存プリセットは全部オフ)
  *   PSG : 矩形波 (デューティ 50%)。デモでは 4 ステップ
  *         ごとにノイズ (16bit LFSR) のハットも重ねる
  *   共通: 4 ボイスのラウンドロビン割り当て、簡易 ADSR
@@ -149,30 +162,66 @@ int32 streq(char *a, char *b)
  * バイト列そのもの (曲データ・プリセット記録・名前・
  * 出力バッファ) は char 配列のまま */
 int32 g_sine[256];  /* 正弦波 256 点 */
+int32 g_wav[2048];  /* TX81Z 風波形 8 種 x 256 点 (段2)。
+                     * 行 0 は g_sine の写し (fill_waves) */
+int32 g_pow2[256];  /* 2^(i/256) の Q15 表 (ピッチ EG 用) */
 int32 g_ninc[61];   /* 音程表 61 点 */
 char g_mel[32];
 char g_bas[32];
 int32 g_vs[128];    /* ボイス状態 (ワード単位で直接アクセス) */
 
 /* プリセット (doc/synth-design.md のプリセットの節)。
- * 1 件 20 バイトのバイトパックで、FM / PSG 各 16 件:
+ * 1 件 20 バイトのバイトパックで、FM 22 件 / PSG 16 件:
  *   +0 波形 (FM=0, PSG=1 矩形 / 2 ノイズ)  +1 レベルシフト
  *   +2 atk  +4 dec  +6 sus  +8 rel (各 2 バイト LE)
  *   FM : +10 変調比 x2  +12 変調の深さ  +14 変調 env 減衰
  *        +16 変調 env 減衰 (release 時)
  *   PSG: +10 デューティ閾値  +12 ノイズ混合量  +13 オクターブ
- * 名前は 16 バイト枠 x 16 件。g_vp はボイスごとの実効
- * パラメータ (trig がプリセットから写す、1 ボイス 16 ワード):
+ * 名前は 16 バイト枠 (FM 22 件 / PSG 16 件)。g_vp は
+ * ボイスごとの実効パラメータ (trig がプリセットから写す、
+ * 1 ボイス 16 ワード):
  *   +0 atk +1 dec +2 sus +3 rel +4 変調の深さ +5 変調 env
  *   減衰 +6 同 (release) +7 デューティ +8 ノイズ混合
- *   +9 レベルシフト
+ *   +9 レベルシフト +10 op モード +11..+14 オペレータ
+ *   波形のテーブル先頭 (波形番号 x 256、段2)
  * g_cur は現在の (エンジン, プリセット番号) の 2 ワード。
  * g_gmf / g_gmp は GM プログラム番号 (>>3 のファミリー)
  * からプリセット番号への対応表 */
-char g_pfm[320];
+char g_pfm[440];
 char g_pps[320];
-char g_fnm[256];
+char g_fnm[352];
 char g_pnm[256];
+/* FM プリセットごとのオペレータ波形 (段2)。1 件 4 バイト、
+ * 値は波形番号 0..7 (0 = サイン)。スロットの対応は
+ * ボイスパラメータ g_vp / g_mvp の +11..+14 と同じ:
+ *   +0 位相スロット +15 の op (4op スタック第 1 変調 /
+ *      2+2 の第 2 ペア変調)
+ *   +1 位相スロット +14 の op (スタック第 2 変調 /
+ *      2+2 の第 2 ペア搬送)
+ *   +2 主変調 op  +3 主搬送 op
+ * 2op では +2 / +3 だけが鳴る。既定 0 (ゼロ初期化) =
+ * 全 op サインで、既存プリセットの音は変わらない */
+char g_wfm[88];
+/* FM プリセットごとのピッチ EG (段2.5、DX11 風)。
+ * 1 件 16 バイト: +0..+3 = R1..R4 (0..99)、
+ * +4..+7 = L1..L4 (0..99、50 = 音程ずらしゼロ)、
+ * +8 = レンジ (レベル最大時のずらし、半音単位)。
+ * レンジ 0 = PEG オフ (既定。既存プリセットは全部オフ) */
+char g_pegp[352];
+/* ピッチ EG のボイスごとの状態。1 ボイス 16 ワード:
+ *   +0 現在レベル (レベル単位 x 256、(L-50)*2 が単位)
+ *   +1 セグメント (0=停止 1..3=L1..L3 へ移動中
+ *      4=L4 へ移動中 (release))
+ *   +2 / +3 実効位相増分 (搬送 / 変調。ブロックごとに
+ *      基本増分 x ピッチ倍率で作り直す)
+ *   +4..+7 R1..R4 を 1 ブロックあたりの歩幅に直したもの
+ *   +8..+11 L1..L4 をレベル単位 x 256 に直したもの
+ *   +12 レンジ  +13 有効フラグ (0 = オフ)
+ *   +14 サイン以外の波形を使うボイスのフラグ
+ *      (描画側が従来の sine_at 経路と振り分ける) */
+int32 g_pegs[64];    /* デモ / 対話用 (4 ボイス) */
+int32 g_mpegs[512];  /* MT 用 (プール最大 32 ボイス) */
+int32 g_pegclk[4];   /* +0 デモ側 / +1 MT 側のブロック時計 */
 int32 g_vp[128];
 int32 g_cur[8];
 char g_gmf[16];
@@ -400,6 +449,125 @@ void fill_song()
     g_bas[31] = 0;
 }
 
+/* 波形テーブルを g_sine から導出する (段2)。定義の
+ * 数式は make_waves.py が正本で、同スクリプトが FFT で
+ * マニュアルの倍音構成と照合済み。当初は同スクリプトが
+ * 生成する代入表を取り込む形だったが、iwac のノード数
+ * 上限を超えたため、実行時に g_sine から整数演算で
+ * 導出する形に変えた。W5 / W7 / W8 はサイン格子に
+ * 一致するので生成表とビット同一、W2 / W4 / W6 の
+ * 二乗は丸めで最大 2 LSB だけ生成表とずれる。
+ * 後半が 0 の波形は g_wav のゼロ初期化に任せる */
+void fill_waves(void)
+{
+    int32 i;
+    int32 s;
+    int32 a;
+    int32 w;
+    for (i = 0; i < 256; i++) {
+        s = g_sine[i];
+        a = s;
+        if (a < 0) {
+            a = 0 - a;
+        }
+        g_wav[i] = s;                       /* W1 サイン */
+        g_wav[256 + i] = (s * a) >> 15;     /* W2 二乗 */
+        g_wav[512 + i] = a;                 /* W3 全波整流 */
+        if (i < 128) {
+            g_wav[768 + i] = (s * a) >> 15; /* W4 半波二乗 */
+            w = g_sine[i * 2];
+            g_wav[1024 + i] = w;            /* W5 半波 2 倍音 */
+            if (w < 0) {
+                g_wav[1280 + i] = 0 - ((w * w) >> 15);
+            } else {
+                g_wav[1280 + i] = (w * w) >> 15;
+            }                               /* W6 W5 の二乗 */
+            g_wav[1792 + i] = w;
+            if (w < 0) {
+                g_wav[1792 + i] = 0 - w;
+            }                               /* W8 半波全波 2 倍音 */
+        }
+        if (i >= 128) {
+            w = g_sine[(i + 64) & 255];
+            if (w < 0) {
+                w = 0 - w;
+            }
+            g_wav[1536 + i] = w;            /* W7 後半 |cos| */
+        } else {
+            g_wav[1536 + i] = s;            /* W7 前半 サイン */
+        }
+    }
+}
+
+/* make_waves.py が生成 (手で直さない) */
+void fill_pow2(void)
+{
+    g_pow2[0] = 32768; g_pow2[1] = 32857; g_pow2[2] = 32946; g_pow2[3] = 33035;
+    g_pow2[4] = 33125; g_pow2[5] = 33215; g_pow2[6] = 33305; g_pow2[7] = 33395;
+    g_pow2[8] = 33486; g_pow2[9] = 33576; g_pow2[10] = 33667; g_pow2[11] = 33759;
+    g_pow2[12] = 33850; g_pow2[13] = 33942; g_pow2[14] = 34034; g_pow2[15] = 34126;
+    g_pow2[16] = 34219; g_pow2[17] = 34312; g_pow2[18] = 34405; g_pow2[19] = 34498;
+    g_pow2[20] = 34591; g_pow2[21] = 34685; g_pow2[22] = 34779; g_pow2[23] = 34874;
+    g_pow2[24] = 34968; g_pow2[25] = 35063; g_pow2[26] = 35158; g_pow2[27] = 35253;
+    g_pow2[28] = 35349; g_pow2[29] = 35445; g_pow2[30] = 35541; g_pow2[31] = 35637;
+    g_pow2[32] = 35734; g_pow2[33] = 35831; g_pow2[34] = 35928; g_pow2[35] = 36025;
+    g_pow2[36] = 36123; g_pow2[37] = 36221; g_pow2[38] = 36319; g_pow2[39] = 36417;
+    g_pow2[40] = 36516; g_pow2[41] = 36615; g_pow2[42] = 36715; g_pow2[43] = 36814;
+    g_pow2[44] = 36914; g_pow2[45] = 37014; g_pow2[46] = 37114; g_pow2[47] = 37215;
+    g_pow2[48] = 37316; g_pow2[49] = 37417; g_pow2[50] = 37518; g_pow2[51] = 37620;
+    g_pow2[52] = 37722; g_pow2[53] = 37824; g_pow2[54] = 37927; g_pow2[55] = 38030;
+    g_pow2[56] = 38133; g_pow2[57] = 38236; g_pow2[58] = 38340; g_pow2[59] = 38444;
+    g_pow2[60] = 38548; g_pow2[61] = 38653; g_pow2[62] = 38757; g_pow2[63] = 38863;
+    g_pow2[64] = 38968; g_pow2[65] = 39074; g_pow2[66] = 39180; g_pow2[67] = 39286;
+    g_pow2[68] = 39392; g_pow2[69] = 39499; g_pow2[70] = 39606; g_pow2[71] = 39714;
+    g_pow2[72] = 39821; g_pow2[73] = 39929; g_pow2[74] = 40037; g_pow2[75] = 40146;
+    g_pow2[76] = 40255; g_pow2[77] = 40364; g_pow2[78] = 40473; g_pow2[79] = 40583;
+    g_pow2[80] = 40693; g_pow2[81] = 40804; g_pow2[82] = 40914; g_pow2[83] = 41025;
+    g_pow2[84] = 41136; g_pow2[85] = 41248; g_pow2[86] = 41360; g_pow2[87] = 41472;
+    g_pow2[88] = 41584; g_pow2[89] = 41697; g_pow2[90] = 41810; g_pow2[91] = 41923;
+    g_pow2[92] = 42037; g_pow2[93] = 42151; g_pow2[94] = 42265; g_pow2[95] = 42380;
+    g_pow2[96] = 42495; g_pow2[97] = 42610; g_pow2[98] = 42726; g_pow2[99] = 42841;
+    g_pow2[100] = 42958; g_pow2[101] = 43074; g_pow2[102] = 43191; g_pow2[103] = 43308;
+    g_pow2[104] = 43425; g_pow2[105] = 43543; g_pow2[106] = 43661; g_pow2[107] = 43780;
+    g_pow2[108] = 43898; g_pow2[109] = 44017; g_pow2[110] = 44137; g_pow2[111] = 44256;
+    g_pow2[112] = 44376; g_pow2[113] = 44497; g_pow2[114] = 44617; g_pow2[115] = 44738;
+    g_pow2[116] = 44859; g_pow2[117] = 44981; g_pow2[118] = 45103; g_pow2[119] = 45225;
+    g_pow2[120] = 45348; g_pow2[121] = 45471; g_pow2[122] = 45594; g_pow2[123] = 45718;
+    g_pow2[124] = 45842; g_pow2[125] = 45966; g_pow2[126] = 46091; g_pow2[127] = 46216;
+    g_pow2[128] = 46341; g_pow2[129] = 46467; g_pow2[130] = 46593; g_pow2[131] = 46719;
+    g_pow2[132] = 46846; g_pow2[133] = 46973; g_pow2[134] = 47100; g_pow2[135] = 47228;
+    g_pow2[136] = 47356; g_pow2[137] = 47484; g_pow2[138] = 47613; g_pow2[139] = 47742;
+    g_pow2[140] = 47871; g_pow2[141] = 48001; g_pow2[142] = 48131; g_pow2[143] = 48262;
+    g_pow2[144] = 48393; g_pow2[145] = 48524; g_pow2[146] = 48655; g_pow2[147] = 48787;
+    g_pow2[148] = 48920; g_pow2[149] = 49052; g_pow2[150] = 49185; g_pow2[151] = 49319;
+    g_pow2[152] = 49452; g_pow2[153] = 49586; g_pow2[154] = 49721; g_pow2[155] = 49856;
+    g_pow2[156] = 49991; g_pow2[157] = 50126; g_pow2[158] = 50262; g_pow2[159] = 50399;
+    g_pow2[160] = 50535; g_pow2[161] = 50672; g_pow2[162] = 50810; g_pow2[163] = 50947;
+    g_pow2[164] = 51085; g_pow2[165] = 51224; g_pow2[166] = 51363; g_pow2[167] = 51502;
+    g_pow2[168] = 51642; g_pow2[169] = 51782; g_pow2[170] = 51922; g_pow2[171] = 52063;
+    g_pow2[172] = 52204; g_pow2[173] = 52346; g_pow2[174] = 52488; g_pow2[175] = 52630;
+    g_pow2[176] = 52773; g_pow2[177] = 52916; g_pow2[178] = 53059; g_pow2[179] = 53203;
+    g_pow2[180] = 53347; g_pow2[181] = 53492; g_pow2[182] = 53637; g_pow2[183] = 53782;
+    g_pow2[184] = 53928; g_pow2[185] = 54074; g_pow2[186] = 54221; g_pow2[187] = 54368;
+    g_pow2[188] = 54515; g_pow2[189] = 54663; g_pow2[190] = 54811; g_pow2[191] = 54960;
+    g_pow2[192] = 55109; g_pow2[193] = 55258; g_pow2[194] = 55408; g_pow2[195] = 55558;
+    g_pow2[196] = 55709; g_pow2[197] = 55860; g_pow2[198] = 56012; g_pow2[199] = 56163;
+    g_pow2[200] = 56316; g_pow2[201] = 56468; g_pow2[202] = 56622; g_pow2[203] = 56775;
+    g_pow2[204] = 56929; g_pow2[205] = 57083; g_pow2[206] = 57238; g_pow2[207] = 57393;
+    g_pow2[208] = 57549; g_pow2[209] = 57705; g_pow2[210] = 57861; g_pow2[211] = 58018;
+    g_pow2[212] = 58176; g_pow2[213] = 58333; g_pow2[214] = 58491; g_pow2[215] = 58650;
+    g_pow2[216] = 58809; g_pow2[217] = 58968; g_pow2[218] = 59128; g_pow2[219] = 59289;
+    g_pow2[220] = 59449; g_pow2[221] = 59611; g_pow2[222] = 59772; g_pow2[223] = 59934;
+    g_pow2[224] = 60097; g_pow2[225] = 60260; g_pow2[226] = 60423; g_pow2[227] = 60587;
+    g_pow2[228] = 60751; g_pow2[229] = 60916; g_pow2[230] = 61081; g_pow2[231] = 61247;
+    g_pow2[232] = 61413; g_pow2[233] = 61579; g_pow2[234] = 61746; g_pow2[235] = 61914;
+    g_pow2[236] = 62081; g_pow2[237] = 62250; g_pow2[238] = 62419; g_pow2[239] = 62588;
+    g_pow2[240] = 62757; g_pow2[241] = 62928; g_pow2[242] = 63098; g_pow2[243] = 63269;
+    g_pow2[244] = 63441; g_pow2[245] = 63613; g_pow2[246] = 63785; g_pow2[247] = 63958;
+    g_pow2[248] = 64132; g_pow2[249] = 64306; g_pow2[250] = 64480; g_pow2[251] = 64655;
+    g_pow2[252] = 64830; g_pow2[253] = 65006; g_pow2[254] = 65182; g_pow2[255] = 65359;
+}
+
 /* 正弦波の線形補間。phase は 1 周 = 65536 */
 int32 sine_at(int32 phase)
 {
@@ -411,6 +579,22 @@ int32 sine_at(int32 phase)
     frac = phase & 255;
     a = g_sine[idx];
     b = g_sine[(idx + 1) & 255];
+    return a + (((b - a) * frac) >> 8);
+}
+
+/* TX81Z 風波形の線形補間 (段2)。base は波形のテーブル
+ * 先頭 (波形番号 x 256)。base = 0 は g_sine の写しなので
+ * sine_at とビット同一の値を返す */
+int32 wave_at(int32 base, int32 phase)
+{
+    int32 idx;
+    int32 frac;
+    int32 a;
+    int32 b;
+    idx = phase >> 8;
+    frac = phase & 255;
+    a = g_wav[base + idx];
+    b = g_wav[base + ((idx + 1) & 255)];
     return a + (((b - a) * frac) >> 8);
 }
 
@@ -461,6 +645,41 @@ void pset_px(int32 idx, int32 duty, int32 nmix, int32 oct)
     put16(g_pps, o + 10, duty);
     g_pps[o + 12] = (char)nmix;
     g_pps[o + 13] = (char)oct;
+}
+
+/* FM プリセットのオペレータ波形 (段2)。引数は波形番号
+ * 0..7 をスロット順 (位相 +15 の op、位相 +14 の op、
+ * 主変調、主搬送) に並べたもの */
+void pset_w(int32 idx, int32 w0, int32 w1, int32 w2, int32 w3)
+{
+    g_wfm[idx * 4 + 0] = (char)w0;
+    g_wfm[idx * 4 + 1] = (char)w1;
+    g_wfm[idx * 4 + 2] = (char)w2;
+    g_wfm[idx * 4 + 3] = (char)w3;
+}
+
+/* ピッチ EG のレート側 (段2.5)。pset_peg2 と対で使う */
+void pset_peg1(int32 idx, int32 r1, int32 r2, int32 r3,
+               int32 r4, int32 l1, int32 l2)
+{
+    int32 o;
+    o = idx * 16;
+    g_pegp[o + 0] = (char)r1;
+    g_pegp[o + 1] = (char)r2;
+    g_pegp[o + 2] = (char)r3;
+    g_pegp[o + 3] = (char)r4;
+    g_pegp[o + 4] = (char)l1;
+    g_pegp[o + 5] = (char)l2;
+}
+
+/* ピッチ EG のレベル残りとレンジ (段2.5) */
+void pset_peg2(int32 idx, int32 l3, int32 l4, int32 range)
+{
+    int32 o;
+    o = idx * 16;
+    g_pegp[o + 6] = (char)l3;
+    g_pegp[o + 7] = (char)l4;
+    g_pegp[o + 8] = (char)range;
 }
 
 void set_name(char *tab, int32 idx, char *s)
@@ -586,6 +805,38 @@ void fill_presets()
     g_gmp[4] = 7; g_gmp[5] = 8; g_gmp[6] = 8; g_gmp[7] = 9;
     g_gmp[8] = 9; g_gmp[9] = 10; g_gmp[10] = 12; g_gmp[11] = 15;
     g_gmp[12] = 12; g_gmp[13] = 6; g_gmp[14] = 14; g_gmp[15] = 14;
+    /* 段2: TX81Z 風プリセット (末尾 16..19、サイン以外の
+     * 波形を使う)。波形番号は make_waves.py の定義:
+     * 0=サイン 1=二乗 2=全波整流 3=半波二乗 4=半波2倍音
+     * 5=半波2倍音二乗 6=折り返し 7=半波全波2倍音 */
+    pset_c(g_pfm, 16, 0, 1, 900, 4, 26000, 60);
+    pset_fx(16, 2, 14000, 20, 120);
+    pset_w(16, 4, 1, 1, 2);
+    set_name(g_fnm, 16, "TX Brass");
+    pset_c(g_pfm, 17, 0, 2, 1200, 2, 12000, 50);
+    pset_fx(17, 2, 15000, 12, 80);
+    pset_w(17, 5, 1, 4, 0);
+    set_name(g_fnm, 17, "TX E.Piano");
+    pset_c(g_pfm, 18, 0, 1, 1500, 5, 9000, 55);
+    pset_fx(18, 2, 12000, 25, 100);
+    pset_w(18, 0, 0, 6, 2);
+    set_name(g_fnm, 18, "TX Bass");
+    pset_c(g_pfm, 19, 0, 1, 1400, 3, 20000, 45);
+    pset_fx(19, 3, 13000, 15, 60);
+    pset_w(19, 3, 7, 1, 6);
+    set_name(g_fnm, 19, "TX Lead");
+    /* 段2.5: ピッチ EG を使うプリセット (末尾 20..21)。
+     * 波形は全部サイン (PEG の効果だけを聞き分ける) */
+    pset_c(g_pfm, 20, 0, 1, 1000, 4, 24000, 60);
+    pset_fx(20, 2, 13000, 18, 100);
+    pset_peg1(20, 90, 35, 10, 50, 78, 50);
+    pset_peg2(20, 50, 44, 12);
+    set_name(g_fnm, 20, "PEG Brass");
+    pset_c(g_pfm, 21, 0, 1, 1600, 3, 18000, 40);
+    pset_fx(21, 4, 9000, 10, 60);
+    pset_peg1(21, 99, 22, 10, 30, 88, 50);
+    pset_peg2(21, 50, 50, 12);
+    set_name(g_fnm, 21, "PEG Drop");
     /* FM の op モード (プリセット +18 バイト): 0=2op、
      * 1=4op 直列スタック、2=4op 2+2 ペア。0 番は従来音色の
      * 保存のため 2op のまま (デモ FNV 不変) */
@@ -596,6 +847,171 @@ void fill_presets()
     g_pfm[9 * 20 + 18] = 2;
     g_pfm[11 * 20 + 18] = 2;
     g_pfm[14 * 20 + 18] = 2;
+    g_pfm[16 * 20 + 18] = 1;
+    g_pfm[17 * 20 + 18] = 2;
+    g_pfm[19 * 20 + 18] = 1;
+    g_pfm[20 * 20 + 18] = 1;
+}
+
+/* ピッチ EG (段2.5、DX11 風)。ボイスごとに 1 本で、
+ * 全オペレータの音程をまとめて動かす (OPZ と同じ)。
+ * レベルは音程のずらし量を対数側で持つ: レベル単位
+ * (L-50) x 2 = -100..+98 を x 256 の固定小数点で保持し、
+ * 半音のずらし = レベル単位 x レンジ / 100。倍率は
+ * 2^(ずらし / 12) を g_pow2 表 (1 オクターブ分) +
+ * オクターブシフトで作る。進行は 64 サンプル = 1
+ * ブロック単位 (mix 側の g_pegclk が数える)。
+ * note on で L1 -> L2 -> L3 と進んで L3 で保持し、
+ * release (env stage 3) に入ると L4 へ向かう。
+ * 開始レベルは L4 (DX の作法)。レートの歩幅は
+ * (R+1) x 8 レベル単位 x 256 / ブロックで、R=99 の
+ * 全振幅が約 46ms、R=0 は約 4.6 秒 (DX の 0 = 最遅
+ * の割り切り)。レンジ 0 のプリセットでは実効増分が
+ * 基本増分の写しになるだけなので音は変わらない */
+
+/* 現在レベルからピッチ倍率 (Q15、32768 = x1.0) を作る */
+int32 peg_factor(int32 *sts, int32 sb)
+{
+    int32 semi;
+    int32 oct;
+    int32 whole;
+    int32 frac;
+    int32 f;
+    semi = (sts[sb + 0] * sts[sb + 12]) / 100;
+    oct = semi / 12;
+    if (oct > 512) {
+        oct = 512;
+    }
+    if (oct < 0 - 512) {
+        oct = 0 - 512;
+    }
+    if (oct >= 0) {
+        whole = oct >> 8;
+        frac = oct & 255;
+        f = g_pow2[frac] << whole;
+    } else {
+        int32 a;
+        a = 0 - oct;
+        whole = a >> 8;
+        frac = a & 255;
+        f = g_pow2[frac] << whole;
+        f = (32768 * 32768) / f;
+    }
+    return f;
+}
+
+/* 実効増分 (搬送 / 変調) を基本増分 x 倍率で作り直す */
+void peg_apply(int32 *sts, int32 sb, int32 *vs, int32 vb)
+{
+    int32 f;
+    if (sts[sb + 13] == 0) {
+        sts[sb + 2] = vs[vb + 10];
+        sts[sb + 3] = vs[vb + 11];
+        return;
+    }
+    f = peg_factor(sts, sb);
+    sts[sb + 2] = (int32)(((int64)vs[vb + 10] * f) >> 15);
+    sts[sb + 3] = (int32)(((int64)vs[vb + 11] * f) >> 15);
+}
+
+/* トリガ時の初期化。vs は基本増分を置き終えた後で呼ぶ */
+void peg_init(int32 *sts, int32 sb, int32 pidx,
+              int32 *vs, int32 vb)
+{
+    int32 o;
+    o = pidx * 16;
+    sts[sb + 12] = g_pegp[o + 8] & 255;
+    if (sts[sb + 12] == 0) {
+        sts[sb + 13] = 0;
+        sts[sb + 1] = 0;
+        sts[sb + 0] = 0;
+        sts[sb + 2] = vs[vb + 10];
+        sts[sb + 3] = vs[vb + 11];
+        return;
+    }
+    sts[sb + 13] = 1;
+    sts[sb + 4] = ((g_pegp[o + 0] & 255) + 1) * 8;
+    sts[sb + 5] = ((g_pegp[o + 1] & 255) + 1) * 8;
+    sts[sb + 6] = ((g_pegp[o + 2] & 255) + 1) * 8;
+    sts[sb + 7] = ((g_pegp[o + 3] & 255) + 1) * 8;
+    sts[sb + 8] = ((g_pegp[o + 4] & 255) - 50) * 512;
+    sts[sb + 9] = ((g_pegp[o + 5] & 255) - 50) * 512;
+    sts[sb + 10] = ((g_pegp[o + 6] & 255) - 50) * 512;
+    sts[sb + 11] = ((g_pegp[o + 7] & 255) - 50) * 512;
+    sts[sb + 0] = sts[sb + 11];
+    sts[sb + 1] = 1;
+    peg_apply(sts, sb, vs, vb);
+}
+
+/* 1 ブロック分進める。vs の +6 (env stage) が 3 に
+ * 入っていたら release 側 (L4 へ) に切り替える */
+void peg_step(int32 *sts, int32 sb, int32 *vs, int32 vb)
+{
+    int32 seg;
+    int32 tgt;
+    int32 rate;
+    int32 lvl;
+    if (sts[sb + 13] == 0) {
+        sts[sb + 2] = vs[vb + 10];
+        sts[sb + 3] = vs[vb + 11];
+        return;
+    }
+    seg = sts[sb + 1];
+    if (vs[vb + 6] == 3 && seg != 0 && seg != 4) {
+        seg = 4;
+    }
+    tgt = sts[sb + 0];
+    rate = 0;
+    if (seg == 1) {
+        tgt = sts[sb + 8];
+        rate = sts[sb + 4];
+    } else if (seg == 2) {
+        tgt = sts[sb + 9];
+        rate = sts[sb + 5];
+    } else if (seg == 3) {
+        tgt = sts[sb + 10];
+        rate = sts[sb + 6];
+    } else if (seg == 4) {
+        tgt = sts[sb + 11];
+        rate = sts[sb + 7];
+    }
+    lvl = sts[sb + 0];
+    if (lvl < tgt) {
+        lvl = lvl + rate;
+        if (lvl > tgt) {
+            lvl = tgt;
+        }
+    } else if (lvl > tgt) {
+        lvl = lvl - rate;
+        if (lvl < tgt) {
+            lvl = tgt;
+        }
+    }
+    if (lvl == tgt) {
+        if (seg == 1) {
+            seg = 2;
+        } else if (seg == 2) {
+            seg = 3;
+        } else if (seg == 4) {
+            seg = 0;
+        }
+    }
+    sts[sb + 0] = lvl;
+    sts[sb + 1] = seg;
+    peg_apply(sts, sb, vs, vb);
+}
+
+/* デモ / 対話側のブロック駆動 (4 ボイス分) */
+void peg_block_demo()
+{
+    int32 vi;
+    vi = 0;
+    while (vi < 4) {
+        if (g_vs[vi * 16] != 0) {
+            peg_step(g_pegs, vi * 16, g_vs, vi * 16);
+        }
+        vi = vi + 1;
+    }
 }
 
 /* "synth: preset <番号> <名前>" を印字する */
@@ -692,6 +1108,10 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
         g_vp[b + 7] = 32768;
         g_vp[b + 8] = 0;
         g_vp[b + 10] = tab[o + 18] & 255;
+        g_vp[b + 11] = (g_wfm[g_cur[1] * 4 + 0] & 255) * 256;
+        g_vp[b + 12] = (g_wfm[g_cur[1] * 4 + 1] & 255) * 256;
+        g_vp[b + 13] = (g_wfm[g_cur[1] * 4 + 2] & 255) * 256;
+        g_vp[b + 14] = (g_wfm[g_cur[1] * 4 + 3] & 255) * 256;
     } else {
         g_vp[b + 4] = 0;
         g_vp[b + 5] = 30;
@@ -699,6 +1119,10 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
         g_vp[b + 7] = rd16u(tab, o + 10);
         g_vp[b + 8] = tab[o + 12] & 255;
         g_vp[b + 10] = 0;
+        g_vp[b + 11] = 0;
+        g_vp[b + 12] = 0;
+        g_vp[b + 13] = 0;
+        g_vp[b + 14] = 0;
     }
     if (note >= 36 && note <= 96) {
         inc = g_ninc[note - 36];
@@ -722,6 +1146,20 @@ void trig(int32 rr, int32 note, int32 gate, int32 type)
     } else {
         g_vs[b + 11] = inc;
     }
+    if (eng == 0) {
+        peg_init(g_pegs, b, g_cur[1], g_vs, b);
+        if (g_vp[b + 11] + g_vp[b + 12] + g_vp[b + 13] +
+            g_vp[b + 14] != 0) {
+            g_pegs[b + 14] = 1;
+        } else {
+            g_pegs[b + 14] = 0;
+        }
+    } else {
+        g_pegs[b + 13] = 0;
+        g_pegs[b + 14] = 0;
+        g_pegs[b + 2] = g_vs[b + 10];
+        g_pegs[b + 3] = g_vs[b + 11];
+    }
 }
 
 /* 1 サンプル分のミックス (全ボイスの env も 1 段進める) */
@@ -730,6 +1168,11 @@ int32 mix_sample()
     int32 sum;
     int32 vi;
     sum = 0;
+    g_pegclk[0] = g_pegclk[0] + 1;
+    if (g_pegclk[0] >= 64) {
+        g_pegclk[0] = 0;
+        peg_block_demo();
+    }
     vi = 0;
     while (vi < 4) {
         int32 b;
@@ -764,8 +1207,8 @@ int32 mix_sample()
             gate = g_vs[b + 7];
             menv = g_vs[b + 8];
             lfsr = g_vs[b + 9];
-            inc_c = g_vs[b + 10];
-            inc_m = g_vs[b + 11];
+            inc_c = g_pegs[b + 2];
+            inc_m = g_pegs[b + 3];
             atk = g_vp[b + 0];
             dec = g_vp[b + 1];
             sus = g_vp[b + 2];
@@ -818,39 +1261,87 @@ int32 mix_sample()
                     int32 opm;
                     opm = g_vp[b + 10];
                     depth = (dep * menv) >> 16;
-                    if (opm == 1) {
-                        int32 p1;
-                        int32 p2;
-                        int32 o1;
-                        int32 o2;
-                        p1 = (g_vs[b + 15] + inc_m) & 65535;
-                        g_vs[b + 15] = p1;
-                        o1 = (sine_at(p1) * (depth >> 2)) >> 15;
-                        p2 = (g_vs[b + 14] + inc_m + o1) & 65535;
-                        g_vs[b + 14] = p2;
-                        o2 = (sine_at(p2) * (depth >> 1)) >> 15;
-                        pm = (pm + inc_m + o2) & 65535;
+                    if (g_pegs[b + 14] == 0) {
+                        /* 全 op サイン: 従来の sine_at 経路 */
+                        if (opm == 1) {
+                            int32 p1;
+                            int32 p2;
+                            int32 o1;
+                            int32 o2;
+                            p1 = (g_vs[b + 15] + inc_m) & 65535;
+                            g_vs[b + 15] = p1;
+                            o1 = (sine_at(p1) *
+                                  (depth >> 2)) >> 15;
+                            p2 = (g_vs[b + 14] + inc_m + o1) & 65535;
+                            g_vs[b + 14] = p2;
+                            o2 = (sine_at(p2) *
+                                  (depth >> 1)) >> 15;
+                            pm = (pm + inc_m + o2) & 65535;
+                        } else {
+                            pm = (pm + inc_m) & 65535;
+                        }
+                        mod = sine_at(pm);
+                        off = (mod * depth) >> 15;
+                        pc = (pc + inc_c) & 65535;
+                        car = sine_at((pc + off) & 65535);
+                        outv = (car * env) >> 16;
+                        if (opm == 2) {
+                            int32 pcb;
+                            int32 pmb;
+                            int32 offb;
+                            int32 carb;
+                            pmb = (g_vs[b + 15] + inc_m) & 65535;
+                            g_vs[b + 15] = pmb;
+                            offb = (sine_at(pmb) *
+                                    (depth >> 1)) >> 15;
+                            pcb = (g_vs[b + 14] + inc_c +
+                                   (inc_c >> 8)) & 65535;
+                            g_vs[b + 14] = pcb;
+                            carb = sine_at((pcb + offb) & 65535);
+                            outv = (outv >> 1) +
+                                   ((carb * env) >> 17);
+                        }
                     } else {
-                        pm = (pm + inc_m) & 65535;
-                    }
-                    mod = sine_at(pm);
-                    off = (mod * depth) >> 15;
-                    pc = (pc + inc_c) & 65535;
-                    car = sine_at((pc + off) & 65535);
-                    outv = (car * env) >> 16;
-                    if (opm == 2) {
-                        int32 pcb;
-                        int32 pmb;
-                        int32 offb;
-                        int32 carb;
-                        pmb = (g_vs[b + 15] + inc_m) & 65535;
-                        g_vs[b + 15] = pmb;
-                        offb = (sine_at(pmb) * (depth >> 1)) >> 15;
-                        pcb = (g_vs[b + 14] + inc_c +
-                               (inc_c >> 8)) & 65535;
-                        g_vs[b + 14] = pcb;
-                        carb = sine_at((pcb + offb) & 65535);
-                        outv = (outv >> 1) + ((carb * env) >> 17);
+                        if (opm == 1) {
+                            int32 p1;
+                            int32 p2;
+                            int32 o1;
+                            int32 o2;
+                            p1 = (g_vs[b + 15] + inc_m) & 65535;
+                            g_vs[b + 15] = p1;
+                            o1 = (wave_at(g_vp[b + 11], p1) *
+                                  (depth >> 2)) >> 15;
+                            p2 = (g_vs[b + 14] + inc_m + o1) & 65535;
+                            g_vs[b + 14] = p2;
+                            o2 = (wave_at(g_vp[b + 12], p2) *
+                                  (depth >> 1)) >> 15;
+                            pm = (pm + inc_m + o2) & 65535;
+                        } else {
+                            pm = (pm + inc_m) & 65535;
+                        }
+                        mod = wave_at(g_vp[b + 13], pm);
+                        off = (mod * depth) >> 15;
+                        pc = (pc + inc_c) & 65535;
+                        car = wave_at(g_vp[b + 14],
+                                      (pc + off) & 65535);
+                        outv = (car * env) >> 16;
+                        if (opm == 2) {
+                            int32 pcb;
+                            int32 pmb;
+                            int32 offb;
+                            int32 carb;
+                            pmb = (g_vs[b + 15] + inc_m) & 65535;
+                            g_vs[b + 15] = pmb;
+                            offb = (wave_at(g_vp[b + 11], pmb) *
+                                    (depth >> 1)) >> 15;
+                            pcb = (g_vs[b + 14] + inc_c +
+                                   (inc_c >> 8)) & 65535;
+                            g_vs[b + 14] = pcb;
+                            carb = wave_at(g_vp[b + 12],
+                                           (pcb + offb) & 65535);
+                            outv = (outv >> 1) +
+                                   ((carb * env) >> 17);
+                        }
                     }
                     sum = sum + (outv >> lvl);
                 } else if (typ == 1) {
@@ -1624,10 +2115,20 @@ int32 run_play(int32 engine)
                 base = base + 12;
             }
         } else if (c == 91) {
-            load_preset(engine, (g_cur[1] + 15) & 15);
+            int32 np;
+            np = 16;
+            if (engine == 0) {
+                np = 22;
+            }
+            load_preset(engine, (g_cur[1] + np - 1) % np);
             print_preset(engine, g_cur[1]);
         } else if (c == 93) {
-            load_preset(engine, (g_cur[1] + 1) & 15);
+            int32 np;
+            np = 16;
+            if (engine == 0) {
+                np = 22;
+            }
+            load_preset(engine, (g_cur[1] + 1) % np);
             print_preset(engine, g_cur[1]);
         } else if (c == 82) {
             fx_toggle(FX_RVB);
@@ -2194,6 +2695,16 @@ void mt_trig(int32 vi, int32 ch, int32 note)
         opm = 1;
     }
     g_mvp[b + 10] = opm;
+    g_mvp[b + 11] = (g_wfm[g_part[ch * 8 + 0] * 4 + 0] & 255) * 256;
+    g_mvp[b + 12] = (g_wfm[g_part[ch * 8 + 0] * 4 + 1] & 255) * 256;
+    g_mvp[b + 13] = (g_wfm[g_part[ch * 8 + 0] * 4 + 2] & 255) * 256;
+    g_mvp[b + 14] = (g_wfm[g_part[ch * 8 + 0] * 4 + 3] & 255) * 256;
+    if (g_mvp[b + 11] + g_mvp[b + 12] + g_mvp[b + 13] +
+        g_mvp[b + 14] != 0) {
+        g_mpegs[b + 14] = 1;
+    } else {
+        g_mpegs[b + 14] = 0;
+    }
     if (note >= 36 && note <= 96) {
         inc = g_ninc[note - 36];
     } else {
@@ -2216,6 +2727,7 @@ void mt_trig(int32 vi, int32 ch, int32 note)
     g_mv[b + 14] = 0;
     g_mv[b + 15] = 0;
     g_mctl[0] = g_mctl[0] + 1;
+    peg_init(g_mpegs, b, g_part[ch * 8 + 0], g_mv, b);
 }
 
 void mt_note_on(int32 ch, int32 note)
@@ -2366,6 +2878,21 @@ void mt_peak_update()
     }
 }
 
+/* MT 側のピッチ EG ブロック駆動 (プール全ボイス分) */
+void peg_block_mt()
+{
+    int32 vi;
+    int32 pool;
+    pool = g_mctl[1];
+    vi = 0;
+    while (vi < pool) {
+        if (g_mv[vi * 16] != 0) {
+            peg_step(g_mpegs, vi * 16, g_mv, vi * 16);
+        }
+        vi = vi + 1;
+    }
+}
+
 /* 1 フレーム分を描いて g_mix (ワード 0=L、1=R) に置く。
  * FM の合成そのものは mix_sample の FM 分岐と同じ計算で、
  * op モード (0=2op / 1=4op スタック / 2=4op ペア) も同じ。
@@ -2377,6 +2904,11 @@ void mt_mix()
     int32 vi;
     sumL = 0;
     sumR = 0;
+    g_pegclk[1] = g_pegclk[1] + 1;
+    if (g_pegclk[1] >= 64) {
+        g_pegclk[1] = 0;
+        peg_block_mt();
+    }
     if (g_fxctl[0] != 0) {
         int32 pp;
         pp = 0;
@@ -2414,8 +2946,8 @@ void mt_mix()
             stg = g_mv[b + 6];
             gate = g_mv[b + 7];
             menv = g_mv[b + 8];
-            inc_c = g_mv[b + 10];
-            inc_m = g_mv[b + 11];
+            inc_c = g_mpegs[b + 2];
+            inc_m = g_mpegs[b + 3];
             atk = g_mvp[b + 0];
             dec = g_mvp[b + 1];
             sus = g_mvp[b + 2];
@@ -2468,39 +3000,86 @@ void mt_mix()
                 int32 vol;
                 int32 pan;
                 depth = (dep * menv) >> 16;
-                if (opm == 1) {
-                    int32 p1;
-                    int32 p2;
-                    int32 o1;
-                    int32 o2;
-                    p1 = (g_mv[b + 15] + inc_m) & 65535;
-                    g_mv[b + 15] = p1;
-                    o1 = (sine_at(p1) * (depth >> 2)) >> 15;
-                    p2 = (g_mv[b + 14] + inc_m + o1) & 65535;
-                    g_mv[b + 14] = p2;
-                    o2 = (sine_at(p2) * (depth >> 1)) >> 15;
-                    pm = (pm + inc_m + o2) & 65535;
+                if (g_mpegs[b + 14] == 0) {
+                    /* 全 op サインのボイスは従来の sine_at
+                     * 経路 (コストも音も従来通り) */
+                    if (opm == 1) {
+                        int32 p1;
+                        int32 p2;
+                        int32 o1;
+                        int32 o2;
+                        p1 = (g_mv[b + 15] + inc_m) & 65535;
+                        g_mv[b + 15] = p1;
+                        o1 = (sine_at(p1) * (depth >> 2)) >> 15;
+                        p2 = (g_mv[b + 14] + inc_m + o1) & 65535;
+                        g_mv[b + 14] = p2;
+                        o2 = (sine_at(p2) * (depth >> 1)) >> 15;
+                        pm = (pm + inc_m + o2) & 65535;
+                    } else {
+                        pm = (pm + inc_m) & 65535;
+                    }
+                    mod = sine_at(pm);
+                    off = (mod * depth) >> 15;
+                    pc = (pc + inc_c) & 65535;
+                    car = sine_at((pc + off) & 65535);
+                    outv = (car * env) >> 16;
+                    if (opm == 2) {
+                        int32 pcb;
+                        int32 pmb;
+                        int32 offb;
+                        int32 carb;
+                        pmb = (g_mv[b + 15] + inc_m) & 65535;
+                        g_mv[b + 15] = pmb;
+                        offb = (sine_at(pmb) *
+                                (depth >> 1)) >> 15;
+                        pcb = (g_mv[b + 14] + inc_c +
+                               (inc_c >> 8)) & 65535;
+                        g_mv[b + 14] = pcb;
+                        carb = sine_at((pcb + offb) & 65535);
+                        outv = (outv >> 1) +
+                               ((carb * env) >> 17);
+                    }
                 } else {
-                    pm = (pm + inc_m) & 65535;
-                }
-                mod = sine_at(pm);
-                off = (mod * depth) >> 15;
-                pc = (pc + inc_c) & 65535;
-                car = sine_at((pc + off) & 65535);
-                outv = (car * env) >> 16;
-                if (opm == 2) {
-                    int32 pcb;
-                    int32 pmb;
-                    int32 offb;
-                    int32 carb;
-                    pmb = (g_mv[b + 15] + inc_m) & 65535;
-                    g_mv[b + 15] = pmb;
-                    offb = (sine_at(pmb) * (depth >> 1)) >> 15;
-                    pcb = (g_mv[b + 14] + inc_c +
-                           (inc_c >> 8)) & 65535;
-                    g_mv[b + 14] = pcb;
-                    carb = sine_at((pcb + offb) & 65535);
-                    outv = (outv >> 1) + ((carb * env) >> 17);
+                    if (opm == 1) {
+                        int32 p1;
+                        int32 p2;
+                        int32 o1;
+                        int32 o2;
+                        p1 = (g_mv[b + 15] + inc_m) & 65535;
+                        g_mv[b + 15] = p1;
+                        o1 = (wave_at(g_mvp[b + 11], p1) *
+                              (depth >> 2)) >> 15;
+                        p2 = (g_mv[b + 14] + inc_m + o1) & 65535;
+                        g_mv[b + 14] = p2;
+                        o2 = (wave_at(g_mvp[b + 12], p2) *
+                              (depth >> 1)) >> 15;
+                        pm = (pm + inc_m + o2) & 65535;
+                    } else {
+                        pm = (pm + inc_m) & 65535;
+                    }
+                    mod = wave_at(g_mvp[b + 13], pm);
+                    off = (mod * depth) >> 15;
+                    pc = (pc + inc_c) & 65535;
+                    car = wave_at(g_mvp[b + 14],
+                                  (pc + off) & 65535);
+                    outv = (car * env) >> 16;
+                    if (opm == 2) {
+                        int32 pcb;
+                        int32 pmb;
+                        int32 offb;
+                        int32 carb;
+                        pmb = (g_mv[b + 15] + inc_m) & 65535;
+                        g_mv[b + 15] = pmb;
+                        offb = (wave_at(g_mvp[b + 11], pmb) *
+                                (depth >> 1)) >> 15;
+                        pcb = (g_mv[b + 14] + inc_c +
+                               (inc_c >> 8)) & 65535;
+                        g_mv[b + 14] = pcb;
+                        carb = wave_at(g_mvp[b + 12],
+                                       (pcb + offb) & 65535);
+                        outv = (outv >> 1) +
+                               ((carb * env) >> 17);
+                    }
                 }
                 t = outv >> lvl;
                 part = g_mv[b + 12];
@@ -2998,7 +3577,8 @@ int32 main(int32 argc, char **argv)
                 if (fx_arg(argv[ai])) {
                 } else {
                     preset = parse_num(argv[ai]);
-                    if (preset < 0 || preset > 15) {
+                    if (preset < 0 || (engine == 0 && preset > 21) ||
+                        (engine == 1 && preset > 15)) {
                         out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
                         return 2;
                     }
@@ -3017,7 +3597,8 @@ int32 main(int32 argc, char **argv)
                     engine = 0;
                 } else {
                     preset = parse_num(argv[ai]);
-                    if (preset < 0 || preset > 15) {
+                    if (preset < 0 || (engine == 0 && preset > 21) ||
+                        (engine == 1 && preset > 15)) {
                         out_str("usage: synth [fm|psg [preset] [fx]|play [fm|psg] [preset] [fx]|midi <file> [fm|psg] [fx]]\n");
                         return 2;
                     }
@@ -3061,6 +3642,8 @@ int32 main(int32 argc, char **argv)
         }
     }
     fill_sine();
+    fill_waves();
+    fill_pow2();
     fill_ninc();
     fill_song();
     fill_presets();
